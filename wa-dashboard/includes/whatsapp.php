@@ -410,15 +410,32 @@ function wa_apply_media_id(array $components, ?string $mediaId): array
 /**
  * Is this send failure worth one retry?
  *
- * Media fetch/upload hiccups, rate limits and 5xx are transient — they used to fail a
- * message permanently and looked like random losses on big sends. Permanent problems
- * (bad template params #132xxx, no permission #200, invalid number) are NOT retried.
+ * Only genuine hiccups — a media fetch/upload glitch, a rate limit, a 5xx or a dropped
+ * connection. One blip used to fail a message permanently, which looked like random
+ * losses on large sends.
+ *
+ * Deliberate Meta drops are NOT retried, because a resend returns the same error and only
+ * burns quota and delays the batch:
+ *   #131049 per-user marketing frequency cap ("healthy ecosystem engagement")
+ *   #130472 recipient is in a marketing-experiment group (Meta: resending will not bypass it)
+ *   #131026 undeliverable (blocked us / not on WhatsApp / restricted) — do not retry
+ *   #133010 phone number not registered · #132xxx bad template params · #200 no permission
  */
 function wa_error_is_transient(string $code, string $title): bool
 {
-    $transient = ['131053', '130472', '131056', '131026', '133010', '500', '502', '503', '504', '429', '0'];
-    if (in_array(trim($code), $transient, true)) return true;
+    $code = trim($code);
+
+    // Explicit deny-list first: these look retryable by wording but never are.
+    $never = ['131049', '130472', '131026', '133010', '131047', '131051', '132000', '132001',
+              '132005', '132007', '132012', '132015', '132068', '132069', '200', '190', '10'];
+    if (in_array($code, $never, true)) return false;
+
+    $transient = ['131053', '131056', '130429', '500', '502', '503', '504', '429', '0'];
+    if (in_array($code, $transient, true)) return true;
+
     $t = strtolower($title);
+    // "not delivered to maintain healthy ecosystem engagement" must not match on wording.
+    if (strpos($t, 'healthy ecosystem') !== false) return false;
     foreach (['rate limit', 'too many', 'timeout', 'timed out', 'temporarily', 'try again',
               'media upload', 'failed to download', 'internal error', 'network error'] as $needle) {
         if (strpos($t, $needle) !== false) return true;
