@@ -56,7 +56,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save'
             switch ($type) {
                 case 'text':     $cfg = ['body' => (string) ($c['body'] ?? '')]; $next = $R($out['next'] ?? null); break;
                 case 'image':    $cfg = ['link' => (string) ($c['link'] ?? ''), 'caption' => (string) ($c['caption'] ?? '')]; $next = $R($out['next'] ?? null); break;
-                case 'template': $cfg = ['template_id' => (int) ($c['template_id'] ?? 0), 'lang' => 'en']; $next = $R($out['next'] ?? null); break;
+                case 'template':
+                    // Full parameter set — a template with an image header needs its header
+                    // component or Meta rejects every send (#132012).
+                    $cfg = [
+                        'template_id'  => (int) ($c['template_id'] ?? 0),
+                        'lang'         => 'en',
+                        'header_media' => (string) ($c['header_media'] ?? ''),
+                        'header_vars'  => (array) ($c['header_vars'] ?? []),
+                        'header_loc'   => (array) ($c['header_loc'] ?? []),
+                        'vars'         => (array) ($c['vars'] ?? []),
+                        'buttons'      => (array) ($c['buttons'] ?? []),
+                    ];
+                    $next = $R($out['next'] ?? null);
+                    break;
                 case 'question': $cfg = ['body' => (string) ($c['body'] ?? ''), 'save_as' => (string) ($c['save_as'] ?? '')]; $next = $R($out['next'] ?? null); break;
                 case 'ai_score': $cfg = ['criterion' => (string) ($c['criterion'] ?? ''), 'max_points' => (int) ($c['max_points'] ?? 10)]; $next = $R($out['next'] ?? null); break;
                 case 'score':    $cfg = ['points' => (int) ($c['points'] ?? 0)]; $next = $R($out['next'] ?? null); break;
@@ -101,7 +114,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save'
 }
 
 /* ── data for builder ── */
-$templates = db_all("SELECT id, wa_name, language FROM templates WHERE client_id=? AND status='APPROVED' ORDER BY wa_name", [$cid]);
+$templates = db_all("SELECT id, wa_name, language, components FROM templates WHERE client_id=? AND status='APPROVED' ORDER BY wa_name", [$cid]);
 $lists     = db_all("SELECT id, name FROM contact_lists WHERE client_id=? ORDER BY name", [$cid]);
 $tc        = json_decode((string) $flow['trigger_config'], true) ?: [];
 $scfg      = json_decode((string) $flow['source_config'], true) ?: [];
@@ -117,7 +130,14 @@ foreach ($stepsRaw as $k => $s) {
     switch ($s['type']) {
         case 'text':     $node['config'] = ['body' => $c['body'] ?? '']; $node['outputs']['next'] = $tid($s['next_step_id']); break;
         case 'image':    $node['config'] = ['link' => $c['link'] ?? '', 'caption' => $c['caption'] ?? '']; $node['outputs']['next'] = $tid($s['next_step_id']); break;
-        case 'template': $node['config'] = ['template_id' => (int) ($c['template_id'] ?? 0)]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
+        case 'template': $node['config'] = [
+                'template_id'  => (int) ($c['template_id'] ?? 0),
+                'header_media' => (string) ($c['header_media'] ?? ''),
+                'header_vars'  => (object) ((array) ($c['header_vars'] ?? [])),
+                'header_loc'   => (object) ((array) ($c['header_loc'] ?? [])),
+                'vars'         => (object) ((array) ($c['vars'] ?? [])),
+                'buttons'      => (object) ((array) ($c['buttons'] ?? [])),
+            ]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
         case 'question': $node['config'] = ['body' => $c['body'] ?? '', 'save_as' => $c['save_as'] ?? '']; $node['outputs']['next'] = $tid($s['next_step_id']); break;
         case 'ai_score': $node['config'] = ['criterion' => $c['criterion'] ?? '', 'max_points' => (int) ($c['max_points'] ?? 10)]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
         case 'score':    $node['config'] = ['points' => (int) ($c['points'] ?? 0)]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
@@ -208,10 +228,19 @@ client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
         </optgroup>
       </select>
       <button type="button" class="btn btn-ghost btn-sm" onclick="addNode(document.getElementById('add-type').value)">+ Add node</button>
-      <span class="canvas-hint">Drag node headers to move · drag a right-side port onto another node to connect · click a node to edit · drag a port to empty space to disconnect.</span>
+      <span class="canvas-hint">Drag node headers to move · drag a right-side port onto another node to connect · click a node to edit · <strong>right-click a connection to delete it</strong> · Ctrl/⌘+scroll or the +/− buttons to zoom · middle-drag or space-drag to pan.</span>
     </div>
-    <div class="canvas-wrap" id="cwrap">
-      <div class="canvas" id="canvas"><svg class="edges" id="edges"></svg></div>
+    <div class="canvas-stage">
+      <!-- Zoom control lives outside the scroller so it stays pinned while the board scrolls. -->
+      <div class="canvas-zoom">
+        <button type="button" onclick="zoomBy(0.1)" title="Zoom in">＋</button>
+        <div class="zlevel" id="zlevel">100%</div>
+        <button type="button" onclick="zoomBy(-0.1)" title="Zoom out">−</button>
+        <button type="button" class="zfit" onclick="zoomFit()" title="Fit the whole flow">Fit</button>
+      </div>
+      <div class="canvas-wrap" id="cwrap">
+        <div class="canvas" id="canvas"><svg class="edges" id="edges"></svg></div>
+      </div>
     </div>
   </div>
 </form>
@@ -222,6 +251,15 @@ client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
 
 <script>
 const TEMPLATES = <?= json_encode(array_map(fn($t)=>['id'=>(int)$t['id'],'label'=>$t['wa_name'].' ('.$t['language'].')'],$templates)) ?>;
+const CSRF = <?= json_encode(csrf_token()) ?>;
+// Full parameter spec per template — drives the template node's field panel.
+const TPL_SPECS = <?= json_encode(array_reduce($templates, function ($acc, $t) {
+    $comp = json_decode((string) $t['components'], true) ?: [];
+    $s = wa_template_spec($comp);
+    $s['header_example'] = wa_template_header_example($comp);
+    $acc[(int) $t['id']] = $s;
+    return $acc;
+}, [])) ?>;
 const LISTS = <?= json_encode(array_map(fn($l)=>['id'=>(int)$l['id'],'name'=>$l['name']],$lists)) ?>;
 const INIT_NODES = <?= json_encode($nodes) ?>;
 const INIT_START = <?= json_encode($startNode) ?>;
@@ -245,7 +283,14 @@ function summary(n){
     case 'start': return '<span class="muted">When '+(document.getElementById('trigger_type')?.value||'keyword')+' triggers</span>';
     case 'text': return esc(c.body)||'<span class="muted">(empty message)</span>';
     case 'image': return '🖼 '+(esc(c.caption)||esc(c.link)||'<span class="muted">image</span>');
-    case 'template': { const t=TEMPLATES.find(x=>x.id==c.template_id); return t?esc(t.label):'<span class="muted">choose template</span>'; }
+    case 'template': {
+      const t=TEMPLATES.find(x=>x.id==c.template_id);
+      if(!t) return '<span class="muted">choose template</span>';
+      const sp=TPL_SPECS[c.template_id], fmt=(sp&&sp.header&&sp.header.format||'').toUpperCase();
+      // Flag the exact thing that used to make these sends fail silently.
+      const needMedia=['IMAGE','VIDEO','DOCUMENT'].includes(fmt) && !(c.header_media||'').trim();
+      return esc(t.label)+(needMedia?'<div class="muted" style="margin-top:4px;color:#c0392b">⚠ '+fmt.toLowerCase()+' header missing</div>':'');
+    }
     case 'buttons': return esc(c.body)+'<div class="muted" style="margin-top:4px">'+((c.buttons||[]).map(b=>'▸ '+esc(b.title||'?')).join('<br>'))+'</div>';
     case 'question': return '❓ '+(esc(c.body)||'<span class="muted">question</span>')+(c.save_as?' <span class="muted">→ '+esc(c.save_as)+'</span>':'');
     case 'ai_branch': return '🤖 AI branch<div class="muted" style="margin-top:4px">'+((c.branches||[]).map(b=>'▸ '+esc(b.label||'?')+(b.points?' +'+b.points:'')).join('<br>'))+'<br>▸ (else)</div>';
@@ -285,11 +330,48 @@ function render(){
   Object.values(nodes).forEach(n=>canvas.appendChild(nodeEl(n)));
   redraw();
 }
+/* ── zoom ──
+   The canvas is CSS-scaled, so every getBoundingClientRect() value comes back already
+   multiplied by the zoom while the SVG edge layer still draws in unscaled units. Every
+   screen→canvas conversion must therefore divide by Z, or nodes jump away from the cursor
+   and edges detach from their ports. toCanvas() is the single place that does it. */
+let Z = 1;
+const wrap = document.getElementById('cwrap');
+function setZoom(z, anchor){
+  const nz = Math.min(1.5, Math.max(0.3, Math.round(z*100)/100));
+  if(nz===Z) return;
+  // Keep the anchor point (cursor, or viewport centre) visually fixed while scaling.
+  const a = anchor || {x:wrap.clientWidth/2, y:wrap.clientHeight/2};
+  const cx = (wrap.scrollLeft + a.x) / Z, cy = (wrap.scrollTop + a.y) / Z;
+  Z = nz;
+  canvas.style.setProperty('--z', Z);
+  wrap.scrollLeft = cx*Z - a.x;
+  wrap.scrollTop  = cy*Z - a.y;
+  document.getElementById('zlevel').textContent = Math.round(Z*100)+'%';
+  redraw();
+}
+function zoomBy(d){ setZoom(Z+d); }
+function zoomFit(){
+  const all=[start,...Object.values(nodes)];
+  if(!all.length) return setZoom(1);
+  let maxX=0,maxY=0;
+  all.forEach(n=>{ maxX=Math.max(maxX,n.x+240); maxY=Math.max(maxY,n.y+200); });
+  const z=Math.min(1, (wrap.clientWidth-24)/maxX, (wrap.clientHeight-24)/maxY);
+  setZoom(Math.max(0.4, z));
+  wrap.scrollLeft=0; wrap.scrollTop=0;
+}
+/** Screen coords → unscaled canvas coords. */
+function toCanvas(clientX, clientY){
+  const cr=canvas.getBoundingClientRect();
+  return {x:(clientX-cr.left)/Z, y:(clientY-cr.top)/Z};
+}
+
 function portCenter(nid,port,kind){
   const sel = kind==='in' ? `.port-in[data-node="${nid}"]` : `.port-out[data-node="${nid}"][data-port="${port}"]`;
   const el=canvas.querySelector(sel); if(!el) return null;
   const cr=canvas.getBoundingClientRect(), r=el.getBoundingClientRect();
-  return {x:r.left-cr.left+r.width/2, y:r.top-cr.top+r.height/2};
+  // Divide by Z: both rects are scaled, but the SVG draws unscaled.
+  return {x:(r.left-cr.left+r.width/2)/Z, y:(r.top-cr.top+r.height/2)/Z};
 }
 function pathD(a,b){ const dx=Math.max(40,Math.abs(b.x-a.x)/2); return `M${a.x},${a.y} C${a.x+dx},${a.y} ${b.x-dx},${b.y} ${b.x},${b.y}`; }
 function redraw(tmp){
@@ -297,19 +379,65 @@ function redraw(tmp){
   const all=[start,...Object.values(nodes)];
   all.forEach(n=>{ Object.entries(n.outputs||{}).forEach(([port,tgt])=>{
     if(!tgt || (tgt!=='start' && !nodes[tgt])) return;
-    const a=portCenter(n.id,port,'out'), b=portCenter(tgt,null,'in'); if(a&&b) h+=`<path d="${pathD(a,b)}"/>`;
+    const a=portCenter(n.id,port,'out'), b=portCenter(tgt,null,'in'); if(!a||!b) return;
+    const d=pathD(a,b);
+    // Each edge is identifiable (data-node/data-port) and gets a fat transparent
+    // hit path so it can be right-clicked.
+    h+=`<path class="edge" data-node="${n.id}" data-port="${port}" d="${d}"/>`
+      +`<path class="hit" data-node="${n.id}" data-port="${port}" d="${d}"/>`;
   }); });
   if(tmp) h+=`<path class="temp" d="${pathD(tmp.a,tmp.b)}"/>`;
   edges.innerHTML=h;
 }
+/* ── right-click a connection → delete it ── */
+function edgeLabel(nodeId, port){
+  const n = nodeId==='start'?start:nodes[nodeId];
+  if(!n) return 'connection';
+  const from = TYPE_LABEL[n.type]||n.type;
+  const p = outPorts(n).find(p=>p.key===port);
+  return from + (p && p.label ? ' › '+p.label : '');
+}
+function closeEdgeMenu(){ const m=document.getElementById('edge-menu'); if(m) m.remove(); }
+function openEdgeMenu(x,y,nodeId,port){
+  closeEdgeMenu();
+  const m=document.createElement('div');
+  m.className='edge-menu'; m.id='edge-menu';
+  m.style.left=Math.min(x,window.innerWidth-190)+'px';
+  m.style.top=Math.min(y,window.innerHeight-90)+'px';
+  m.innerHTML=`<div style="padding:6px 10px;font-size:11px;color:var(--muted);border-bottom:1px solid var(--line,#e5e2dc);margin-bottom:4px">${esc(edgeLabel(nodeId,port))}</div>`
+    +`<button type="button" class="danger" id="em-del">✕ Delete connection</button>`;
+  document.body.appendChild(m);
+  document.getElementById('em-del').onclick=()=>{
+    const src = nodeId==='start'?start:nodes[nodeId];
+    if(src && src.outputs) src.outputs[port]=null;
+    closeEdgeMenu(); redraw();
+  };
+}
+edges.addEventListener('contextmenu', e=>{
+  const p=e.target.closest('path.hit'); if(!p) return;   // only over an edge
+  e.preventDefault();
+  openEdgeMenu(e.clientX, e.clientY, p.dataset.node, p.dataset.port);
+});
+edges.addEventListener('mouseover', e=>{
+  const p=e.target.closest('path.hit'); if(!p) return;
+  const vis=edges.querySelector(`path.edge[data-node="${p.dataset.node}"][data-port="${p.dataset.port}"]`);
+  if(vis) vis.classList.add('hot');
+});
+edges.addEventListener('mouseout', e=>{
+  const p=e.target.closest('path.hit'); if(!p) return;
+  edges.querySelectorAll('path.edge.hot').forEach(x=>x.classList.remove('hot'));
+});
+document.addEventListener('mousedown', e=>{ if(!e.target.closest('.edge-menu')) closeEdgeMenu(); });
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeEdgeMenu(); });
 
 /* ── add / delete ── */
 function defaultConfig(type){
-  return {text:{body:''},image:{link:'',caption:''},template:{template_id:0},buttons:{body:'',buttons:[{title:'Yes',points:0},{title:'No',points:0}]},question:{body:'',save_as:''},ai_branch:{prompt:'',branches:[{label:'Interested',description:'',points:0}]},ai_score:{criterion:'',max_points:10},score:{points:0},wait:{seconds:3600},tag:{tag:''},list_add:{list_id:0},notify:{message:''},collect:{sheet_name:'Leads',fields:['phone','name','last_reply','score','tags']}}[type]||{};
+  return {text:{body:''},image:{link:'',caption:''},template:{template_id:0,header_media:'',header_vars:{},header_loc:{},vars:{},buttons:{}},buttons:{body:'',buttons:[{title:'Yes',points:0},{title:'No',points:0}]},question:{body:'',save_as:''},ai_branch:{prompt:'',branches:[{label:'Interested',description:'',points:0}]},ai_score:{criterion:'',max_points:10},score:{points:0},wait:{seconds:3600},tag:{tag:''},list_add:{list_id:0},notify:{message:''},collect:{sheet_name:'Leads',fields:['phone','name','last_reply','score','tags']}}[type]||{};
 }
 function addNode(type,data){
   const w=document.getElementById('cwrap');
-  const n={id:nid(),type,x:w.scrollLeft+120,y:w.scrollTop+90,config:data?JSON.parse(JSON.stringify(data.config||defaultConfig(type))):defaultConfig(type),outputs:data?(data.outputs||{}):{}};
+  // Drop it into the visible area — scroll offsets are in scaled px, so divide by Z.
+  const n={id:nid(),type,x:(w.scrollLeft+120)/Z,y:(w.scrollTop+90)/Z,config:data?JSON.parse(JSON.stringify(data.config||defaultConfig(type))):defaultConfig(type),outputs:data?(data.outputs||{}):{}};
   nodes[n.id]=n; render(); openCfg(n.id);
 }
 function deleteCurrent(){ if(!current) return; const id=current.id; delete nodes[id];
@@ -331,7 +459,7 @@ function cfgForm(n){ const c=n.config;
   switch(n.type){
     case 'text': return `<label><span class="lbl">Message</span><textarea data-k="body" rows="3">${esc(c.body)}</textarea></label><div class="hint">Use {{name}}, {{phone}} or a saved field.</div>`;
     case 'image': return `<label><span class="lbl">Image URL</span><input data-k="link" value="${esc(c.link)}"></label><label><span class="lbl">Caption</span><input data-k="caption" value="${esc(c.caption)}"></label>`;
-    case 'template': return `<label><span class="lbl">Template</span><select data-k="template_id">${'<option value="0">— choose —</option>'+TEMPLATES.map(t=>`<option value="${t.id}" ${t.id==c.template_id?'selected':''}>${esc(t.label)}</option>`).join('')}</select></label>`;
+    case 'template': return `<label><span class="lbl">Template</span><select id="tpl-sel" onchange="onTplChange(this.value)">${'<option value="0">— choose —</option>'+TEMPLATES.map(t=>`<option value="${t.id}" ${t.id==c.template_id?'selected':''}>${esc(t.label)}</option>`).join('')}</select></label><div id="tpl-fields"></div>`;
     case 'question': return `<label><span class="lbl">Question</span><textarea data-k="body" rows="2">${esc(c.body)}</textarea></label><label><span class="lbl">Save answer as</span><input data-k="save_as" value="${esc(c.save_as)}" placeholder="e.g. budget"></label>`;
     case 'ai_score': return `<label><span class="lbl">Scoring criterion</span><textarea data-k="criterion" rows="3">${esc(c.criterion)}</textarea></label><label><span class="lbl">Max points</span><input type="number" data-k="max_points" value="${c.max_points}"></label>`;
     case 'score': return `<label><span class="lbl">Points to add</span><input type="number" data-k="points" value="${c.points}"></label>`;
@@ -354,7 +482,111 @@ function syncRows(){ // rebuild config buttons/branches from panel, re-render no
   else if(current.type==='ai_branch'){ current.config.branches=[...wrap.children].map(r=>({label:r.querySelector('.ri-label').value,description:r.querySelector('.ri-desc').value,points:+r.querySelector('.ri-points').value})); }
   renderKeepPanel();
 }
+/* ── template node: full parameter fields (header media/text/location, body vars, buttons) ── */
+function onTplChange(v){
+  if(!current) return;
+  current.config.template_id = +v;
+  // Different template = different parameter shape; clear stale values.
+  current.config.header_media=''; current.config.header_vars={}; current.config.header_loc={};
+  current.config.vars={}; current.config.buttons={};
+  renderTplFields(); renderKeepPanel(false);
+}
+function tplVarRow(i, prefix, label, cur){
+  const c = cur||{};
+  const src = c.source||'static';
+  return `<div style="margin-bottom:10px" data-vrow="${prefix}" data-i="${i}">
+    <div class="lbl" style="margin-bottom:4px">${label} {{${i}}}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+      <select class="tv-src"><option value="static" ${src==='static'?'selected':''}>Fixed text</option><option value="name" ${src==='name'?'selected':''}>Contact name</option></select>
+      <input class="tv-val" placeholder="Value" value="${esc(c.value||'')}" ${src==='name'?'style="display:none"':''}>
+      <input class="tv-fb" placeholder="Fallback if empty" value="${esc(c.fallback||'')}" ${src==='name'?'':'style="display:none"'}>
+    </div></div>`;
+}
+function renderTplFields(){
+  const box=document.getElementById('tpl-fields'); if(!box||!current) return;
+  const c=current.config, spec=TPL_SPECS[c.template_id];
+  if(!spec){ box.innerHTML=''; return; }
+  const fmt=(spec.header&&spec.header.format||'').toUpperCase();
+  const dyn=(spec.buttons||[]).filter(b=>b.dynamic);
+  let h='';
+  if(['IMAGE','VIDEO','DOCUMENT'].includes(fmt)){
+    const kind=fmt.toLowerCase();
+    const cur=(c.header_media!=null&&c.header_media!=='')?c.header_media:(spec.header_example||'');
+    h+=`<div class="lbl mt10">Header ${kind}</div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <input id="tf-media" value="${esc(cur)}" placeholder="https://… or Upload" style="flex:1;min-width:150px">
+        <input type="file" id="tf-file" style="display:none" accept="${kind==='image'?'.jpg,.jpeg,.png,.webp':kind==='video'?'.mp4,.3gp':'.pdf'}">
+        <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('tf-file').click()">Upload</button>
+      </div><div class="hint" id="tf-status">Uploaded once to WhatsApp, then reused for every send.</div>`;
+  } else if(fmt==='LOCATION'){
+    const L=c.header_loc||{};
+    h+=`<div class="lbl mt10">Header location</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+        <input id="tf-lat" placeholder="Latitude" value="${esc(L.lat||'')}">
+        <input id="tf-lng" placeholder="Longitude" value="${esc(L.lng||'')}">
+        <input id="tf-locname" placeholder="Name" value="${esc(L.name||'')}">
+        <input id="tf-address" placeholder="Address" value="${esc(L.address||'')}">
+      </div>`;
+  } else if(fmt==='TEXT' && (spec.header.text_vars||0)>0){
+    h+=`<div class="lbl mt10">Header variables</div>`;
+    for(let i=1;i<=spec.header.text_vars;i++) h+=tplVarRow(i,'h','Header',(c.header_vars||{})[i]);
+  }
+  if((spec.body_vars||0)>0){
+    h+=`<div class="lbl mt10">Message variables</div>`;
+    for(let i=1;i<=spec.body_vars;i++) h+=tplVarRow(i,'b','Variable',(c.vars||{})[i]);
+  }
+  if(dyn.length){
+    h+=`<div class="lbl mt10">Dynamic buttons</div>`;
+    dyn.forEach(b=>{
+      const isCode=b.type==='COPY_CODE';
+      h+=`<label style="display:block;margin-bottom:8px"><span class="lbl">${esc(b.text||('Button '+(b.index+1)))} — ${isCode?'coupon code':'URL suffix'}</span>
+        <input class="tv-btn" data-i="${b.index}" value="${esc((c.buttons||{})[b.index]||'')}" placeholder="${isCode?'EID20':'summer-sale'}"></label>`;
+    });
+  }
+  box.innerHTML=h;
+  bindTplFields();
+}
+function syncTplFields(){
+  if(!current) return; const c=current.config;
+  const m=document.getElementById('tf-media'); if(m) c.header_media=m.value.trim();
+  const lat=document.getElementById('tf-lat');
+  if(lat) c.header_loc={lat:lat.value.trim(),lng:(document.getElementById('tf-lng')||{}).value?.trim()||'',
+    name:(document.getElementById('tf-locname')||{}).value?.trim()||'',address:(document.getElementById('tf-address')||{}).value?.trim()||''};
+  const hv={}, bv={};
+  document.querySelectorAll('#tpl-fields [data-vrow]').forEach(row=>{
+    const i=row.dataset.i, spec={source:row.querySelector('.tv-src').value,
+      value:row.querySelector('.tv-val').value, fallback:row.querySelector('.tv-fb').value};
+    (row.dataset.vrow==='h'?hv:bv)[i]=spec;
+  });
+  c.header_vars=hv; c.vars=bv;
+  const btns={};
+  document.querySelectorAll('#tpl-fields .tv-btn').forEach(el=>{ btns[el.dataset.i]=el.value.trim(); });
+  c.buttons=btns;
+}
+function bindTplFields(){
+  document.querySelectorAll('#tpl-fields input, #tpl-fields select').forEach(el=>{
+    el.addEventListener('input',syncTplFields);
+    el.addEventListener('change',()=>{
+      syncTplFields();
+      // Source switch toggles Value vs Fallback — re-render that row set.
+      if(el.classList.contains('tv-src')) renderTplFields();
+    });
+  });
+  const f=document.getElementById('tf-file');
+  if(f) f.addEventListener('change', async ()=>{
+    if(!f.files||!f.files[0]) return;
+    const st=document.getElementById('tf-status'); st.textContent='Uploading…';
+    const fd=new FormData(); fd.append('csrf_token',CSRF); fd.append('media',f.files[0]);
+    try{
+      const r=await fetch('upload_media.php',{method:'POST',body:fd}); const d=await r.json();
+      if(d.ok){ document.getElementById('tf-media').value=d.url; syncTplFields(); st.textContent='✓ Uploaded'; }
+      else st.textContent='⚠ '+(d.error||'Upload failed');
+    }catch(e){ st.textContent='⚠ Upload failed'; }
+  });
+}
+
 function bindCfg(){
+  if(current && current.type==='template') renderTplFields();
   document.querySelectorAll('#cfg-body [data-k]').forEach(el=>{
     el.addEventListener('input',()=>{ let v=el.value; if(el.type==='number') v=+v; current.config[el.dataset.k]=v; renderKeepPanel(false); });
   });
@@ -367,21 +599,39 @@ function renderKeepPanel(rebind=true){ const id=current?current.id:null; render(
     // keep panel open; refresh node summary already done by render()
   } }
 
-/* ── interactions: drag + connect ── */
-let drag=null, conn=null;
+/* ── interactions: drag + connect + pan ── */
+let drag=null, conn=null, pan=null, spaceDown=false;
 canvas.addEventListener('mousedown',e=>{
   const port=e.target.closest('.port-out');
   if(port){ e.preventDefault(); const nidv=port.dataset.node, pv=port.dataset.port; conn={node:nidv,port:pv}; return; }
   const head=e.target.closest('.node-head');
   if(e.target.classList.contains('del')){ const el=e.target.closest('.node'); const id=el.dataset.id; if(id!=='start'){ if(current&&current.id===id)closeCfg(); delete nodes[id]; [start,...Object.values(nodes)].forEach(n=>Object.keys(n.outputs).forEach(k=>{if(n.outputs[k]===id)n.outputs[k]=null;})); render(); } e.stopPropagation(); return; }
-  if(head){ const el=head.closest('.node'); const id=el.dataset.id; const n=id==='start'?start:nodes[id]; const cr=canvas.getBoundingClientRect(); drag={n,dx:e.clientX-cr.left-n.x,dy:e.clientY-cr.top-n.y}; }
+  if(head){ const el=head.closest('.node'); const id=el.dataset.id; const n=id==='start'?start:nodes[id];
+    const p=toCanvas(e.clientX,e.clientY); drag={n,dx:p.x-n.x,dy:p.y-n.y}; }
 });
+// Middle-drag, or space+drag, pans the board.
+wrap.addEventListener('mousedown',e=>{
+  if(e.button===1 || (spaceDown && !e.target.closest('.node'))){
+    e.preventDefault();
+    pan={x:e.clientX,y:e.clientY,sl:wrap.scrollLeft,st:wrap.scrollTop};
+    wrap.classList.add('panning');
+  }
+});
+document.addEventListener('keydown',e=>{ if(e.code==='Space' && !/INPUT|TEXTAREA|SELECT/.test((e.target.tagName||''))) spaceDown=true; });
+document.addEventListener('keyup',  e=>{ if(e.code==='Space') spaceDown=false; });
 document.addEventListener('mousemove',e=>{
-  const cr=canvas.getBoundingClientRect();
-  if(drag){ drag.n.x=Math.max(0,e.clientX-cr.left-drag.dx); drag.n.y=Math.max(0,e.clientY-cr.top-drag.dy); const el=canvas.querySelector(`.node[data-id="${drag.n.id}"]`); if(el){el.style.left=drag.n.x+'px';el.style.top=drag.n.y+'px';} redraw(); }
-  else if(conn){ const a=portCenter(conn.node,conn.port,'out'); redraw({a:a||{x:0,y:0},b:{x:e.clientX-cr.left,y:e.clientY-cr.top}}); }
+  if(pan){ wrap.scrollLeft=pan.sl-(e.clientX-pan.x); wrap.scrollTop=pan.st-(e.clientY-pan.y); return; }
+  if(drag){
+    const p=toCanvas(e.clientX,e.clientY);
+    drag.n.x=Math.max(0,p.x-drag.dx); drag.n.y=Math.max(0,p.y-drag.dy);
+    const el=canvas.querySelector(`.node[data-id="${drag.n.id}"]`);
+    if(el){el.style.left=drag.n.x+'px';el.style.top=drag.n.y+'px';}
+    redraw();
+  }
+  else if(conn){ const a=portCenter(conn.node,conn.port,'out'); redraw({a:a||{x:0,y:0},b:toCanvas(e.clientX,e.clientY)}); }
 });
 document.addEventListener('mouseup',e=>{
+  if(pan){ pan=null; wrap.classList.remove('panning'); }
   if(conn){ const tnode=e.target.closest('.node'); const src=conn.node==='start'?start:nodes[conn.node];
     if(tnode && tnode.dataset.id!==conn.node && tnode.dataset.id!=='start'){ src.outputs[conn.port]=tnode.dataset.id; }
     else if(!tnode){ src.outputs[conn.port]=null; }
@@ -389,6 +639,13 @@ document.addEventListener('mouseup',e=>{
   }
   if(drag){ drag=null; }
 });
+// Ctrl/⌘ + wheel zooms at the cursor; plain wheel keeps scrolling the board.
+wrap.addEventListener('wheel',e=>{
+  if(!e.ctrlKey && !e.metaKey) return;
+  e.preventDefault();
+  const r=wrap.getBoundingClientRect();
+  setZoom(Z + (e.deltaY<0?0.1:-0.1), {x:e.clientX-r.left, y:e.clientY-r.top});
+},{passive:false});
 canvas.addEventListener('click',e=>{ if(e.target.closest('.port'))return; if(e.target.closest('.del'))return; const el=e.target.closest('.node'); if(el&&!e.target.closest('.node-head')) openCfg(el.dataset.id); });
 
 /* ── trigger form ── */
@@ -403,6 +660,9 @@ document.getElementById('flow-form').addEventListener('submit',()=>{
 /* ── init ── */
 INIT_NODES.forEach(n=>{ nodes[n.id]={id:n.id,type:n.type,x:n.x,y:n.y,config:n.config||{},outputs:n.outputs||{}}; const m=n.id.match(/^s(\d+)$/); });
 onTrig(); render();
+// Open with the whole flow visible instead of scrolled off the right edge.
+zoomFit();
+window.addEventListener('resize',()=>redraw());
 </script>
 
 <?php layout_footer(); ?>

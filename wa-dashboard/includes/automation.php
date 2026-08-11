@@ -195,11 +195,16 @@ function automation_run_steps(array $client, array $contact, array $run, array $
             if (!auto_send($client, $run, $step, $contact, 'image', fn() => wa_send_image($client, $to, $link, $cap), '🖼️ ' . ($cap !== '' ? $cap : 'image'))) break;
             $run['current_step_id'] = $step['next_step_id'];
         } elseif ($type === 'template') {
-            $tpl = db_row("SELECT wa_name, language FROM templates WHERE id=? AND client_id=?",
+            $tpl = db_row("SELECT wa_name, language, components FROM templates WHERE id=? AND client_id=?",
                 [(int) ($cfg['template_id'] ?? 0), (int) $client['id']]);
             if (!$tpl) { $run['status'] = 'blocked'; break; }
+            // Build the FULL payload (header media/text, body vars, dynamic buttons).
+            // Sending [] here used to break every template with an image header (#132012).
+            $comps = auto_build_components(
+                json_decode((string) $tpl['components'], true) ?: [], $cfg, $contact, $client
+            );
             if (!auto_send($client, $run, $step, $contact, 'template',
-                fn() => wa_send_template($client, $to, (string) $tpl['wa_name'], (string) $tpl['language'], []),
+                fn() => wa_send_template($client, $to, (string) $tpl['wa_name'], (string) $tpl['language'], $comps),
                 '📄 Template: ' . $tpl['wa_name'])) break;
             // A template is a message that needs a reply to continue (cold outreach /
             // re-engagement). Pause here; the lead's reply opens the 24h window and
@@ -533,64 +538,14 @@ function auto_resolve_var(array $spec, array $contact): string
 }
 
 /**
- * Build the FULL template `components` payload from the template's structure + the qualifier's
- * saved config, so every component type sends correctly (avoids Meta #132012):
- *   HEADER: image/video/document (media URL) · location (lat/long/name/address) · text (vars)
- *   BODY:   {{n}} variables
- *   BUTTONS: dynamic URL suffix · copy-code (coupon). Quick-reply/phone/static buttons need nothing.
- *   $tplComponents = template's stored `components` JSON;  $cfg = the template step config.
+ * Build the full template `components` payload for a flow step.
+ * Thin alias over the shared builder in whatsapp.php (which Campaigns and the Qualifier
+ * also use, so all three send identical payloads). Passing $client lets the header media
+ * be uploaded once and sent by media id instead of a per-message link.
  */
-function auto_build_components(array $tplComponents, array $cfg, array $contact): array
+function auto_build_components(array $tplComponents, array $cfg, array $contact, array $client = []): array
 {
-    $spec = function_exists('wa_template_spec') ? wa_template_spec($tplComponents)
-          : ['header' => ['format' => '', 'text_vars' => 0], 'body_vars' => 0, 'buttons' => []];
-    $out = [];
-
-    // ── HEADER ──
-    $hf = strtoupper((string) $spec['header']['format']);
-    if (in_array($hf, ['IMAGE', 'VIDEO', 'DOCUMENT'], true)) {
-        $url = trim((string) ($cfg['header_media'] ?? ''));
-        if ($url !== '') {
-            $k = strtolower($hf);
-            $out[] = ['type' => 'header', 'parameters' => [['type' => $k, $k => ['link' => $url]]]];
-        }
-    } elseif ($hf === 'LOCATION') {
-        $loc = (array) ($cfg['header_loc'] ?? []);
-        $out[] = ['type' => 'header', 'parameters' => [['type' => 'location', 'location' => [
-            'latitude'  => (string) ($loc['lat'] ?? ''), 'longitude' => (string) ($loc['lng'] ?? ''),
-            'name'      => (string) ($loc['name'] ?? ''), 'address'  => (string) ($loc['address'] ?? ''),
-        ]]]];
-    } elseif ($hf === 'TEXT' && (int) $spec['header']['text_vars'] > 0) {
-        $params = [];
-        for ($i = 1; $i <= (int) $spec['header']['text_vars']; $i++) {
-            $params[] = ['type' => 'text', 'text' => auto_resolve_var((array) (($cfg['header_vars'][(string) $i] ?? $cfg['header_vars'][$i] ?? [])), $contact)];
-        }
-        $out[] = ['type' => 'header', 'parameters' => $params];
-    }
-
-    // ── BODY ──
-    if ((int) $spec['body_vars'] > 0) {
-        $params = [];
-        for ($i = 1; $i <= (int) $spec['body_vars']; $i++) {
-            $params[] = ['type' => 'text', 'text' => auto_resolve_var((array) (($cfg['vars'][(string) $i] ?? $cfg['vars'][$i] ?? [])), $contact)];
-        }
-        $out[] = ['type' => 'body', 'parameters' => $params];
-    }
-
-    // ── BUTTONS (only dynamic ones need a parameter) ──
-    foreach ((array) $spec['buttons'] as $b) {
-        if (empty($b['dynamic'])) continue;
-        $idx = (int) $b['index'];
-        $val = trim((string) ($cfg['buttons'][(string) $idx] ?? $cfg['buttons'][$idx] ?? ''));
-        if ($val === '') $val = '-';
-        if ($b['type'] === 'URL') {
-            $out[] = ['type' => 'button', 'sub_type' => 'url', 'index' => (string) $idx, 'parameters' => [['type' => 'text', 'text' => $val]]];
-        } elseif ($b['type'] === 'COPY_CODE') {
-            $out[] = ['type' => 'button', 'sub_type' => 'copy_code', 'index' => (string) $idx, 'parameters' => [['type' => 'coupon_code', 'coupon_code' => $val]]];
-        }
-    }
-
-    return $out;
+    return wa_build_components($tplComponents, $cfg, $contact, $client);
 }
 
 /** Mark a queued run as failed with a reason shown on the leads page. */
@@ -676,7 +631,9 @@ function automation_send_outreach(int $maxPerRun = 0, int $onlyFlowId = 0): int
             }
             $items[(int) $r['id']] = [
                 'to'   => (string) $r['phone_e164'], 'name' => $t['name'], 'lang' => $t['lang'],
-                'components' => auto_build_components($t['components'], $t['cfg'], ['name' => $r['contact_name']]),
+                // $client → header media is uploaded once and reused as a media id across
+                // the whole batch (wa_resolve_media caches on the file hash).
+                'components' => auto_build_components($t['components'], $t['cfg'], ['name' => $r['contact_name']], $client),
             ];
             $meta[(int) $r['id']] = ['flow_id' => $fid, 'contact_id' => (int) $r['contact_id'], 'stepId' => $t['stepId'], 'context' => $r['context']];
         }

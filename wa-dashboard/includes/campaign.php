@@ -35,16 +35,43 @@ function campaign_resolve_value(array $spec, array $contact): string
     return $out;
 }
 
-/** Build the template `components` array for one contact (empty if no vars). */
-function campaign_components(array $varMap, int $varCount, array $contact): array
+/**
+ * Normalize a campaign's stored `variable_map` to the shared builder's config shape.
+ *
+ * Legacy campaigns stored a flat {"1":{...},"2":{...}} body-variable map; newer ones store
+ * {vars, header_media, header_vars, header_loc, buttons}. Accept both so old campaigns and
+ * reports keep working.
+ */
+function campaign_config(array $varMap): array
 {
-    if ($varCount < 1) return [];
-    $params = [];
-    for ($i = 1; $i <= $varCount; $i++) {
-        $spec = $varMap[(string) $i] ?? $varMap[$i] ?? ['source' => 'static', 'value' => '', 'fallback' => ''];
-        $params[] = ['type' => 'text', 'text' => campaign_resolve_value((array) $spec, $contact)];
+    if (isset($varMap['vars']) || isset($varMap['header_media']) || isset($varMap['header_vars'])
+        || isset($varMap['header_loc']) || isset($varMap['buttons'])) {
+        return $varMap;
     }
-    return [['type' => 'body', 'parameters' => $params]];
+    return ['vars' => $varMap];   // legacy flat body-vars map
+}
+
+/**
+ * Build the FULL template `components` array for one contact — header media/text, body
+ * variables and dynamic buttons.
+ *
+ * Delegates to wa_build_components() (includes/whatsapp.php) so Campaigns, the bot canvas
+ * and the Lead Qualifier all emit identical payloads. Previously this built BODY parameters
+ * only, which made every template with an image header fail with Meta #132012.
+ *
+ * Header media is intentionally left in `link` form here: these components are rendered
+ * once at campaign-creation time, and the worker swaps in a fresh media id at send time
+ * (wa_apply_media_id) so scheduled campaigns can't ship an expired id.
+ */
+function campaign_components(array $varMap, array $tplComponents, array $contact): array
+{
+    return wa_build_components(
+        $tplComponents,
+        campaign_config($varMap),
+        $contact,
+        [],                                  // no client → keep links; the worker swaps in the id
+        'campaign_resolve_value'             // campaigns also support contact attributes
+    );
 }
 
 /** Recompute a campaign's status counters from its messages. */

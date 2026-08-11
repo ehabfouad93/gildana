@@ -43,15 +43,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
     elseif (!$template)        $err = $err ?: 'Choose an approved template.';
     elseif (!$list)            $err = $err ?: 'Choose an audience list.';
 
-    // Build variable map from POST
-    $varCount = (int) ($template['variable_count'] ?? 0);
-    $varMap = [];
-    for ($i = 1; $i <= $varCount; $i++) {
-        $varMap[(string) $i] = [
+    // ── Build the FULL field config from POST (header media/text/location, body vars,
+    //    dynamic buttons) so templates with an image header send correctly. ──
+    $tplComponents = $template ? (json_decode((string) $template['components'], true) ?: []) : [];
+    $spec = wa_template_spec($tplComponents);
+
+    $varMap = ['vars' => [], 'header_vars' => [], 'header_loc' => [], 'buttons' => [], 'header_media' => ''];
+    for ($i = 1; $i <= (int) $spec['body_vars']; $i++) {
+        $varMap['vars'][(string) $i] = [
             'source'   => (string) ($_POST['var_source'][$i] ?? 'static'),
             'value'    => (string) ($_POST['var_value'][$i] ?? ''),
             'fallback' => (string) ($_POST['var_fallback'][$i] ?? ''),
         ];
+    }
+    $hf = strtoupper((string) $spec['header']['format']);
+    if (in_array($hf, ['IMAGE', 'VIDEO', 'DOCUMENT'], true)) {
+        $varMap['header_media'] = trim((string) ($_POST['header_media'] ?? ''));
+    } elseif ($hf === 'LOCATION') {
+        $varMap['header_loc'] = [
+            'lat'     => trim((string) ($_POST['header_lat'] ?? '')),
+            'lng'     => trim((string) ($_POST['header_lng'] ?? '')),
+            'name'    => trim((string) ($_POST['header_loc_name'] ?? '')),
+            'address' => trim((string) ($_POST['header_address'] ?? '')),
+        ];
+    } elseif ($hf === 'TEXT') {
+        for ($i = 1; $i <= (int) $spec['header']['text_vars']; $i++) {
+            $varMap['header_vars'][(string) $i] = [
+                'source'   => (string) ($_POST['hvar_source'][$i] ?? 'static'),
+                'value'    => (string) ($_POST['hvar_value'][$i] ?? ''),
+                'fallback' => (string) ($_POST['hvar_fallback'][$i] ?? ''),
+            ];
+        }
+    }
+    foreach ((array) $spec['buttons'] as $b) {
+        if (empty($b['dynamic'])) continue;
+        $bi = (int) $b['index'];
+        $varMap['buttons'][(string) $bi] = trim((string) ($_POST['btn_value'][$bi] ?? ''));
+    }
+
+    // Catch the missing-header-media case here rather than letting Meta reject every message.
+    if ($template && in_array($hf, ['IMAGE', 'VIDEO', 'DOCUMENT'], true) && $varMap['header_media'] === '') {
+        $err = $err ?: 'This template has a ' . strtolower($hf) . ' header — upload or paste a ' . strtolower($hf) . ' URL before sending.';
     }
 
     if (!$err) {
@@ -79,7 +111,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
                      VALUES (?,?,?,?,?, 'queued', NOW())"
                 );
                 foreach ($recipients as $c) {
-                    $components = campaign_components($varMap, $varCount, $c);
+                    $components = campaign_components($varMap, $tplComponents, $c);
                     $ins->execute([
                         $campaignId, $cid, (int) $c['id'], (string) $c['phone_e164'],
                         json_encode($components, JSON_UNESCAPED_UNICODE),
@@ -133,7 +165,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
       <select name="template_id" id="template_id" required onchange="onTemplate()">
         <option value="">— choose an approved template —</option>
         <?php foreach ($templates as $t): ?>
-          <option value="<?= (int) $t['id'] ?>" data-vars="<?= (int) $t['variable_count'] ?>"
+          <option value="<?= (int) $t['id'] ?>"
                   data-body="<?= e((string) $t['body_text']) ?>" data-lang="<?= e((string) $t['language']) ?>">
             <?= e((string) $t['wa_name']) ?> (<?= e((string) $t['language']) ?>)
           </option>
@@ -147,9 +179,11 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
   </div>
 
   <div class="card" id="vars-card" style="display:none">
-    <h2>2 · Personalize Variables</h2>
-    <p class="text-muted" style="font-size:12.5px;margin:-6px 0 14px">Set what each <code>{{n}}</code> becomes. Use a fixed value, or pull from each contact's name / attribute (with a fallback if empty).</p>
+    <h2>2 · Template Fields</h2>
+    <p class="text-muted" style="font-size:12.5px;margin:-6px 0 14px">Fill everything this template needs — header media, variables and dynamic buttons. Variables can be a fixed value or pulled from each contact's name / attribute (with a fallback if empty).</p>
+    <div id="header-wrap"></div>
     <div id="vars-wrap"></div>
+    <div id="btns-wrap"></div>
   </div>
 
   <div class="card">
@@ -187,48 +221,129 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 
 <script>
 const BALANCE = <?= (int) $CLIENT['credits_balance'] ?>;
+const CSRF = <?= json_encode(csrf_token()) ?>;
+// Full parameter spec per template: what the send payload must supply.
+const SPECS = <?= json_encode(array_reduce($templates, function ($acc, $t) {
+    $comp = json_decode((string) $t['components'], true) ?: [];
+    $s = wa_template_spec($comp);
+    $s['header_example'] = wa_template_header_example($comp);
+    $acc[(int) $t['id']] = $s;
+    return $acc;
+}, [])) ?>;
 let reach = 0;
+const eatt = s => (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
 
 function onTemplate(){
   const opt = document.querySelector('#template_id option:checked');
-  const vars = parseInt(opt?.dataset.vars || '0', 10);
   const body = opt?.dataset.body || '';
   const prev = document.getElementById('tpl-preview');
   if (opt && opt.value){ prev.style.display='block'; document.getElementById('tpl-preview-body').textContent = body || '(no body text)'; }
   else prev.style.display='none';
 
-  const wrap = document.getElementById('vars-wrap');
+  const spec = SPECS[opt?.value] || null;
   const card = document.getElementById('vars-card');
-  wrap.innerHTML = '';
-  if (vars > 0){
-    card.style.display='block';
-    for (let i=1;i<=vars;i++){
-      wrap.insertAdjacentHTML('beforeend', varRow(i));
-    }
-  } else card.style.display='none';
+  const hw = document.getElementById('header-wrap'), vw = document.getElementById('vars-wrap'), bw = document.getElementById('btns-wrap');
+  hw.innerHTML=''; vw.innerHTML=''; bw.innerHTML='';
+  if(!spec){ card.style.display='none'; return; }
+
+  const fmt = (spec.header?.format||'').toUpperCase();
+  const dynBtns = (spec.buttons||[]).filter(b=>b.dynamic);
+  let any = false;
+
+  // ── HEADER ──
+  if(['IMAGE','VIDEO','DOCUMENT'].includes(fmt)){
+    any = true;
+    const kind = fmt.toLowerCase();
+    const cur = spec.header_example || '';
+    const note = cur ? ' <span class="text-muted">(sample from the template — upload your own to be safe)</span>' : '';
+    hw.insertAdjacentHTML('beforeend', sect(`Header ${kind}${note}`,
+      `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+         <input type="text" id="hm-url" name="header_media" value="${eatt(cur)}" placeholder="https://… or click Upload" style="flex:1;min-width:220px">
+         <input type="file" id="hm-file" style="display:none" accept="${kind==='image'?'.jpg,.jpeg,.png,.webp':kind==='video'?'.mp4,.3gp':'.pdf'}">
+         <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('hm-file').click()">Upload</button>
+         <span id="hm-status" class="text-muted" style="font-size:12px"></span>
+       </div>
+       <div class="hint">Uploaded once to WhatsApp and reused for the whole campaign — this is what makes big image sends reliable.</div>`));
+  } else if(fmt==='LOCATION'){
+    any = true;
+    hw.insertAdjacentHTML('beforeend', sect('Header location',
+      `<div class="grid2">
+         <label><span class="lbl">Latitude</span><input type="text" name="header_lat" placeholder="30.0444"></label>
+         <label><span class="lbl">Longitude</span><input type="text" name="header_lng" placeholder="31.2357"></label>
+       </div>
+       <div class="grid2">
+         <label><span class="lbl">Name</span><input type="text" name="header_loc_name" placeholder="Showroom"></label>
+         <label><span class="lbl">Address</span><input type="text" name="header_address" placeholder="Nasr City, Cairo"></label>
+       </div>`));
+  } else if(fmt==='TEXT' && (spec.header?.text_vars||0)>0){
+    any = true;
+    let h='';
+    for(let i=1;i<=spec.header.text_vars;i++) h+=varRow(i,'hvar','Header variable');
+    hw.insertAdjacentHTML('beforeend', sect('Header text variables', h));
+  }
+
+  // ── BODY ──
+  if((spec.body_vars||0)>0){
+    any = true;
+    let h='';
+    for(let i=1;i<=spec.body_vars;i++) h+=varRow(i,'var','Variable');
+    vw.insertAdjacentHTML('beforeend', sect('Message variables', h));
+  }
+
+  // ── DYNAMIC BUTTONS ──
+  if(dynBtns.length){
+    any = true;
+    let h='';
+    dynBtns.forEach(b=>{
+      const isCode = b.type==='COPY_CODE';
+      h += `<label style="display:block;margin-bottom:10px"><span class="lbl">${eatt(b.text||('Button '+(b.index+1)))} — ${isCode?'coupon code':'URL suffix'}</span>
+        <input type="text" name="btn_value[${b.index}]" placeholder="${isCode?'e.g. EID20':'e.g. summer-sale'}"></label>`;
+    });
+    bw.insertAdjacentHTML('beforeend', sect('Dynamic buttons', h));
+  }
+
+  card.style.display = any ? 'block' : 'none';
+  bindUpload();
 }
-function varRow(i){
+function sect(title, inner){
   return `<div class="card" style="background:var(--paper);border:0;padding:14px 16px;margin-bottom:12px">
-    <div class="lbl" style="margin-bottom:8px">Variable {{${i}}}</div>
+    <div class="lbl" style="margin-bottom:8px">${title}</div>${inner}</div>`;
+}
+function varRow(i, prefix, label){
+  return `<div style="margin-bottom:12px">
+    <div class="lbl" style="margin-bottom:6px">${label} {{${i}}}</div>
     <div class="grid3">
       <label><span class="lbl">Source</span>
-        <select name="var_source[${i}]" onchange="toggleVar(this,${i})">
+        <select name="${prefix}_source[${i}]" onchange="toggleVar(this,'${prefix}',${i})">
           <option value="static">Fixed text</option>
           <option value="name">Contact name</option>
           <option value="attribute">Contact attribute</option>
         </select>
       </label>
-      <label id="vv-${i}"><span class="lbl">Value</span><input type="text" name="var_value[${i}]" placeholder="e.g. 20%"></label>
-      <label id="vf-${i}" style="display:none"><span class="lbl">Fallback if empty</span><input type="text" name="var_fallback[${i}]" placeholder="e.g. Customer"></label>
+      <label id="${prefix}v-${i}"><span class="lbl">Value</span><input type="text" name="${prefix}_value[${i}]" placeholder="e.g. 20%"></label>
+      <label id="${prefix}f-${i}" style="display:none"><span class="lbl">Fallback if empty</span><input type="text" name="${prefix}_fallback[${i}]" placeholder="e.g. Customer"></label>
     </div>
   </div>`;
 }
-function toggleVar(sel,i){
-  const vv=document.getElementById('vv-'+i), vf=document.getElementById('vf-'+i);
+function toggleVar(sel,prefix,i){
+  const vv=document.getElementById(prefix+'v-'+i), vf=document.getElementById(prefix+'f-'+i);
   const lbl=vv.querySelector('.lbl'), inp=vv.querySelector('input');
   if(sel.value==='static'){ vv.style.display=''; lbl.textContent='Value'; inp.placeholder='e.g. 20%'; vf.style.display='none'; }
   else if(sel.value==='name'){ vv.style.display='none'; vf.style.display=''; }
   else { vv.style.display=''; lbl.textContent='Attribute key'; inp.placeholder='e.g. city'; vf.style.display=''; }
+}
+function bindUpload(){
+  const f=document.getElementById('hm-file'); if(!f) return;
+  f.addEventListener('change', async ()=>{
+    if(!f.files || !f.files[0]) return;
+    const st=document.getElementById('hm-status'); st.textContent='Uploading…';
+    const fd=new FormData(); fd.append('csrf_token',CSRF); fd.append('media',f.files[0]);
+    try{
+      const r=await fetch('upload_media.php',{method:'POST',body:fd}); const d=await r.json();
+      if(d.ok){ document.getElementById('hm-url').value=d.url; st.textContent='✓ Uploaded'; }
+      else st.textContent='⚠ '+(d.error||'Upload failed');
+    }catch(e){ st.textContent='⚠ Upload failed'; }
+  });
 }
 async function onList(){
   const lid = document.getElementById('list_id').value;

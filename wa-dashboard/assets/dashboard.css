@@ -247,11 +247,32 @@ textarea { resize: vertical; min-height: 84px; }
 .section-label:first-of-type { margin-top: 4px; }
 
 /* ── FLOW CANVAS ── */
-.canvas-wrap { position: relative; height: 70vh; min-height: 480px; overflow: auto; background: #efe8d7; border: 1px solid var(--line-strong); border-radius: 10px; background-image: radial-gradient(rgba(75,54,33,.12) 1px, transparent 1px); background-size: 22px 22px; }
-.canvas { position: relative; width: 2800px; height: 2000px; }
+.canvas-wrap { position: relative; width: 100%; height: 70vh; min-height: 480px; overflow: auto; background: #efe8d7; border: 1px solid var(--line-strong); border-radius: 10px; background-image: radial-gradient(rgba(75,54,33,.12) 1px, transparent 1px); background-size: 22px 22px; overscroll-behavior: contain; }
+.canvas-wrap.panning { cursor: grabbing; }
+/* The board keeps its own (large) coordinate space; --z scales it so a whole flow fits
+   the page width. All screen→canvas math must divide by --z (see toCanvas() in the builder). */
+.canvas { position: relative; width: 2800px; height: 2000px; transform: scale(var(--z, 1)); transform-origin: 0 0; }
 .canvas svg.edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
 .canvas svg.edges path { stroke: var(--brown); stroke-width: 2; fill: none; opacity: .55; }
 .canvas svg.edges path.temp { stroke: var(--gold); stroke-dasharray: 5 4; }
+/* Invisible fat path under each edge so thin curves are easy to right-click. */
+.canvas svg.edges path.hit { stroke: transparent; stroke-width: 14; fill: none; opacity: 1; pointer-events: stroke; cursor: context-menu; }
+.canvas svg.edges path.edge.hot { stroke: var(--gold); opacity: 1; stroke-width: 3; }
+
+/* Stage wraps the scroller so the zoom control can be pinned over it. */
+.canvas-stage { position: relative; }
+/* Zoom control, pinned to the right of the canvas (outside the scroller). */
+.canvas-zoom { position: absolute; right: 12px; top: 12px; z-index: 5; display: flex; flex-direction: column; gap: 4px; background: var(--white); border: 1px solid var(--line-strong); border-radius: 8px; padding: 5px; box-shadow: 0 2px 8px rgba(26,22,18,.14); }
+.canvas-zoom button { width: 30px; height: 28px; border: 0; background: transparent; cursor: pointer; font-size: 15px; line-height: 1; border-radius: 5px; color: var(--ink); }
+.canvas-zoom button:hover { background: var(--paper); }
+.canvas-zoom .zlevel { font-size: 10.5px; text-align: center; color: var(--muted); user-select: none; }
+.canvas-zoom .zfit { font-size: 10.5px; letter-spacing: .04em; text-transform: uppercase; }
+
+/* Right-click menu for a connection. */
+.edge-menu { position: fixed; z-index: 700; background: var(--white); border: 1px solid var(--line-strong); border-radius: 8px; box-shadow: 0 6px 20px rgba(26,22,18,.2); padding: 4px; min-width: 170px; }
+.edge-menu button { display: block; width: 100%; text-align: left; border: 0; background: transparent; padding: 8px 10px; font-size: 12.5px; cursor: pointer; border-radius: 5px; color: var(--ink); }
+.edge-menu button:hover { background: var(--paper); }
+.edge-menu button.danger { color: #c0392b; }
 .node { position: absolute; width: 214px; background: var(--white); border: 1px solid var(--line-strong); border-radius: 10px; box-shadow: 0 3px 8px rgba(26,22,18,.12); font-size: 12.5px; z-index: 2; }
 .node.sel { border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-light), 0 3px 8px rgba(26,22,18,.12); }
 .node.start { border-color: var(--gold); }

@@ -94,11 +94,28 @@ try {
         // Reserve credits + build the send items (keyed by message id).
         $tplCache = [];
         $items = [];
+        $anyMedia = false;
         foreach ($messages as $m) {
             $campId = (int) $m['campaign_id'];
             $touchedCampaigns[$campId] = true;
             if (!isset($tplCache[$campId])) {
-                $tplCache[$campId] = db_row("SELECT t.wa_name, t.language FROM campaigns c JOIN templates t ON t.id=c.template_id WHERE c.id=?", [$campId]);
+                $row = db_row("SELECT t.wa_name, t.language, t.components, c.variable_map
+                                 FROM campaigns c JOIN templates t ON t.id=c.template_id WHERE c.id=?", [$campId]);
+                if ($row) {
+                    $comps = json_decode((string) $row['components'], true) ?: [];
+                    $row['has_media'] = wa_template_has_media($comps);
+                    // Upload the header image ONCE per campaign and send by media id. Sending a
+                    // link made Meta re-download it for every recipient, which throttles on
+                    // shared hosting and shows up as #131053 on big sends. Resolved here (not at
+                    // creation) so a campaign scheduled weeks out can't ship an expired id.
+                    $row['media_id'] = null;
+                    if ($row['has_media']) {
+                        $vm  = json_decode((string) $row['variable_map'], true) ?: [];
+                        $url = trim((string) (campaign_config($vm)['header_media'] ?? ''));
+                        if ($url !== '') $row['media_id'] = wa_resolve_media($client, $url);
+                    }
+                }
+                $tplCache[$campId] = $row;
             }
             $tpl = $tplCache[$campId];
             if (!$tpl) { db_run("UPDATE campaign_messages SET status='failed', error_code='no_template', error_title='Template missing', updated_at=NOW() WHERE id=?", [(int) $m['id']]); $failedTotal++; continue; }
@@ -106,16 +123,36 @@ try {
                 db_run("UPDATE campaign_messages SET status='failed', error_code='no_credits', error_title='Insufficient credits', updated_at=NOW() WHERE id=?", [(int) $m['id']]);
                 $failedTotal++; $noCreditClients[$cid] = (string) $client['name']; continue;
             }
+            if (!empty($tpl['has_media'])) $anyMedia = true;
+            $comps = json_decode((string) $m['rendered_components'], true) ?: [];
+            $comps = wa_apply_media_id($comps, $tpl['media_id'] ?? null);   // no-op without an id
             $items[(int) $m['id']] = [
                 'to' => (string) $m['phone_e164'], 'name' => (string) $tpl['wa_name'], 'lang' => (string) $tpl['language'],
-                'components' => json_decode((string) $m['rendered_components'], true) ?: [],
+                'components' => $comps,
                 'campId' => $campId, 'contact' => (int) $m['contact_id'],
             ];
         }
 
+        // Media templates get gentler concurrency — even by id, Meta is stricter about them.
+        $chunkSize = $anyMedia ? max(1, (int) config('send_parallel_media', 10)) : $parallel;
+
         // Send in parallel chunks.
-        foreach (array_chunk($items, $parallel, true) as $chunk) {
+        foreach (array_chunk($items, $chunkSize, true) as $chunk) {
             $res = wa_send_template_batch($client, $chunk);
+
+            // Retry transient failures once before giving up — a single blip used to fail the
+            // message permanently, which looked like random losses on large sends.
+            $retry = [];
+            foreach ($res as $mid => $r) {
+                if (empty($r['ok']) && wa_error_is_transient((string) ($r['error_code'] ?? ''), (string) ($r['error_title'] ?? ''))) {
+                    $retry[$mid] = $chunk[$mid];
+                }
+            }
+            if ($retry) {
+                usleep(500000); // 0.5s breather
+                foreach (wa_send_template_batch($client, $retry) as $mid => $r2) $res[$mid] = $r2;
+            }
+
             foreach ($res as $mid => $r) {
                 $it = $chunk[$mid];
                 if ($r['ok']) {

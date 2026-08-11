@@ -76,6 +76,35 @@ client_header('Report · ' . $camp['name'], 'campaigns', $CLIENT);
   <div class="stat-tile"><span class="lbl">Failed</span><span class="val danger" id="s-failed"><?= $counts['failed'] ?></span></div>
 </div>
 
+<?php
+/* Why did messages fail? Group the top reasons so "0 sent / N failed" is never a mystery. */
+$failReasons = db_all(
+    "SELECT COALESCE(NULLIF(error_title,''),'Unknown error') AS reason, error_code, COUNT(*) AS n
+       FROM campaign_messages WHERE campaign_id=? AND status='failed'
+      GROUP BY reason, error_code ORDER BY n DESC LIMIT 5", [$id]
+);
+if ($failReasons): ?>
+  <div class="alert error" style="margin-bottom:16px">
+    <strong>Why messages failed</strong>
+    <ul style="margin:8px 0 0;padding-left:18px;font-size:13px">
+      <?php foreach ($failReasons as $fr): ?>
+        <li><strong><?= number_format((int) $fr['n']) ?>×</strong> <?= e((string) $fr['reason']) ?><?php
+          $code = trim((string) $fr['error_code']);
+          if ($code !== '') echo ' <span class="text-muted">(#' . e($code) . ')</span>';
+          // Point at the two causes we actually fixed, so the hint matches reality.
+          if ($code === '132012' || stripos((string) $fr['reason'], 'parameter') !== false) {
+              echo '<div class="text-muted" style="font-size:12px">The template needs fields this campaign didn\'t send — re-create it and fill every template field (including the header image).</div>';
+          } elseif ($code === '131053' || stripos((string) $fr['reason'], 'media') !== false) {
+              echo '<div class="text-muted" style="font-size:12px">WhatsApp couldn\'t read the header media. Re-upload it with the Upload button so it\'s sent as an uploaded file rather than a link.</div>';
+          } elseif ($code === '200' || stripos((string) $fr['reason'], 'permission') !== false) {
+              echo '<div class="text-muted" style="font-size:12px">The access token can\'t send for this WhatsApp Business Account — check the token and phone number in Settings.</div>';
+          }
+        ?></li>
+      <?php endforeach; ?>
+    </ul>
+  </div>
+<?php endif; ?>
+
 <div class="card card-flush">
   <div style="padding:14px 18px" class="row-between">
     <div style="display:flex;gap:6px;flex-wrap:wrap">

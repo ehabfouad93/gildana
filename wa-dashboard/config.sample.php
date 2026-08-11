@@ -36,6 +36,7 @@ return [
     'send_batch_per_run'    => 300,  // max messages per client per run
     'send_batch_global'     => 1000, // hard cap across all clients per run
     'send_parallel'         => 30,   // messages sent concurrently per HTTP burst
+    'send_parallel_media'   => 10,   // lower concurrency for templates with an image/video/document header
     'no_answer_hours'       => 24,   // qualifier leads with no reply after N hours → "No answer"
 
     // ── Login CAPTCHA (needs the GD extension; auto-disables if GD is absent) ──

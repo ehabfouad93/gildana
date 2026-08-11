@@ -210,6 +210,311 @@ function wa_template_spec(array $components): array
     return $spec;
 }
 
+/* ─────────────────────────────────────────────
+   Media handles — upload ONCE, send by id
+───────────────────────────────────────────── */
+
+/**
+ * Upload a local file to the Cloud API media endpoint and return its media id.
+ * Returns ['ok'=>bool, 'id'=>string, 'error'=>string].
+ *
+ * Why this exists: a template header sent as {"link": url} makes Meta fetch that URL for
+ * EVERY recipient. On a bulk send that's thousands of downloads from our own host, which
+ * gets throttled and comes back as #131053 / #130472. Uploading once and reusing the id
+ * removes the fan-out entirely.
+ */
+function wa_upload_media(array $client, string $filePath, string $mime = ''): array
+{
+    $token = wa_token($client);
+    $pnid  = (string) ($client['phone_number_id'] ?? '');
+    if ($token === '' || $pnid === '') {
+        return ['ok' => false, 'id' => '', 'error' => 'Missing access token or phone number ID'];
+    }
+    if (!is_file($filePath) || !is_readable($filePath)) {
+        return ['ok' => false, 'id' => '', 'error' => 'File not readable'];
+    }
+    if ($mime === '') $mime = wa_guess_mime($filePath);
+
+    $ch = curl_init(wa_graph_base() . '/' . rawurlencode($pnid) . '/media');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST           => true,
+        // Must be multipart/form-data — do NOT json_encode this body.
+        CURLOPT_POSTFIELDS     => [
+            'messaging_product' => 'whatsapp',
+            'type'              => $mime,
+            'file'              => new CURLFile($filePath, $mime, basename($filePath)),
+        ],
+        CURLOPT_HTTPHEADER     => ['Authorization: Bearer ' . $token],
+        CURLOPT_TIMEOUT        => 120,   // uploads are slower than sends
+        CURLOPT_CONNECTTIMEOUT => 15,
+    ]);
+    $raw  = curl_exec($ch);
+    $http = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $cerr = curl_error($ch);
+    curl_close($ch);
+
+    if ($raw === false) return ['ok' => false, 'id' => '', 'error' => $cerr ?: 'Network error'];
+    $json = json_decode((string) $raw, true);
+    if ($http >= 200 && $http < 300 && !empty($json['id'])) {
+        return ['ok' => true, 'id' => (string) $json['id'], 'error' => ''];
+    }
+    $err = $json['error'] ?? [];
+    return ['ok' => false, 'id' => '', 'error' => (string) ($err['message'] ?? ('HTTP ' . $http))];
+}
+
+/** Best-effort MIME for the file types WhatsApp accepts as header media. */
+function wa_guess_mime(string $path): string
+{
+    $map = [
+        'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png', 'webp' => 'image/webp',
+        'mp4' => 'video/mp4', '3gp' => 'video/3gpp', 'pdf' => 'application/pdf',
+    ];
+    $ext = strtolower((string) pathinfo($path, PATHINFO_EXTENSION));
+    if (isset($map[$ext])) return $map[$ext];
+    if (function_exists('mime_content_type')) {
+        $m = @mime_content_type($path);
+        if (is_string($m) && $m !== '') return $m;
+    }
+    return 'application/octet-stream';
+}
+
+/**
+ * Map a header-media URL to a reusable Meta media id, uploading + caching on first use.
+ * Returns null when the id can't be obtained — callers MUST fall back to {"link": url}
+ * so a media hiccup degrades to the old behaviour instead of failing the send.
+ *
+ * Cache is keyed on (client, sha256 of the bytes); ids expire on Meta's side, so anything
+ * older than 25 days is re-uploaded.
+ */
+function wa_resolve_media(array $client, string $url): ?string
+{
+    static $memo = [];   // per-process: the same URL is asked for once per recipient
+
+    $url = trim($url);
+    if ($url === '' || !function_exists('db_row')) return null;
+    $cid = (int) ($client['id'] ?? 0);
+    if ($cid <= 0) return null;
+
+    $memoKey = $cid . '|' . $url;
+    if (array_key_exists($memoKey, $memo)) return $memo[$memoKey];
+    $memo[$memoKey] = null;   // negative-cache failures too, so we retry at most once per run
+
+    try {
+        // Prefer the file on disk (our own /uploads) — avoids a pointless round-trip.
+        $local = wa_local_path_for_url($url);
+        $bytes = null;
+        if ($local !== null) {
+            $bytes = @file_get_contents($local);
+        }
+        if ($bytes === null || $bytes === false) {
+            $bytes = wa_http_get($url);
+            if ($bytes === null) return null;
+        }
+        $hash = hash('sha256', $bytes);
+
+        $row = db_row("SELECT media_id, uploaded_at FROM media_cache WHERE client_id=? AND file_hash=?", [$cid, $hash]);
+        if ($row && !empty($row['media_id'])
+            && strtotime((string) $row['uploaded_at']) > time() - 25 * 86400) {
+            return $memo[$memoKey] = (string) $row['media_id'];
+        }
+
+        // Need a real file on disk for CURLFile.
+        $tmp = $local;
+        $isTemp = false;
+        if ($tmp === null) {
+            $ext = strtolower((string) pathinfo((string) parse_url($url, PHP_URL_PATH), PATHINFO_EXTENSION)) ?: 'bin';
+            $tmp = rtrim(sys_get_temp_dir(), '/\\') . '/wa_' . $hash . '.' . $ext;
+            if (@file_put_contents($tmp, $bytes) === false) return null;
+            $isTemp = true;
+        }
+        $res = wa_upload_media($client, $tmp, wa_guess_mime($tmp));
+        if ($isTemp) @unlink($tmp);
+        if (empty($res['ok'])) {
+            error_log('wa_resolve_media upload failed: ' . $res['error']);
+            return null;
+        }
+
+        db_run(
+            "INSERT INTO media_cache (client_id,file_hash,file_url,media_id,mime,uploaded_at)
+             VALUES (?,?,?,?,?,NOW())
+             ON DUPLICATE KEY UPDATE media_id=VALUES(media_id), file_url=VALUES(file_url),
+                                     mime=VALUES(mime), uploaded_at=NOW()",
+            [$cid, $hash, substr($url, 0, 500), $res['id'], wa_guess_mime($tmp)]
+        );
+        return $memo[$memoKey] = $res['id'];
+    } catch (Throwable $e) {
+        error_log('wa_resolve_media: ' . $e->getMessage());
+        return null;   // always degrade to link
+    }
+}
+
+/** Resolve a URL served by this same install to a local path, or null if external. */
+function wa_local_path_for_url(string $url): ?string
+{
+    $path = (string) parse_url($url, PHP_URL_PATH);
+    if ($path === '') return null;
+    $pos = strpos($path, '/uploads/');
+    if ($pos === false) return null;
+    $candidate = dirname(__DIR__) . substr($path, $pos);   // <app>/uploads/...
+    $real = realpath($candidate);
+    $root = realpath(dirname(__DIR__) . '/uploads');
+    if ($real === false || $root === false) return null;
+    // Containment check — never read outside /uploads.
+    if (strncmp($real, $root, strlen($root)) !== 0) return null;
+    return is_file($real) ? $real : null;
+}
+
+/** Simple GET returning the body, or null. */
+function wa_http_get(string $url): ?string
+{
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_TIMEOUT        => 60,
+        CURLOPT_CONNECTTIMEOUT => 10,
+        CURLOPT_USERAGENT      => 'GildanaWA/1.0',
+    ]);
+    $r    = curl_exec($ch);
+    $http = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    return ($r !== false && $http >= 200 && $http < 300) ? (string) $r : null;
+}
+
+/**
+ * Rewrite a prebuilt components payload to send its header media by id instead of link.
+ *
+ * Campaign payloads are rendered once at creation time, but media ids expire (~30d) — so a
+ * campaign scheduled far out must not bake one in. Instead we store the link form and swap
+ * in a freshly-resolved id here, at send time, once per campaign per worker run.
+ * Passing a null/empty id leaves the payload untouched (link fallback).
+ */
+function wa_apply_media_id(array $components, ?string $mediaId): array
+{
+    if ($mediaId === null || $mediaId === '') return $components;
+    foreach ($components as $ci => $comp) {
+        if (strtolower((string) ($comp['type'] ?? '')) !== 'header') continue;
+        foreach ((array) ($comp['parameters'] ?? []) as $pi => $p) {
+            $k = strtolower((string) ($p['type'] ?? ''));
+            if (!in_array($k, ['image', 'video', 'document'], true)) continue;
+            $components[$ci]['parameters'][$pi][$k] = ['id' => $mediaId];
+        }
+    }
+    return $components;
+}
+
+/**
+ * Is this send failure worth one retry?
+ *
+ * Media fetch/upload hiccups, rate limits and 5xx are transient — they used to fail a
+ * message permanently and looked like random losses on big sends. Permanent problems
+ * (bad template params #132xxx, no permission #200, invalid number) are NOT retried.
+ */
+function wa_error_is_transient(string $code, string $title): bool
+{
+    $transient = ['131053', '130472', '131056', '131026', '133010', '500', '502', '503', '504', '429', '0'];
+    if (in_array(trim($code), $transient, true)) return true;
+    $t = strtolower($title);
+    foreach (['rate limit', 'too many', 'timeout', 'timed out', 'temporarily', 'try again',
+              'media upload', 'failed to download', 'internal error', 'network error'] as $needle) {
+        if (strpos($t, $needle) !== false) return true;
+    }
+    return false;
+}
+
+/** Does this template need a media header (and therefore gentler send concurrency)? */
+function wa_template_has_media(array $components): bool
+{
+    $spec = wa_template_spec($components);
+    return in_array(strtoupper((string) $spec['header']['format']), ['IMAGE', 'VIDEO', 'DOCUMENT'], true);
+}
+
+/**
+ * Build the FULL template `components` payload from the template's structure + a saved
+ * field config, so every component type sends correctly (avoids Meta #132012):
+ *   HEADER: image/video/document (media id, falling back to link) · location · text vars
+ *   BODY:   {{n}} variables
+ *   BUTTONS: dynamic URL suffix · copy-code (coupon). Static/quick-reply buttons need nothing.
+ *
+ * Shared by Campaigns, the bot canvas template node and the Lead Qualifier so all three
+ * send identical, complete payloads.
+ *
+ * @param array    $tplComponents The template's stored `components` JSON.
+ * @param array    $cfg           Saved field config: vars, header_media, header_vars, header_loc, buttons.
+ * @param array    $contact       Contact row (for name/attribute-sourced variables).
+ * @param array    $client        Client row — enables media-id upload; omit to force links.
+ * @param callable|null $resolver fn(array $spec, array $contact): string — overrides the
+ *                                default variable resolution (campaigns pass their own,
+ *                                which also supports contact attributes).
+ */
+function wa_build_components(array $tplComponents, array $cfg, array $contact, array $client = [], ?callable $resolver = null): array
+{
+    $spec = wa_template_spec($tplComponents);
+    $out  = [];
+    if ($resolver === null) {
+        $resolver = function (array $s, array $c): string {
+            return function_exists('auto_resolve_var') ? auto_resolve_var($s, $c) : (string) ($s['value'] ?? '-');
+        };
+    }
+    $pick = function ($bag, $i) {
+        if (!is_array($bag)) return [];
+        return (array) ($bag[(string) $i] ?? $bag[$i] ?? []);
+    };
+
+    // ── HEADER ──
+    $hf = strtoupper((string) $spec['header']['format']);
+    if (in_array($hf, ['IMAGE', 'VIDEO', 'DOCUMENT'], true)) {
+        $url = trim((string) ($cfg['header_media'] ?? ''));
+        if ($url !== '') {
+            $k = strtolower($hf);
+            // Reuse a Meta media id when we can; fall back to the raw link otherwise.
+            $mediaId = !empty($client) ? wa_resolve_media($client, $url) : null;
+            $param = $mediaId !== null ? [$k => ['id' => $mediaId]] : [$k => ['link' => $url]];
+            $out[] = ['type' => 'header', 'parameters' => [array_merge(['type' => $k], $param)]];
+        }
+    } elseif ($hf === 'LOCATION') {
+        $loc = (array) ($cfg['header_loc'] ?? []);
+        $out[] = ['type' => 'header', 'parameters' => [['type' => 'location', 'location' => [
+            'latitude'  => (string) ($loc['lat'] ?? ''), 'longitude' => (string) ($loc['lng'] ?? ''),
+            'name'      => (string) ($loc['name'] ?? ''), 'address'  => (string) ($loc['address'] ?? ''),
+        ]]]];
+    } elseif ($hf === 'TEXT' && (int) $spec['header']['text_vars'] > 0) {
+        $params = [];
+        for ($i = 1; $i <= (int) $spec['header']['text_vars']; $i++) {
+            $params[] = ['type' => 'text', 'text' => $resolver($pick($cfg['header_vars'] ?? [], $i), $contact)];
+        }
+        $out[] = ['type' => 'header', 'parameters' => $params];
+    }
+
+    // ── BODY ──
+    if ((int) $spec['body_vars'] > 0) {
+        $params = [];
+        for ($i = 1; $i <= (int) $spec['body_vars']; $i++) {
+            $params[] = ['type' => 'text', 'text' => $resolver($pick($cfg['vars'] ?? [], $i), $contact)];
+        }
+        $out[] = ['type' => 'body', 'parameters' => $params];
+    }
+
+    // ── BUTTONS (only dynamic ones take a parameter) ──
+    foreach ((array) $spec['buttons'] as $b) {
+        if (empty($b['dynamic'])) continue;
+        $idx = (int) $b['index'];
+        $bag = (array) ($cfg['buttons'] ?? []);
+        $val = trim((string) ($bag[(string) $idx] ?? $bag[$idx] ?? ''));
+        if ($val === '') $val = '-';
+        if ($b['type'] === 'URL') {
+            $out[] = ['type' => 'button', 'sub_type' => 'url', 'index' => (string) $idx,
+                      'parameters' => [['type' => 'text', 'text' => $val]]];
+        } elseif ($b['type'] === 'COPY_CODE') {
+            $out[] = ['type' => 'button', 'sub_type' => 'copy_code', 'index' => (string) $idx,
+                      'parameters' => [['type' => 'coupon_code', 'coupon_code' => $val]]];
+        }
+    }
+
+    return $out;
+}
+
 /**
  * Send many template messages in PARALLEL (curl_multi) for fast bulk campaigns.
  * $items: [key => ['to'=>string, 'name'=>string, 'lang'=>string, 'components'=>array]]
