@@ -1,0 +1,255 @@
+{
+    "meta": {
+        "title": "Gildana - 360° Marketing Agency",
+        "description": "A full-service 360° marketing agency helping ambitious brands grow, connect, and stand out."
+    },
+    "brand": {
+        "name": "GILDANA",
+        "tagline": "WHERE BRANDS BECOME ICONS"
+    },
+    "nav": [
+        {
+            "label": "Home",
+            "url": "#top"
+        },
+        {
+            "label": "About",
+            "url": "#about"
+        },
+        {
+            "label": "Services",
+            "url": "#services"
+        },
+        {
+            "label": "Work",
+            "url": "#work"
+        },
+        {
+            "label": "Testimonials",
+            "url": "#testimonials"
+        },
+        {
+            "label": "Contact",
+            "url": "#contact"
+        }
+    ],
+    "hero": {
+        "eyebrow": "360° Marketing Agency",
+        "title": "We build brands",
+        "title_gold": "that lead & last",
+        "lede": "A full-service 360° marketing agency helping ambitious brands grow, connect, and stand out in a constantly changing world.",
+        "primary_label": "Our Services",
+        "primary_url": "#services",
+        "secondary_label": "View Our Work",
+        "secondary_url": "#work",
+        "image": "uploads/cms/gildana-hero-agency-1777118624-5591.png",
+        "image_alt": "Gildana team",
+        "tags": [
+            "STRATEGY",
+            "CREATIVE",
+            "CONTENT",
+            "RESULTS"
+        ]
+    },
+    "stats": {
+        "eyebrow": "TRUSTED BY GROWING BRANDS",
+        "cta_label": "VIEW OUR WORK",
+        "cta_url": "#work",
+        "items": [
+            {
+                "number": "120",
+                "suffix": "+",
+                "label": "CLIENTS",
+                "sub": "Long-term partnerships"
+            },
+            {
+                "number": "250",
+                "suffix": "+",
+                "label": "PROJECTS",
+                "sub": "Delivered with impact"
+            },
+            {
+                "number": "15",
+                "suffix": "+",
+                "label": "INDUSTRIES",
+                "sub": "Deep market experience"
+            },
+            {
+                "number": "20",
+                "suffix": "+",
+                "label": "COUNTRIES",
+                "sub": "Local insight, global reach"
+            }
+        ]
+    },
+    "services": {
+        "eyebrow": "OUR SERVICES",
+        "title": "Complete 360°",
+        "title_gold": "marketing solutions",
+        "items": [
+            {
+                "icon": "strategy",
+                "name": "STRATEGY",
+                "desc": "Data-driven strategies that align with your business goals."
+            },
+            {
+                "icon": "branding",
+                "name": "BRANDING",
+                "desc": "Build a powerful brand identity that connects and inspires."
+            },
+            {
+                "icon": "megaphone",
+                "name": "DIGITAL MARKETING",
+                "desc": "Reach the right audience across digital channels that matter."
+            },
+            {
+                "icon": "box",
+                "name": "CONTENT CREATION",
+                "desc": "Creative content that tells your story and drives engagement."
+            },
+            {
+                "icon": "chart",
+                "name": "PERFORMANCE MARKETING",
+                "desc": "Campaigns optimized for results, leads, and ROI."
+            },
+            {
+                "icon": "code",
+                "name": "WEB & TECHNOLOGY",
+                "desc": "Beautiful websites and smart solutions that power your brand."
+            }
+        ]
+    },
+    "portfolio": {
+        "eyebrow": "OUR PORTFOLIO",
+        "title": "Work that drives results",
+        "view_all_label": "VIEW ALL WORK",
+        "view_all_url": "#",
+        "items": [
+            {
+                "image": "images/case-skyline.jpg",
+                "cat": "REAL ESTATE",
+                "title": "Skyline Developments",
+                "pct": "+42%",
+                "label": "Qualified Leads"
+            },
+            {
+                "image": "images/case-hotel.jpg",
+                "cat": "HOSPITALITY",
+                "title": "Azure Hotel Collection",
+                "pct": "+35%",
+                "label": "Direct Bookings"
+            },
+            {
+                "image": "images/case-sport.jpg",
+                "cat": "SPORTS",
+                "title": "Peak Performance",
+                "pct": "+60%",
+                "label": "Brand Engagement"
+            },
+            {
+                "image": "images/case-fragrance.jpg",
+                "cat": "RETAIL",
+                "title": "Noir Fragrances",
+                "pct": "+28%",
+                "label": "Sales Increase"
+            }
+        ]
+    },
+    "testimonials": {
+        "eyebrow": "TESTIMONIALS",
+        "items": [
+            {
+                "quote": "Gildana transformed our brand from the inside out. Their strategy, creativity, and execution delivered results beyond what we expected.",
+                "who": "AHMED EL-NASSY",
+                "role": "CEO, Skyline Developments"
+            },
+            {
+                "quote": "Working with Gildana felt like adding a strategic partner, not an agency. Every campaign hit harder, and our digital presence has never looked sharper.",
+                "who": "MONA SHAHEEN",
+                "role": "CMO, Azure Hotel Collection"
+            },
+            {
+                "quote": "They understood our brand instantly and turned it into a story that resonates. Engagement, leads, and recognition all moved in the right direction.",
+                "who": "OMAR FAROUK",
+                "role": "Founder, Peak Performance"
+            }
+        ]
+    },
+    "clients": {
+        "eyebrow": "TRUSTED BY LEADING BRANDS",
+        "items": [
+            {
+                "image": "images/client-emaar.png",
+                "alt": "Emaar"
+            },
+            {
+                "image": "images/client-marriott.png",
+                "alt": "Marriott"
+            },
+            {
+                "image": "images/client-orascom.png",
+                "alt": "Orascom Development"
+            },
+            {
+                "image": "images/client-cityedge.png",
+                "alt": "City Edge Developments"
+            },
+            {
+                "image": "images/client-dorra.png",
+                "alt": "Dorra Group"
+            }
+        ]
+    },
+    "contact": {
+        "eyebrow": "LET'S WORK TOGETHER",
+        "title": "Start your\r\nnext project",
+        "lede": "Tell us about your business and let's create something amazing together.",
+        "success": "Thank you. Your message is with our team - we'll be in touch within two working days.",
+        "info": [
+            {
+                "icon": "phone",
+                "text": "+20 101 123 4567"
+            },
+            {
+                "icon": "mail",
+                "text": "hello@gildana.com"
+            },
+            {
+                "icon": "pin",
+                "text": "Cairo, Egypt"
+            }
+        ]
+    },
+    "footer": {
+        "copyright": "© 2026 Gildana. All Rights Reserved",
+        "follow_title": "FOLLOW US",
+        "newsletter_title": "NEWSLETTER",
+        "newsletter_text": "Stay updated with our latest insights",
+        "privacy_label": "Privacy Policy",
+        "privacy_url": "#",
+        "terms_label": "Terms & Conditions",
+        "terms_url": "#",
+        "socials": [
+            {
+                "type": "linkedin",
+                "label": "LinkedIn",
+                "url": "#"
+            },
+            {
+                "type": "instagram",
+                "label": "Instagram",
+                "url": "#"
+            },
+            {
+                "type": "facebook",
+                "label": "Facebook",
+                "url": "#"
+            },
+            {
+                "type": "behance",
+                "label": "Behance",
+                "url": "#"
+            }
+        ]
+    }
+}

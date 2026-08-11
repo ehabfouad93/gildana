@@ -1,0 +1,12 @@
+# Protect app secrets and internals from direct web access.
+<FilesMatch "^(config\.php|config\.sample\.php)$">
+    Require all denied
+</FilesMatch>
+
+# Fallback for older Apache
+<IfModule !mod_authz_core.c>
+    <FilesMatch "^(config\.php|config\.sample\.php)$">
+        Order allow,deny
+        Deny from all
+    </FilesMatch>
+</IfModule>

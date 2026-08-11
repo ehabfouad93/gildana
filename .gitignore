@@ -1,0 +1,27 @@
+# ── Secrets: never commit live config (tokens, DB creds, app secret) ──
+**/config.php
+
+# ── Local Claude data (plans, memory) ──
+.claude/
+
+# ── Large archives / packaged builds ──
+*.zip
+
+# ── Logs & runtime ──
+*.log
+**/server.log
+wa-dashboard/cron/.heartbeat
+ai-studio/storage/
+
+# ── Uploaded / user media (keep the folder, not its contents) ──
+wa-dashboard/uploads/*
+!wa-dashboard/uploads/index.html
+
+# ── Flat-file submission stores (may hold personal data) ──
+data/contacts.json
+data/newsletter.json
+
+# ── OS / editor cruft ──
+Thumbs.db
+.DS_Store
+*.swp

@@ -1,0 +1,10 @@
+# Protect sensitive files (Apache). On nginx add equivalent location denies.
+<FilesMatch "^config\.php$">
+  Require all denied
+</FilesMatch>
+
+# Block direct access to code/config directories.
+RedirectMatch 403 ^/.*/(includes|migrations)/.*$
+
+# Default document.
+DirectoryIndex index.php
