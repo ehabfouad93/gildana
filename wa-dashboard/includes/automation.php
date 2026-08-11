@@ -375,6 +375,24 @@ function auto_welcome_flow(int $clientId): ?array
                    ORDER BY (kind='agent') DESC, id LIMIT 1", [$clientId]);
 }
 
+/** Catch-all flow: runs when no keyword matched and welcome doesn't apply. */
+function auto_default_flow(int $clientId): ?array
+{
+    return db_row("SELECT * FROM flows WHERE client_id=? AND status='active' AND trigger_type='default'
+                   ORDER BY (kind='agent') DESC, id LIMIT 1", [$clientId]);
+}
+
+/**
+ * Has a human taken this conversation over? While paused the bot stays silent so it can't
+ * talk over an agent replying by hand in the Inbox. Tolerates the column not existing yet
+ * (migration 009 not applied).
+ */
+function auto_bot_paused(array $contact): bool
+{
+    $until = $contact['bot_paused_until'] ?? null;
+    return $until !== null && strtotime((string) $until) > time();
+}
+
 function auto_start(array $client, array $contact, array $flow, string $inboundText = ''): void
 {
     $ctx = ['fields' => [], 'transcript' => []];
@@ -395,6 +413,10 @@ function automation_handle_inbound(array $client, array $contact, array $message
 {
     $text     = (string) ($message['text'] ?? '');
     $buttonId = (string) ($message['button_id'] ?? '');
+
+    // A human is handling this chat (they replied from the Inbox) — stay out of the way.
+    // The inbound is still logged by webhook.php, so nothing is lost.
+    if (auto_bot_paused($contact)) return;
 
     $run = auto_active_run((int) $contact['id']);
     if ($run && $run['status'] === 'waiting_input') {
@@ -460,6 +482,9 @@ function automation_handle_inbound(array $client, array $contact, array $message
         // welcome: first inbound and no prior run for this contact
         $prior = (int) db_val("SELECT COUNT(*) FROM flow_runs WHERE contact_id=?", [(int) $contact['id']]);
         if ($prior === 0) $flow = auto_welcome_flow((int) $client['id']);
+        // Catch-all: nothing matched and they're not new → answer anyway (e.g. an AI agent
+        // acting as an always-on FAQ) instead of leaving the message unanswered.
+        if (!$flow) $flow = auto_default_flow((int) $client['id']);
     }
     if ($flow) auto_start($client, $contact, $flow, $text);
 }

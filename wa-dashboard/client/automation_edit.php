@@ -14,7 +14,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save'
     verify_csrf();
     $name    = trim((string) ($_POST['name'] ?? $flow['name']));
     $trigger = (string) ($_POST['trigger_type'] ?? $flow['trigger_type']);
-    if (!in_array($trigger, ['keyword', 'welcome'], true)) $trigger = 'keyword';
+    if (!in_array($trigger, ['keyword', 'welcome', 'default'], true)) $trigger = 'keyword';
     $hotMin  = max(0, (int) ($_POST['hot_min'] ?? 70));
     $warmMin = max(0, (int) ($_POST['warm_min'] ?? 40));
 
@@ -71,6 +71,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save'
                     $next = $R($out['next'] ?? null);
                     break;
                 case 'question': $cfg = ['body' => (string) ($c['body'] ?? ''), 'save_as' => (string) ($c['save_as'] ?? '')]; $next = $R($out['next'] ?? null); break;
+                case 'ai_chat':
+                    // Same config the AI Chat Agent compiles — the engine already runs this node.
+                    $caps = []; $usedKeys = [];
+                    foreach ((array) ($c['captures'] ?? []) as $ci => $cap) {
+                        $lab = trim((string) (is_array($cap) ? ($cap['label'] ?? '') : $cap));
+                        if ($lab === '') continue;
+                        // Derive a stable field key from the label (same rule as agent_edit.php).
+                        $key = trim((string) preg_replace('/[^a-z0-9]+/', '_', strtolower($lab)), '_');
+                        if ($key === '') $key = 'field_' . ($ci + 1);
+                        $base = $key; $k = 2;
+                        while (in_array($key, $usedKeys, true)) { $key = $base . '_' . $k; $k++; }
+                        $usedKeys[] = $key;
+                        $caps[] = ['key' => $key, 'label' => $lab];
+                    }
+                    $cfg = [
+                        'knowledge'    => (string) ($c['knowledge'] ?? ''),
+                        'intro'        => (string) ($c['intro'] ?? ''),
+                        'persona'      => (string) ($c['persona'] ?? ''),
+                        'instructions' => (string) ($c['instructions'] ?? ''),
+                        'goals'        => array_values(array_filter(array_map('trim', (array) ($c['goals'] ?? [])))),
+                        'captures'     => $caps,
+                        'max_turns'    => max(1, min(30, (int) ($c['max_turns'] ?? 8))),
+                    ];
+                    $next = $R($out['next'] ?? null);
+                    break;
                 case 'ai_score': $cfg = ['criterion' => (string) ($c['criterion'] ?? ''), 'max_points' => (int) ($c['max_points'] ?? 10)]; $next = $R($out['next'] ?? null); break;
                 case 'score':    $cfg = ['points' => (int) ($c['points'] ?? 0)]; $next = $R($out['next'] ?? null); break;
                 case 'wait':     $cfg = ['seconds' => max(1, (int) ($c['seconds'] ?? 3600))]; $next = $R($out['next'] ?? null); break;
@@ -139,6 +164,19 @@ foreach ($stepsRaw as $k => $s) {
                 'buttons'      => (object) ((array) ($c['buttons'] ?? [])),
             ]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
         case 'question': $node['config'] = ['body' => $c['body'] ?? '', 'save_as' => $c['save_as'] ?? '']; $node['outputs']['next'] = $tid($s['next_step_id']); break;
+        case 'ai_chat': $node['config'] = [
+                'knowledge'    => (string) ($c['knowledge'] ?? ''),
+                'intro'        => (string) ($c['intro'] ?? ''),
+                'persona'      => (string) ($c['persona'] ?? ''),
+                'instructions' => (string) ($c['instructions'] ?? ''),
+                'goals'        => array_values((array) ($c['goals'] ?? [])),
+                // Panel edits labels; keys are re-derived on save.
+                'captures'     => array_values(array_map(
+                    fn($x) => ['label' => (string) (is_array($x) ? ($x['label'] ?? '') : $x)],
+                    (array) ($c['captures'] ?? [])
+                )),
+                'max_turns'    => (int) ($c['max_turns'] ?? 8),
+            ]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
         case 'ai_score': $node['config'] = ['criterion' => $c['criterion'] ?? '', 'max_points' => (int) ($c['max_points'] ?? 10)]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
         case 'score':    $node['config'] = ['points' => (int) ($c['points'] ?? 0)]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
         case 'wait':     $node['config'] = ['seconds' => (int) ($c['seconds'] ?? 3600)]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
@@ -187,6 +225,7 @@ client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
         <select name="trigger_type" id="trigger_type" onchange="onTrig()">
           <option value="keyword" <?= $flow['trigger_type'] === 'keyword' ? 'selected' : '' ?>>Keyword reply</option>
           <option value="welcome" <?= $flow['trigger_type'] === 'welcome' ? 'selected' : '' ?>>Welcome (first message)</option>
+          <option value="default" <?= $flow['trigger_type'] === 'default' ? 'selected' : '' ?>>Default reply (nothing else matched)</option>
         </select>
       </div>
       <div class="field" id="kw-wrap"><span class="lbl">Keywords</span><input type="text" name="keywords" value="<?= e(implode(', ', (array) ($tc['keywords'] ?? []))) ?>" placeholder="price, info"></div>
@@ -215,6 +254,7 @@ client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
         </optgroup>
         <optgroup label="Ask / branch">
           <option value="question">Ask &amp; capture</option>
+          <option value="ai_chat">AI conversation</option>
           <option value="ai_branch">AI branch</option>
         </optgroup>
         <optgroup label="Score / act">
@@ -265,7 +305,7 @@ const INIT_NODES = <?= json_encode($nodes) ?>;
 const INIT_START = <?= json_encode($startNode) ?>;
 const esc = s => (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
-const TYPE_LABEL = {start:'Trigger',text:'Send text',image:'Send image',template:'Template',buttons:'Buttons',question:'Ask',ai_branch:'AI branch',ai_score:'AI score',score:'Add points',wait:'Wait',tag:'Tag',list_add:'Add to list',notify:'Notify',collect:'Collect'};
+const TYPE_LABEL = {start:'Trigger',text:'Send text',image:'Send image',template:'Template',buttons:'Buttons',question:'Ask',ai_chat:'AI conversation',ai_branch:'AI branch',ai_score:'AI score',score:'Add points',wait:'Wait',tag:'Tag',list_add:'Add to list',notify:'Notify',collect:'Collect'};
 
 let nodes = {};        // id -> {id,type,x,y,config,outputs}
 let start = {id:'start', type:'start', x:INIT_START.x, y:INIT_START.y, outputs:{next:INIT_START.next||null}};
@@ -293,6 +333,13 @@ function summary(n){
     }
     case 'buttons': return esc(c.body)+'<div class="muted" style="margin-top:4px">'+((c.buttons||[]).map(b=>'▸ '+esc(b.title||'?')).join('<br>'))+'</div>';
     case 'question': return '❓ '+(esc(c.body)||'<span class="muted">question</span>')+(c.save_as?' <span class="muted">→ '+esc(c.save_as)+'</span>':'');
+    case 'ai_chat': {
+      const kb=(c.knowledge||'').trim();
+      const g=(c.goals||[]).filter(x=>(x||'').trim());
+      return '💬 AI conversation'+(kb?'':'<div class="muted" style="margin-top:4px;color:#c0392b">⚠ add a knowledge base</div>')
+        +(g.length?'<div class="muted" style="margin-top:4px">'+g.map(x=>'▸ '+esc(x)).join('<br>')+'</div>':'')
+        +'<div class="muted" style="margin-top:4px">max '+(c.max_turns||8)+' replies</div>';
+    }
     case 'ai_branch': return '🤖 AI branch<div class="muted" style="margin-top:4px">'+((c.branches||[]).map(b=>'▸ '+esc(b.label||'?')+(b.points?' +'+b.points:'')).join('<br>'))+'<br>▸ (else)</div>';
     case 'ai_score': return '🎯 AI score: '+(esc(c.criterion).slice(0,40)||'<span class="muted">criterion</span>')+' <span class="muted">(max '+(c.max_points||10)+')</span>';
     case 'score': return '➕ '+(c.points||0)+' points';
@@ -432,7 +479,7 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeEdgeMenu(); 
 
 /* ── add / delete ── */
 function defaultConfig(type){
-  return {text:{body:''},image:{link:'',caption:''},template:{template_id:0,header_media:'',header_vars:{},header_loc:{},vars:{},buttons:{}},buttons:{body:'',buttons:[{title:'Yes',points:0},{title:'No',points:0}]},question:{body:'',save_as:''},ai_branch:{prompt:'',branches:[{label:'Interested',description:'',points:0}]},ai_score:{criterion:'',max_points:10},score:{points:0},wait:{seconds:3600},tag:{tag:''},list_add:{list_id:0},notify:{message:''},collect:{sheet_name:'Leads',fields:['phone','name','last_reply','score','tags']}}[type]||{};
+  return {text:{body:''},image:{link:'',caption:''},template:{template_id:0,header_media:'',header_vars:{},header_loc:{},vars:{},buttons:{}},buttons:{body:'',buttons:[{title:'Yes',points:0},{title:'No',points:0}]},question:{body:'',save_as:''},ai_chat:{knowledge:'',intro:'',persona:'',instructions:'',goals:[],captures:[],max_turns:8},ai_branch:{prompt:'',branches:[{label:'Interested',description:'',points:0}]},ai_score:{criterion:'',max_points:10},score:{points:0},wait:{seconds:3600},tag:{tag:''},list_add:{list_id:0},notify:{message:''},collect:{sheet_name:'Leads',fields:['phone','name','last_reply','score','tags']}}[type]||{};
 }
 function addNode(type,data){
   const w=document.getElementById('cwrap');
@@ -469,6 +516,15 @@ function cfgForm(n){ const c=n.config;
     case 'notify': return `<label><span class="lbl">Message (emailed to Gildana)</span><textarea data-k="message" rows="2">${esc(c.message)}</textarea></label>`;
     case 'collect': { const f=c.fields||[]; return `<label><span class="lbl">Sheet name</span><input data-k="sheet_name" value="${esc(c.sheet_name)}"></label><div class="lbl mt10">Capture fields</div>`+['phone','name','last_reply','score','grade','tags'].map(k=>`<label style="display:flex;gap:6px;font-weight:normal;align-items:center"><input type="checkbox" class="cf" value="${k}" ${f.includes(k)?'checked':''} style="width:auto">${k}</label>`).join(''); }
     case 'buttons': return `<label><span class="lbl">Message</span><textarea data-k="body" rows="2">${esc(c.body)}</textarea></label><div class="lbl mt10">Buttons (max 3) — wire each on the canvas</div><div id="rows">${(c.buttons||[]).map((b,i)=>btnRow(b,i)).join('')}</div><button type="button" class="btn-link" onclick="addRow('buttons')">+ button</button>`;
+    case 'ai_chat': return `
+      <label><span class="lbl">Knowledge base <span class="text-muted">(the AI answers ONLY from this)</span></span><textarea data-k="knowledge" rows="7" placeholder="Company, products, prices, offers, working hours, FAQs…">${esc(c.knowledge)}</textarea></label>
+      <label><span class="lbl">Instructions <span class="text-muted">(language, dialect, tone)</span></span><textarea data-k="instructions" rows="3" placeholder="مثال: رد دايماً باللهجة المصرية العامية. كن مختصر ومهذب.">${esc(c.instructions)}</textarea></label>
+      <label><span class="lbl">Greeting <span class="text-muted">(optional, sent before the first reply)</span></span><input data-k="intro" value="${esc(c.intro)}" placeholder="أهلاً! اسأل عن أي حاجة 🙂"></label>
+      <label><span class="lbl">Who is the AI? <span class="text-muted">(persona)</span></span><input data-k="persona" value="${esc(c.persona)}" placeholder="a support agent at Gildana"></label>
+      <label><span class="lbl">Max AI replies</span><input type="number" data-k="max_turns" value="${c.max_turns||8}" min="1" max="30"></label>
+      <label><span class="lbl">Goals <span class="text-muted">(one per line)</span></span><textarea id="ac-goals" rows="3" placeholder="book an appointment&#10;get their budget">${esc((c.goals||[]).join('\n'))}</textarea></label>
+      <label><span class="lbl">Capture from chat <span class="text-muted">(one per line)</span></span><textarea id="ac-caps" rows="3" placeholder="Mobile number&#10;Final request">${esc((c.captures||[]).map(x=>(x&&x.label)||x||'').join('\n'))}</textarea></label>
+      <div class="hint">Answers only from the knowledge base — anything else gets "a colleague will follow up". Free-form AI replies need the 24h window; each reply costs 1 credit.</div>`;
     case 'ai_branch': return `<label><span class="lbl">Prompt (optional, asked before classifying)</span><textarea data-k="prompt" rows="2">${esc(c.prompt)}</textarea></label><div class="lbl mt10">Branches — wire each (and “else”) on the canvas</div><div id="rows">${(c.branches||[]).map((b,i)=>brRow(b,i)).join('')}</div><button type="button" class="btn-link" onclick="addRow('ai_branch')">+ branch</button>`;
   }
   return '';
@@ -591,6 +647,10 @@ function bindCfg(){
     el.addEventListener('input',()=>{ let v=el.value; if(el.type==='number') v=+v; current.config[el.dataset.k]=v; renderKeepPanel(false); });
   });
   document.querySelectorAll('#cfg-body .cf').forEach(cb=>cb.addEventListener('change',()=>{ current.config.fields=[...document.querySelectorAll('#cfg-body .cf:checked')].map(x=>x.value); }));
+  // AI conversation: line-based lists → arrays (labels only; keys are derived on save).
+  const ag=document.getElementById('ac-goals'), ac=document.getElementById('ac-caps');
+  if(ag) ag.addEventListener('input',()=>{ current.config.goals=ag.value.split('\n').map(s=>s.trim()).filter(Boolean); renderKeepPanel(false); });
+  if(ac) ac.addEventListener('input',()=>{ current.config.captures=ac.value.split('\n').map(s=>s.trim()).filter(Boolean).map(l=>({label:l})); });
   const wv=document.getElementById('wv'),wu=document.getElementById('wu');
   if(wv&&wu){ const upd=()=>{ current.config.seconds=(+wv.value)*(wu.value==='d'?86400:wu.value==='h'?3600:60); }; wv.addEventListener('input',upd); wu.addEventListener('change',upd); }
   document.querySelectorAll('#cfg-body .ri-title,#cfg-body .ri-label,#cfg-body .ri-desc,#cfg-body .ri-points').forEach(el=>el.addEventListener('input',syncRows));

@@ -33,6 +33,9 @@ $IB_SEP = strpos($IB_ENDPOINT, '?') === false ? '?' : '&';
   .ib-foot textarea{flex:1;resize:none;border:1px solid var(--line,#e5e2dc);border-radius:20px;padding:9px 14px;font-size:13.5px;max-height:120px}
   .ib-note{font-size:12px;color:var(--muted,#8a857c);text-align:center;padding:8px}
   .ib-empty{margin:auto;color:var(--muted,#8a857c);text-align:center;font-size:13px}
+  .ib-bot{font-size:11.5px;padding:3px 9px;border-radius:11px;white-space:nowrap;font-weight:600}
+  .ib-bot.on{background:#e8f5ea;color:#1e7a3c}
+  .ib-bot.off{background:#fdf0e3;color:#a9631a}
   @media(max-width:720px){.ib-list{width:44%;min-width:0}.ib-th .pv{max-width:110px}}
 </style>
 
@@ -42,7 +45,14 @@ $IB_SEP = strpos($IB_ENDPOINT, '?') === false ? '?' : '&';
     <div class="ib-threads" id="ib-threads"><div class="ib-empty" style="padding:20px">Loading…</div></div>
   </div>
   <div class="ib-chat">
-    <div class="ib-chat-h" id="ib-head" style="display:none"><div class="ib-av" id="ib-hav"></div><div><div class="nm" id="ib-hname"></div><div class="pv" id="ib-hphone"></div></div></div>
+    <div class="ib-chat-h" id="ib-head" style="display:none">
+      <div class="ib-av" id="ib-hav"></div>
+      <div><div class="nm" id="ib-hname"></div><div class="pv" id="ib-hphone"></div></div>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+        <span class="ib-bot" id="ib-bot"></span>
+        <button type="button" class="btn btn-ghost btn-sm" id="ib-bot-btn"></button>
+      </div>
+    </div>
     <div class="ib-body" id="ib-body"><div class="ib-empty">Select a conversation to view messages.</div></div>
     <div class="ib-foot" id="ib-foot" style="display:none">
       <form id="ib-form"><textarea id="ib-text" rows="1" placeholder="Type a reply…"></textarea><button class="btn btn-primary" type="submit">Send</button></form>
@@ -103,7 +113,31 @@ async function pollThread(){
   ibOpen=!!d.window_open;
   el('ib-form').style.display = ibOpen?'flex':'none';
   el('ib-closed').style.display = ibOpen?'none':'block';
+  setBotState(!!d.bot_paused);
 }
+/* ── live takeover: while paused the bot won't reply to this contact ── */
+let ibPaused=false;
+function setBotState(paused){
+  ibPaused=paused;
+  const pill=el('ib-bot'), btn=el('ib-bot-btn');
+  pill.className='ib-bot '+(paused?'off':'on');
+  pill.textContent = paused ? "🙋 You're handling this" : '🤖 Bot active';
+  btn.textContent  = paused ? 'Resume bot' : 'Take over';
+  btn.title = paused ? 'Hand the conversation back to the bot'
+                     : 'Pause the bot so you can reply by hand';
+}
+el('ib-bot-btn').addEventListener('click', async ()=>{
+  if(!ibCur) return;
+  const btn=el('ib-bot-btn'); btn.disabled=true;
+  const fd=new FormData();
+  fd.append('ajax', ibPaused?'resume':'takeover');
+  fd.append('csrf_token',IB_CSRF); fd.append('contact',ibCur);
+  try{
+    const r=await fetch(IB_URL,{method:'POST',body:fd}); const d=await r.json();
+    if(d.ok) setBotState(!!d.bot_paused);
+  }catch(e){ /* leave the pill as-is */ }
+  btn.disabled=false;
+});
 el('ib-form').addEventListener('submit', async e=>{
   e.preventDefault(); const ta=el('ib-text'); const body=ta.value.trim(); if(!body||!ibCur) return;
   const btn=e.target.querySelector('button'); btn.disabled=true;
