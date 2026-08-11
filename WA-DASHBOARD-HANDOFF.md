@@ -1,9 +1,52 @@
 # Gildana WhatsApp Dashboard — Project Handoff
 
 > Paste this file into a new Claude chat to continue work with full context.
-> Last updated: 2026-07-30.
+> Last updated: 2026-08-11.
 
-## ⏱️ CURRENT STATE — read this first
+## 🆕 LATEST SESSION (2026-08-11) — template media + full fields + chatbot upgrade
+
+The inbound-webhook problem below was solved earlier ("okay it works finally"). This
+session fixed **bulk marketing templates with an image header** and added the chatbot
+upgrades. Needs **migration `009_media_cache.sql`**.
+
+**Root cause 1 — image templates failed, worse the bigger the send.** Header media was
+always sent as a public `link`, so Meta re-downloaded the same image *once per recipient*
+(30 concurrent) from the cPanel host → throttling → `#131053` / `#130472`.
+→ Fixed: `wa_upload_media()` + `wa_resolve_media()` upload the file **once** and send by
+**media id**, cached in the new `media_cache` table (per client + file hash, re-uploaded
+after 25 days since ids expire). Any failure falls back to the old link behaviour.
+
+**Root cause 2 — incomplete template payloads.** Only the Lead Qualifier built a full
+payload. **Campaigns** sent BODY variables only and the **bot canvas template node** sent
+*no* components → `#132012` on any template with an image header.
+→ Fixed: `auto_build_components()` promoted to **`wa_build_components()`** in
+`whatsapp.php` — now the single builder behind Campaigns, the bot canvas and the
+Qualifier. Campaigns + canvas gained the full field UI (header media/text/location, body
+vars, dynamic URL + copy-code buttons).
+
+Campaign components stay in `link` form at creation; the worker swaps in a freshly
+resolved media id at **send** time, so a campaign scheduled weeks out can't ship an
+expired id.
+
+**Also shipped:**
+- `send_parallel_media` (default 10) — gentler concurrency for media templates.
+- Transient failures (media / rate-limit / 5xx) retry **once**; permanent ones
+  (`#132012`, `#200`) do not — `wa_error_is_transient()`.
+- Campaign report groups failure reasons with a targeted hint each.
+- **Canvas UX:** fits the page width on load, ＋/−/Fit zoom + Ctrl/⌘-wheel, middle/space
+  drag to pan, and **right-click a connection to delete it**. All screen→canvas math goes
+  through `toCanvas()` and divides by the zoom — otherwise nodes drift from the cursor and
+  edges detach from ports at any zoom ≠ 100%.
+- **AI conversation node** (`ai_chat`) now in the bot canvas palette (the engine already
+  supported it; it just wasn't exposed).
+- **Live takeover:** replying by hand in the Inbox pauses the bot for that contact
+  (`contacts.bot_paused_until`) and stops timer runs; header pill + Take over / Resume bot.
+- **Default reply:** `trigger_type='default'` flows answer anything that matched no
+  keyword and isn't a first message (an always-on AI FAQ).
+
+Everything degrades safely if migration 009 hasn't run yet.
+
+## ⏱️ EARLIER STATE — historical context below
 
 Everything is deployed and **Health Check is all green** (WhatsApp, credits, AI=openai,
 webhook, cron, chatbots, qualifiers). Lead import + outreach template send both work.
@@ -95,7 +138,9 @@ is fully separate from the public Gildana marketing site.
 - `includes/crypto.php` — AES-256-GCM secret encryption.
 - `includes/whatsapp.php` — `wa_request()`, `wa_send_template()`,
   `wa_send_template_batch()` (parallel `curl_multi`), `wa_send_text/image/buttons`,
-  `wa_fetch_templates()`.
+  `wa_fetch_templates()`, plus (2026-08-11) `wa_upload_media()`, `wa_resolve_media()`,
+  `wa_apply_media_id()`, `wa_build_components()` (**the** shared template payload builder),
+  `wa_template_has_media()`, `wa_error_is_transient()`.
 - `includes/ai.php` — `ai_config`, `ai_complete`, `ai_classify`, `ai_score_reply`,
   `ai_test_key`.
 - `includes/automation.php` — **the automation/qualifier engine**. Key functions:
@@ -153,8 +198,14 @@ is fully separate from the public Gildana marketing site.
   `context` JSON (fields + transcript).
 - `flow_messages` — send/delivery log. `flow_collected` — exportable lead rows.
 - `campaigns`, `campaign_messages`, `webhook_events`, `schema_migrations`.
+- `media_cache` — Meta media handles: `client_id`, `file_hash` (sha256 of the bytes),
+  `file_url`, `media_id`, `mime`, `uploaded_at`. Unique on (client, hash). Rows older than
+  25 days are treated as stale and re-uploaded.
+- `contacts.bot_paused_until` — NULL = bot active; a future timestamp = a human took the
+  conversation over in the Inbox.
 - Migrations of note: `005_automations.sql`, `006_flow_canvas_kind.sql`
-  (adds `flows.kind`, `flow_steps.pos_x/pos_y`; migrates google_sheet→qualifier).
+  (adds `flows.kind`, `flow_steps.pos_x/pos_y`; migrates google_sheet→qualifier),
+  `009_media_cache.sql` (media handles + bot handoff).
 
 ## 6. Most recent work (this session)
 
