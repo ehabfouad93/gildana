@@ -8,7 +8,10 @@ declare(strict_types=1);
 
 function wa_graph_base(): string
 {
-    return 'https://graph.facebook.com/' . (string) config('graph_version', 'v21.0');
+    // `graph_host` is only overridden to point at a mock Graph API when testing;
+    // it defaults to the real endpoint, so live behaviour is unchanged.
+    $host = rtrim((string) config('graph_host', 'https://graph.facebook.com'), '/');
+    return $host . '/' . (string) config('graph_version', 'v21.0');
 }
 
 /** Decrypt and return a client's access token. */

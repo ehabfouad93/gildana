@@ -23,6 +23,10 @@ return [
     // ── Meta / WhatsApp Cloud API ──
     'graph_version' => 'v21.0',
 
+    // Graph API host. Leave this out in production — it defaults to the real endpoint.
+    // Only set it to point at a mock/staging Graph API when testing locally.
+    // 'graph_host' => 'http://127.0.0.1:8790',
+
     // Token that Meta must echo back when you configure the webhook (you choose it).
     'webhook_verify_token' => 'CHANGE_ME_pick_any_random_string',
 
