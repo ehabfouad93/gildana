@@ -266,21 +266,30 @@ function check_captcha(string $input): bool
  * the worker keeps running server-side (ignore_user_abort). The cron remains the
  * reliable heartbeat for scheduled campaigns + automations.
  */
+/**
+ * The app's public base URL, with no trailing slash — e.g. https://app.gildana.net.
+ * Prefers config('base_url'); otherwise derives it from the request, stripping a trailing
+ * /client or /admin so we always land on the app root.
+ */
+function app_base_url(): string
+{
+    $base = rtrim((string) config('base_url', ''), '/');
+    if ($base !== '') return $base;
+
+    $https = (!empty($_SERVER['HTTPS']) && strtolower((string) $_SERVER['HTTPS']) !== 'off')
+          || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https')
+          || ((int) ($_SERVER['SERVER_PORT'] ?? 0) === 443);
+    $host = (string) ($_SERVER['HTTP_HOST'] ?? 'localhost');
+    $dir  = str_replace('\\', '/', dirname((string) ($_SERVER['SCRIPT_NAME'] ?? '/')));
+    $root = (string) preg_replace('#/(client|admin)$#', '', $dir);
+    // dirname() returns '/' at the web root, which would otherwise yield a double slash.
+    if ($root === '/' || $root === '.' || $root === '\\') $root = '';
+    return ($https ? 'https' : 'http') . '://' . $host . rtrim($root, '/');
+}
+
 function trigger_worker(): void
 {
-    // Resolve the app's base URL.
-    $base = rtrim((string) config('base_url', ''), '/');
-    if ($base === '') {
-        $https  = (!empty($_SERVER['HTTPS']) && strtolower((string) $_SERVER['HTTPS']) !== 'off')
-               || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https')
-               || ((int) ($_SERVER['SERVER_PORT'] ?? 0) === 443);
-        $host   = (string) ($_SERVER['HTTP_HOST'] ?? 'localhost');
-        $dir    = str_replace('\\', '/', dirname((string) ($_SERVER['SCRIPT_NAME'] ?? '/')));
-        // strip a trailing /client or /admin so we land on the app root
-        $root   = preg_replace('#/(client|admin)$#', '', $dir);
-        $base   = ($https ? 'https' : 'http') . '://' . $host . ($root === '/' ? '' : $root);
-    }
-    $url = $base . '/cron/dispatch.php?token=' . urlencode((string) config('webhook_verify_token'));
+    $url = app_base_url() . '/cron/dispatch.php?token=' . urlencode((string) config('webhook_verify_token'));
 
     try {
         $ch = curl_init($url);

@@ -26,6 +26,7 @@ require __DIR__ . '/../includes/campaign.php';
 require __DIR__ . '/../includes/notify.php';
 require __DIR__ . '/../includes/ai.php';
 require __DIR__ . '/../includes/automation.php';
+require __DIR__ . '/../includes/push.php';
 
 if (PHP_SAPI !== 'cli') {
     if (!hash_equals((string) config('webhook_verify_token'), (string) ($_GET['token'] ?? ''))) {
@@ -196,7 +197,9 @@ try {
             $leads    = automation_ingest_sheets();
             $outreach = automation_send_outreach();
             $noAns    = automation_sweep_no_answer((int) config('no_answer_hours', 24));
-            out("Automation: resumed={$resumed} sheet_leads={$leads} outreach_sent={$outreach} no_answer={$noAns}.");
+            // One push per client with pending inbound, however many messages arrived.
+            $pushes   = push_dispatch();
+            out("Automation: resumed={$resumed} sheet_leads={$leads} outreach_sent={$outreach} no_answer={$noAns} pushes={$pushes}.");
         } finally {
             $pdo->query("SELECT RELEASE_LOCK('wa_automation')");
         }

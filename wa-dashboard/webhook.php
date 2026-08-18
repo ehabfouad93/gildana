@@ -20,6 +20,7 @@ require __DIR__ . '/includes/whatsapp.php';
 require __DIR__ . '/includes/ai.php';
 require __DIR__ . '/includes/notify.php';
 require __DIR__ . '/includes/automation.php';
+require __DIR__ . '/includes/push.php';
 
 /* ── GET verification ── */
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
@@ -72,6 +73,7 @@ function status_rank(string $s): int
 }
 
 $touchedCampaigns = [];
+$pushQueued = false;
 
 foreach (($data['entry'] ?? []) as $entry) {
     foreach (($entry['changes'] ?? []) as $change) {
@@ -176,6 +178,12 @@ foreach (($data['entry'] ?? []) as $entry) {
                     'type' => $mtype, 'source' => 'inbound', 'wamid' => (string) ($in['id'] ?? '') ?: null,
                 ]);
 
+                // Flag the client for a push. This is one cheap UPSERT — the actual
+                // HTTPS pushes happen in the background worker, because Meta retries a
+                // slow webhook. Repeats collapse into the single outbox row.
+                push_queue_client($cid);
+                $pushQueued = true;
+
                 // STOP opt-out short-circuits the bot.
                 if (preg_match('/^(STOP|UNSUBSCRIBE|إلغاء|الغاء|توقف)\b/u', strtoupper($text))) {
                     db_run("UPDATE contacts SET opt_in_status='out', opted_out_at=NOW() WHERE id=?", [(int) $contact['id']]);
@@ -192,5 +200,8 @@ foreach (($data['entry'] ?? []) as $entry) {
 foreach (array_keys($touchedCampaigns) as $campId) {
     campaign_refresh_counts((int) $campId);
 }
+
+// Fire-and-forget: makes the push land in seconds instead of waiting for the 5-min cron.
+if ($pushQueued) trigger_worker();
 
 echo 'ok';

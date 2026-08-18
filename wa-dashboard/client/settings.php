@@ -102,6 +102,14 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
   </form>
 </div>
 
+<div class="card" id="notif-card" style="display:none">
+  <h2>Notifications</h2>
+  <p class="text-muted" style="font-size:12.5px;margin:-6px 0 14px">
+    Get an alert on this device when a customer replies, so you can jump into the Inbox and take over.
+  </p>
+  <div id="notif-body"></div>
+</div>
+
 <div class="card">
   <h2>Change Password</h2>
   <form method="post" style="max-width:420px">
@@ -116,6 +124,73 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 
 <script>
 const CSRF = <?= json_encode(csrf_token()) ?>;
+
+/* ── push notifications ──
+   Permission must be requested from a user gesture (iOS refuses otherwise), so this is
+   always behind a button. On iOS push only works once the app is on the Home Screen. */
+(function(){
+  var card=document.getElementById('notif-card'), box=document.getElementById('notif-body');
+  if(!card||!box) return;
+  var supported = ('serviceWorker' in navigator) && ('PushManager' in window) && ('Notification' in window);
+  var iOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
+  var standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+
+  if(!supported){
+    if(iOS && !standalone){
+      card.style.display='';
+      box.innerHTML='<div class="alert info">On iPhone, add this app to your Home Screen first '
+        +'(<strong>Share</strong> &#8593; &rarr; <strong>Add to Home Screen</strong>), open it from there, then come back to turn notifications on.</div>';
+    }
+    return;   // desktop browser without push support: nothing to offer
+  }
+  card.style.display='';
+
+  function b64ToU8(b64){
+    var pad='='.repeat((4 - b64.length % 4) % 4);
+    var raw=atob((b64+pad).replace(/-/g,'+').replace(/_/g,'/'));
+    return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)));
+  }
+  function render(on, note){
+    box.innerHTML = (note?('<div class="alert '+(note.err?'error':'info')+'">'+note.msg+'</div>'):'')
+      + '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
+      + '<span class="pill '+(on?'green':'gray')+' dot">'+(on?'Enabled on this device':'Off')+'</span>'
+      + '<button type="button" class="btn '+(on?'btn-ghost':'btn-primary')+' btn-sm" id="notif-btn">'
+      + (on?'Turn off':'Enable notifications on this device')+'</button></div>';
+    document.getElementById('notif-btn').addEventListener('click', on?disable:enable);
+  }
+  async function current(){
+    var reg = await navigator.serviceWorker.ready;
+    return await reg.pushManager.getSubscription();
+  }
+  async function enable(){
+    var btn=document.getElementById('notif-btn'); btn.disabled=true; btn.textContent='Enabling…';
+    try{
+      var perm = await Notification.requestPermission();
+      if(perm!=='granted'){ render(false,{err:true,msg:'Notifications are blocked for this site. Allow them in your browser settings, then try again.'}); return; }
+      var kr = await (await fetch('../push_subscribe.php?key=1')).json();
+      if(!kr.ok || !kr.key){ render(false,{err:true,msg:'Notifications are not set up on the server yet — ask Gildana to generate the keys.'}); return; }
+      var reg = await navigator.serviceWorker.ready;
+      var sub = await reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:b64ToU8(kr.key)});
+      var fd=new FormData(); fd.append('action','subscribe'); fd.append('csrf_token',CSRF); fd.append('sub',JSON.stringify(sub));
+      var res = await (await fetch('../push_subscribe.php',{method:'POST',body:fd})).json();
+      if(!res.ok){ render(false,{err:true,msg:res.error||'Could not save the subscription.'}); return; }
+      render(true,{msg:'Done — this device will be notified when a customer replies.'});
+    }catch(e){ render(false,{err:true,msg:'Could not enable notifications: '+e.message}); }
+  }
+  async function disable(){
+    var btn=document.getElementById('notif-btn'); btn.disabled=true; btn.textContent='Turning off…';
+    try{
+      var sub = await current();
+      if(sub){
+        var fd=new FormData(); fd.append('action','unsubscribe'); fd.append('csrf_token',CSRF); fd.append('sub',JSON.stringify(sub));
+        await fetch('../push_subscribe.php',{method:'POST',body:fd});
+        await sub.unsubscribe();
+      }
+      render(false,{msg:'Notifications turned off on this device.'});
+    }catch(e){ render(false,{err:true,msg:'Could not turn them off: '+e.message}); }
+  }
+  current().then(function(sub){ render(!!sub, null); }).catch(function(){ render(false,null); });
+})();
 document.getElementById('btn-test-ai').addEventListener('click', async function(){
   const box = document.getElementById('ai-test-result');
   this.disabled = true; this.textContent = 'Testing…'; box.innerHTML = '';

@@ -2,6 +2,7 @@
 declare(strict_types=1);
 require __DIR__ . '/_init.php';
 require __DIR__ . '/../includes/ai.php';
+require __DIR__ . '/../includes/push.php';
 
 $cid = (int) $CLIENT['id'];
 
@@ -57,7 +58,21 @@ if ($lastWh) {
     $add('ok', 'Webhook receiving', 'Meta last reached your webhook ' . ($mins <= 1 ? 'just now' : $mins . ' min ago') . '.', '');
 } else {
     $add('fail', 'Webhook never received anything', 'Meta has NOT contacted webhook.php. Chatbot replies and lead conversations cannot work.',
-        'In Meta → WhatsApp → Configuration: set Callback URL to https://' . e((string) ($_SERVER['HTTP_HOST'] ?? 'your-domain')) . dirname(dirname((string) $_SERVER['SCRIPT_NAME'])) . '/webhook.php, use your verify token, and SUBSCRIBE to the "messages" field.');
+        'In Meta → WhatsApp → Configuration: set Callback URL to ' . e(app_base_url()) . '/webhook.php, use your verify token, and SUBSCRIBE to the "messages" field.');
+}
+
+// 4b. Push notifications
+$vk = push_vapid_keys(false);
+$nSubs = 0;
+try { $nSubs = (int) db_val("SELECT COUNT(*) FROM push_subscriptions WHERE client_id=?", [$cid]); } catch (Throwable $e) {}
+if (!$vk) {
+    $add('warn', 'Push notifications not set up', 'Nobody can be alerted on their phone when a customer replies.',
+         'Ask Gildana to open Admin → Settings → Push Notifications and click "Generate keys" (one time).');
+} elseif ($nSubs === 0) {
+    $add('warn', 'No devices subscribed', 'Push is ready, but no phone has turned notifications on yet.',
+         'On your phone: install the app to the Home Screen, then Settings → Notifications → Enable.');
+} else {
+    $add('ok', 'Push notifications', $nSubs . ' device' . ($nSubs === 1 ? '' : 's') . ' will be alerted on a new reply.', '');
 }
 
 // 5. Cron running (heartbeat)
