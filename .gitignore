@@ -25,3 +25,8 @@ data/newsletter.json
 Thumbs.db
 .DS_Store
 *.swp
+
+# Client-uploaded branding (logo / icon source) — per-install, not source
+wa-dashboard/assets/brand/*
+!wa-dashboard/assets/brand/.gitkeep
+!wa-dashboard/assets/brand/.htaccess

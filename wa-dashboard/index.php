@@ -50,7 +50,7 @@ $appName = brand_name();
 <body class="login-screen">
   <form class="login-card" method="post">
     <?= csrf_field() ?>
-    <div class="login-brand"><?= brand_logo_svg('stack', 62) ?></div>
+    <div class="login-brand"><?= brand_logo('stack', 62, './', true) ?></div>
     <h1><?= e(BRAND_TAGLINE) ?></h1>
     <?php if (isset($_GET['disabled'])): ?>
       <div class="alert error">This account is disabled. Contact Gildana.</div>

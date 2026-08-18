@@ -3,7 +3,31 @@
 > Paste this file into a new Claude chat to continue work with full context.
 > Last updated: 2026-08-18 (rebrand).
 
-## 🆕 LATEST — rebranded to REVENECT
+## 🆕 LATEST — upload your own logo & app icon
+
+**Admin → Settings → Branding.** Three slots: **Logo** (top bar + sign-in), **Logo for dark
+backgrounds** (optional — the sign-in screen is near-black, a dark logo vanishes there), and
+**App icon** (one square image ≥512px, regenerates every PWA/favicon/apple-touch file).
+
+Equivalent manual route — **drop the files into `wa-dashboard/assets/brand/` over FTP**:
+`logo.{svg,png,webp,jpg}` · `logo-light.*` · `icon-source.{png,jpg,webp}`. Nothing is stored
+in the DB; `brand_logo()` only looks at what is on disk, so both paths behave identically.
+Per-variant overrides also work: `logo-full.*`, `logo-mark.*`, `logo-stack.*` beat plain
+`logo.*`. Remove the files (or click Remove) and the built-in Revenect SVG returns.
+
+Notes for whoever works on this next:
+- Uploaded artwork is emitted as **`<img>`, never inlined**. An SVG can carry script, so
+  inlining a customer file into every page would be an XSS hole.
+- `assets/brand/` must be **writable (755)**; the card says so by name if it isn't.
+- The icon builder centre-crops to square and **flattens transparency onto the brand ink** —
+  iOS home-screen icons have no alpha and a transparent PNG would otherwise go black. The
+  maskable variant keeps an ~11% inset for Android's adaptive crop.
+- Uploads are gitignored (they are per-install, not source).
+- SVG is rejected for the **app icon** slot only — GD cannot rasterise it.
+- Fixed while here: `admin/settings.php` set `$ok` in several places but never rendered it,
+  so even the existing "push keys generated" confirmation was invisible.
+
+## Earlier — rebranded to REVENECT
 
 The product is now **REVENECT by Gildana** — "Business Interaction Engine". Revenect is the
 PRODUCT; **Gildana is still the company**, so copy addressing the agency ("Contact Gildana",

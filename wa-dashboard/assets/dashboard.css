@@ -425,3 +425,8 @@ textarea { resize: vertical; min-height: 84px; }
   .canvas-smallnote { display: block; margin-bottom: 10px; font-size: 12.5px; }
   .canvas-wrap { height: 60vh; min-height: 340px; }
 }
+
+/* Uploaded brand artwork: never let an oddly-sized file blow out the chrome. */
+.brand-img { display: block; width: auto; max-width: 190px; object-fit: contain; }
+.login-brand .brand-img { max-width: 240px; margin: 0 auto; }
+@media (max-width: 900px) { .brand-img { max-width: 132px; } }

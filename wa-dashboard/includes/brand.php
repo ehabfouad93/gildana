@@ -87,3 +87,72 @@ function brand_logo_svg(string $variant = 'full', int $h = 28): string
     return '<svg class="brand-svg" height="' . $h . '" viewBox="0 0 300 64" role="img" aria-label="' . BRAND_NAME . '" xmlns="http://www.w3.org/2000/svg">'
          . '<title>' . BRAND_NAME . '</title>' . $grad . $mark . $word . '</svg>';
 }
+
+/* ─────────────────────────────────────────────
+   Custom artwork
+   Files dropped in assets/brand/ override the built-in SVG above. They can arrive either
+   through Admin → Settings → Branding or by uploading straight to the folder in cPanel —
+   both work, because this only ever looks at what is on disk.
+───────────────────────────────────────────── */
+
+const BRAND_DIR      = 'assets/brand';
+const BRAND_LOGO_EXT = ['svg', 'png', 'webp', 'jpg', 'jpeg'];
+
+/** Absolute path of assets/brand. */
+function brand_dir_path(): string { return dirname(__DIR__) . '/' . BRAND_DIR; }
+
+/** First existing file for a base name, e.g. 'logo-full' → 'logo-full.png'. Null if none. */
+function brand_find(string $base): ?string
+{
+    foreach (BRAND_LOGO_EXT as $ext) {
+        $f = brand_dir_path() . '/' . $base . '.' . $ext;
+        if (is_file($f)) return $base . '.' . $ext;
+    }
+    return null;
+}
+
+/**
+ * Resolve which uploaded file to use for a variant, most specific first.
+ * $onDark picks the light-artwork variant used on the ink login/setup screens, where a
+ * dark logo would be invisible.
+ */
+function brand_logo_file(string $variant, bool $onDark = false): ?string
+{
+    $tries = [];
+    if ($onDark) { $tries[] = "logo-{$variant}-light"; $tries[] = 'logo-light'; }
+    $tries[] = "logo-{$variant}";
+    $tries[] = 'logo';
+    foreach ($tries as $base) {
+        $hit = brand_find($base);
+        if ($hit !== null) return $hit;
+    }
+    return null;
+}
+
+/**
+ * The logo for a surface: an uploaded file when one exists, otherwise the built-in SVG.
+ *
+ * Uploaded artwork is emitted as <img>, never inlined. An SVG can legally carry script, and
+ * inlining a customer-supplied file into every page would be an XSS hole — as an <img> the
+ * browser renders it inertly, and it still scales cleanly.
+ *
+ * @param string $base Path prefix back to the app root ('./' from the root, '../' from
+ *                     client/ and admin/), matching pwa_head().
+ */
+function brand_logo(string $variant = 'full', int $h = 28, string $base = './', bool $onDark = false): string
+{
+    $file = brand_logo_file($variant, $onDark);
+    if ($file === null) return brand_logo_svg($variant, $h);
+
+    $b = rtrim($base, '/') . '/';
+    $v = @filemtime(brand_dir_path() . '/' . $file) ?: '1';
+    return '<img class="brand-img" src="' . e($b . BRAND_DIR . '/' . $file) . '?v=' . $v
+         . '" height="' . (int) $h . '" alt="' . e(brand_name()) . '">';
+}
+
+/** True when the install is using its own artwork rather than the built-in mark. */
+function brand_has_custom_logo(): bool
+{
+    return brand_logo_file('full') !== null || brand_logo_file('stack') !== null
+        || brand_logo_file('mark') !== null;
+}

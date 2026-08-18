@@ -100,7 +100,7 @@ function layout_header(string $title, string $role, string $active, array $opts 
     <button type="button" class="nav-toggle" id="nav-toggle" aria-label="Menu" aria-expanded="false" aria-controls="sidebar">
       <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 5h14M3 10h14M3 15h14"/></svg>
     </button>
-    <span class="brand-mark"><?= brand_logo_svg('full', 26) ?></span>
+    <span class="brand-mark"><?= brand_logo('full', 26, '../') ?></span>
     <span class="topbar-sub"><?= e($badge) ?></span>
   </div>
   <nav class="topbar-nav">

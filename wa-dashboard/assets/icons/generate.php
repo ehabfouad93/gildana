@@ -90,15 +90,82 @@ function gildana_icon(int $size, bool $maskable = false): GdImage
     return $out;
 }
 
-$dir = __DIR__;
-$made = [];
-foreach ([[192, false], [512, false], [512, true], [180, false], [32, false]] as [$size, $mask]) {
-    $im = gildana_icon($size, $mask);
-    $name = $mask ? "maskable-{$size}.png" : "icon-{$size}.png";
-    imagepng($im, "$dir/$name", 9);
-    imagedestroy($im);
-    $made[] = $name;
+/* ─────────────────────────────────────────────
+   Build entry points
+───────────────────────────────────────────── */
+
+/** The five sizes the manifest, iOS and the favicon need. [size, isMaskable]. */
+const ICON_SET = [[192, false], [512, false], [512, true], [180, false], [32, false]];
+
+function icon_filename(int $size, bool $mask): string
+{
+    return $mask ? "maskable-{$size}.png" : "icon-{$size}.png";
 }
-copy("$dir/icon-180.png", "$dir/apple-touch-icon.png");
-copy("$dir/icon-32.png",  "$dir/favicon.png");
-echo "generated: " . implode(', ', $made) . ", apple-touch-icon.png, favicon.png\n";
+
+/** Load an uploaded source image, or null if unreadable / not an image GD understands. */
+function icons_load_source(string $path): ?GdImage
+{
+    if (!is_file($path)) return null;
+    $info = @getimagesize($path);
+    if (!$info) return null;
+    switch ($info[2]) {
+        case IMAGETYPE_PNG:  $im = @imagecreatefrompng($path);  break;
+        case IMAGETYPE_JPEG: $im = @imagecreatefromjpeg($path); break;
+        case IMAGETYPE_WEBP: $im = function_exists('imagecreatefromwebp') ? @imagecreatefromwebp($path) : null; break;
+        default: return null;   // SVG et al: GD can't rasterise them
+    }
+    return $im ?: null;
+}
+
+/**
+ * Render one icon from a source image.
+ * The source is centre-cropped to a square, then flattened onto the brand ink — a
+ * transparent PNG would otherwise come out black on iOS, which has no transparency support
+ * for home-screen icons. Maskable variants are inset so Android's adaptive crop can't clip
+ * the artwork.
+ */
+function icon_from_source(GdImage $src, int $size, bool $maskable): GdImage
+{
+    $sw = imagesx($src); $sh = imagesy($src);
+    $side = min($sw, $sh);
+    $sx = (int) (($sw - $side) / 2);
+    $sy = (int) (($sh - $side) / 2);
+
+    $out = imagecreatetruecolor($size, $size);
+    $bg  = imagecolorallocate($out, ...INK);
+    imagefilledrectangle($out, 0, 0, $size, $size, $bg);
+
+    $inset = $maskable ? (int) round($size * 0.11) : 0;   // ~78% safe zone
+    $box   = $size - 2 * $inset;
+    imagecopyresampled($out, $src, $inset, $inset, $sx, $sy, $box, $box, $side, $side);
+    return $out;
+}
+
+/**
+ * Write the whole icon set.
+ * With $sourcePath, the icons are made from that image; otherwise the built-in Revenect
+ * mark is drawn. Returns the filenames written.
+ */
+function icons_build(?string $sourcePath = null): array
+{
+    $dir = __DIR__;
+    $src = $sourcePath !== null ? icons_load_source($sourcePath) : null;
+    $made = [];
+    foreach (ICON_SET as [$size, $mask]) {
+        $im = $src !== null ? icon_from_source($src, $size, $mask) : gildana_icon($size, $mask);
+        $name = icon_filename($size, $mask);
+        imagepng($im, "$dir/$name", 9);
+        imagedestroy($im);
+        $made[] = $name;
+    }
+    if ($src !== null) imagedestroy($src);
+    copy("$dir/icon-180.png", "$dir/apple-touch-icon.png");
+    copy("$dir/icon-32.png",  "$dir/favicon.png");
+    return array_merge($made, ['apple-touch-icon.png', 'favicon.png']);
+}
+
+// CLI only — including this file just defines the functions.
+if (PHP_SAPI === 'cli' && isset($argv[0]) && realpath($argv[0]) === __FILE__) {
+    $arg = $argv[1] ?? null;
+    echo 'generated: ' . implode(', ', icons_build($arg)) . "\n";
+}
