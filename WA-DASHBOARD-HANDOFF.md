@@ -1,9 +1,39 @@
-# Gildana WhatsApp Dashboard — Project Handoff
+# REVENECT by Gildana — Project Handoff
 
 > Paste this file into a new Claude chat to continue work with full context.
-> Last updated: 2026-08-18.
+> Last updated: 2026-08-18 (rebrand).
 
-## 🆕 LATEST (2026-08-18) — mobile app (PWA) + push notifications
+## 🆕 LATEST — rebranded to REVENECT
+
+The product is now **REVENECT by Gildana** — "Business Interaction Engine". Revenect is the
+PRODUCT; **Gildana is still the company**, so copy addressing the agency ("Contact Gildana",
+"emailed to Gildana", "ask Gildana to top up") deliberately still says Gildana. Only the
+product's own name changed — a blind find-replace here would be wrong.
+
+- **Palette** (`assets/dashboard.css` `:root`): violet `#7C3AED` / blue `#2563EB` /
+  cyan `#06B6D4` / ink `#0D1321` / cloud `#F3F4F6`, replacing gold+paper. Tokens are now
+  semantic (`--brand`, `--accent`, `--ink`, `--surface`, `--bg`); **the old `--gold`,
+  `--paper`, `--black`… names are kept as aliases** because ~27 rules plus inline styles in
+  PHP/JS still use them and a missing variable fails silently.
+- **Topbar is light now** and carries the logo; sidebar active item is a violet pill. The
+  topbar+sidebar *structure* was kept deliberately — the responsive drawer, bottom tab bar
+  and the whole mobile test suite are built on it.
+- **Logo**: `includes/brand.php` → `brand_logo_svg('mark'|'full'|'stack')`, inline SVG with
+  the brand gradient. It is a hand-built interpretation of the supplied artwork; dropping in
+  the official file is a one-function change.
+- **`brand_name()` treats the old `app_name` values as unset.** `config.php` is never
+  deployed, so every existing install still says "Gildana WhatsApp" and would otherwise keep
+  showing the old name until someone edited PHP on the server. A genuinely custom name still
+  wins (white-labelling).
+- **Icons regenerated** (`assets/icons/generate.php`) — the R filled with the brand gradient
+  on ink. GD has no gradient fill, so it paints a gradient, stamps the R as a mask and
+  composites, at 4× then downsampled.
+- Contrast verified to WCAG AA; `--danger` was darkened to `#B91C1C` because `#DC2626` on
+  the error background came in at 4.41:1, just under the 4.5 threshold.
+- The **Inbox message bubbles stay WhatsApp-green on purpose** — that screen mirrors
+  WhatsApp and the familiarity is the point; only its chrome was retoned.
+
+## Earlier (2026-08-18) — mobile app (PWA) + push notifications
 
 Needs **migrations `009` and `010`**, then one click: **Admin → Settings → Push
 Notifications → Generate keys**.

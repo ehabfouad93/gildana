@@ -362,14 +362,14 @@ function pwa_head(string $base = './'): string
     $v = @filemtime(__DIR__ . '/../manifest.webmanifest') ?: '1';
     return
         '<link rel="manifest" href="' . $b . 'manifest.webmanifest?v=' . $v . '">' . "\n"
-      . '<meta name="theme-color" content="#1a1612">' . "\n"
+      . '<meta name="theme-color" content="#0D1321">' . "\n"
       . '<link rel="icon" type="image/png" href="' . $b . 'assets/icons/favicon.png">' . "\n"
       . '<link rel="apple-touch-icon" href="' . $b . 'assets/icons/apple-touch-icon.png">' . "\n"
       // iOS ignores the manifest: these are what make an added-to-home-screen app run
       // full-screen with the right status bar.
       . '<meta name="apple-mobile-web-app-capable" content="yes">' . "\n"
       . '<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">' . "\n"
-      . '<meta name="apple-mobile-web-app-title" content="Gildana">' . "\n"
+      . '<meta name="apple-mobile-web-app-title" content="Revenect">' . "\n"
       . '<meta name="mobile-web-app-capable" content="yes">';
 }
 

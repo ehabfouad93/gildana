@@ -1,5 +1,5 @@
 /**
- * Gildana dashboard service worker.
+ * Revenect service worker.
  *
  * Caching policy is deliberately conservative:
  *   • Static assets (CSS, icons, manifest) → cache-first, they are versioned by ?v=mtime.
@@ -9,7 +9,7 @@
  * conversations; a cached copy could be shown to the wrong account after a logout/login
  * on a shared phone, or long after the data changed. Only the offline shell is stored.
  */
-const VERSION = 'gildana-v2';
+const VERSION = 'revenect-v3';
 const OFFLINE = './offline.html';
 const PRECACHE = [OFFLINE, './assets/icons/icon-192.png', './manifest.webmanifest'];
 
@@ -61,11 +61,11 @@ self.addEventListener('fetch', (event) => {
    unread count. userVisibleOnly:true means we MUST show a notification either way, so any
    failure falls back to a generic message rather than showing nothing.
 ───────────────────────────────────────────── */
-const NOTIF_TAG = 'gildana-inbox';   // fixed tag → the OS REPLACES rather than stacks
+const NOTIF_TAG = 'revenect-inbox';   // fixed tag → the OS REPLACES rather than stacks
 
 async function showInboxNotification() {
   let title = 'New WhatsApp message';
-  let body  = 'Open Gildana to reply.';
+  let body  = 'Open Revenect to reply.';
   try {
     const sub = await self.registration.pushManager.getSubscription();
     if (sub) {

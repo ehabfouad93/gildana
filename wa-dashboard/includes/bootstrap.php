@@ -7,6 +7,7 @@ declare(strict_types=1);
  */
 require __DIR__ . '/config_loader.php';
 require __DIR__ . '/helpers.php';
+require __DIR__ . '/brand.php';
 require __DIR__ . '/crypto.php';
 require __DIR__ . '/db.php';
 require __DIR__ . '/auth.php';

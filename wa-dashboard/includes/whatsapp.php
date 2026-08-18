@@ -377,7 +377,7 @@ function wa_http_get(string $url): ?string
         CURLOPT_FOLLOWLOCATION => true,
         CURLOPT_TIMEOUT        => 60,
         CURLOPT_CONNECTTIMEOUT => 10,
-        CURLOPT_USERAGENT      => 'GildanaWA/1.0',
+        CURLOPT_USERAGENT      => 'RevenectWA/1.0',
     ]);
     $r    = curl_exec($ch);
     $http = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);

@@ -47,7 +47,7 @@ return [
     'captcha_enabled' => true,
 
     // ── App ──
-    'app_name'      => 'Gildana WhatsApp',
+    'app_name'      => '',   // blank = use the built-in brand name (Revenect)
     'session_name'  => 'wa_dash',
     'admin_email'   => 'info@gildana.net', // where low-credit / completion alerts go
     'base_url'      => '', // e.g. https://app.gildana.net (used in emails). Empty = auto-detect.

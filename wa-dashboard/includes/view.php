@@ -81,7 +81,7 @@ function layout_active(): string { return layout_ctx()['active']; }
 function layout_header(string $title, string $role, string $active, array $opts = []): void
 {
     layout_ctx($role, $active);
-    $appName = (string) config('app_name', 'WhatsApp Dashboard');
+    $appName = brand_name();
     $items   = nav_items($role);
     $badge   = $role === 'admin' ? 'ADMIN' : 'CLIENT';
     ?>
@@ -100,8 +100,8 @@ function layout_header(string $title, string $role, string $active, array $opts 
     <button type="button" class="nav-toggle" id="nav-toggle" aria-label="Menu" aria-expanded="false" aria-controls="sidebar">
       <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 5h14M3 10h14M3 15h14"/></svg>
     </button>
-    <span class="brand-mark">GILDANA</span>
-    <span class="topbar-sub">WhatsApp · <?= e($badge) ?></span>
+    <span class="brand-mark"><?= brand_logo_svg('full', 26) ?></span>
+    <span class="topbar-sub"><?= e($badge) ?></span>
   </div>
   <nav class="topbar-nav">
     <?php if (!empty($opts['credits_html'])): ?><?= $opts['credits_html'] ?><?php endif; ?>
@@ -174,7 +174,7 @@ function layout_footer(): void
   var deferred=null;
   window.addEventListener('beforeinstallprompt', function(e){
     e.preventDefault(); deferred=e;
-    txt.textContent='Install Gildana on your phone for quick access.';
+    txt.textContent='Install Revenect on your phone for quick access.';
     go.hidden=false; bar.classList.add('show');
   });
   go.addEventListener('click', async function(){

@@ -1,47 +1,89 @@
 <?php
 /**
- * Generates the PWA / favicon icon set from the brand palette (gold ring + G on black).
- * One-off build script — run only when the mark changes:
+ * Generates the PWA / favicon icon set: the Revenect "R" filled with the brand gradient
+ * on the ink background. One-off build script — run only when the mark changes:
  *   php assets/icons/generate.php
  * Output PNGs are committed, so production never needs GD.
  *
- * The mark is drawn from primitives at 4x and downsampled, which anti-aliases the curves.
- * (Scaling GD's built-in bitmap font instead produces a visibly pixelated letter.)
+ * GD has no gradient fill, so we paint a gradient layer, stamp the R into a mask, and
+ * composite the two. Everything is drawn at 4x and downsampled, which anti-aliases the
+ * diagonals (drawing at final size leaves them visibly jagged).
  */
 declare(strict_types=1);
 
-const GOLD  = [0xc4, 0x97, 0x3a];
-const BLACK = [0x1a, 0x16, 0x12];
-const SS    = 4;   // supersampling factor
+const SS = 4;
+const INK    = [0x0D, 0x13, 0x21];
+const STOPS  = [                        // violet → blue → cyan
+    [0.00, [0x7C, 0x3A, 0xED]],
+    [0.55, [0x25, 0x63, 0xEB]],
+    [1.00, [0x06, 0xB6, 0xD4]],
+];
 
-/** @param bool $maskable Shrink the mark so Android's adaptive mask can't clip it. */
+/** Colour at position $t (0..1) along the brand gradient. */
+function grad_at(float $t): array
+{
+    $t = max(0.0, min(1.0, $t));
+    for ($i = 0; $i < count(STOPS) - 1; $i++) {
+        [$p0, $c0] = STOPS[$i];
+        [$p1, $c1] = STOPS[$i + 1];
+        if ($t <= $p1) {
+            $f = ($p1 - $p0) > 0 ? ($t - $p0) / ($p1 - $p0) : 0.0;
+            return [
+                (int) round($c0[0] + ($c1[0] - $c0[0]) * $f),
+                (int) round($c0[1] + ($c1[1] - $c0[1]) * $f),
+                (int) round($c0[2] + ($c1[2] - $c0[2]) * $f),
+            ];
+        }
+    }
+    return STOPS[count(STOPS) - 1][1];
+}
+
+/** Draw the R into $im in $colour, scaled to a $W-wide canvas (64-unit design grid). */
+function draw_mark(GdImage $im, int $W, int $colour, bool $maskable): void
+{
+    $scale = $W / 64;
+    $pad   = $maskable ? 0.78 : 1.0;                 // shrink for Android's adaptive crop
+    $off   = (1 - $pad) * 32;
+    $x = fn(float $u): int => (int) round(($u * $pad + $off) * $scale);
+
+    // stem
+    imagefilledrectangle($im, $x(8), $x(6), $x(21), $x(58), $colour);
+    // bowl (outer lobe, then punch the counter back out afterwards by the caller)
+    imagefilledrectangle($im, $x(20), $x(6), $x(34), $x(40), $colour);
+    imagefilledellipse($im, $x(34), $x(23), (int) round(34 * $pad * $scale), (int) round(34 * $pad * $scale), $colour);
+    // leg
+    imagefilledpolygon($im, [$x(29), $x(38), $x(54), $x(58), $x(39), $x(58), $x(21), $x(44)], $colour);
+}
+
 function gildana_icon(int $size, bool $maskable = false): GdImage
 {
     $W = $size * SS;
     $im = imagecreatetruecolor($W, $W);
-    $bg   = imagecolorallocate($im, ...BLACK);
-    $gold = imagecolorallocate($im, ...GOLD);
+    $bg = imagecolorallocate($im, ...INK);
     imagefilledrectangle($im, 0, 0, $W, $W, $bg);
 
-    $c = $W / 2;
-    $R = $W * ($maskable ? 0.30 : 0.40);   // outer radius of the ring
-    $stroke = $W * 0.085;                   // ring thickness
-    $Ri = $R - $stroke;
+    // 1. mask layer: the R in pure white on black
+    $mask = imagecreatetruecolor($W, $W);
+    $mblack = imagecolorallocate($mask, 0, 0, 0);
+    $mwhite = imagecolorallocate($mask, 255, 255, 255);
+    imagefilledrectangle($mask, 0, 0, $W, $W, $mblack);
+    draw_mark($mask, $W, $mwhite, $maskable);
+    // punch the bowl counter back out
+    $scale = $W / 64; $pad = $maskable ? 0.78 : 1.0; $off = (1 - $pad) * 32;
+    $x = fn(float $u): int => (int) round(($u * $pad + $off) * $scale);
+    imagefilledellipse($mask, $x(34), $x(23), (int) round(17 * $pad * $scale), (int) round(17 * $pad * $scale), $mblack);
+    imagefilledrectangle($mask, $x(8), $x(15), $x(21), $x(31), $mwhite);   // keep the stem solid
 
-    // Ring = filled gold disc with a black disc punched out.
-    imagefilledellipse($im, (int) $c, (int) $c, (int) ($R * 2), (int) ($R * 2), $gold);
-    imagefilledellipse($im, (int) $c, (int) $c, (int) ($Ri * 2), (int) ($Ri * 2), $bg);
+    // 2. composite gradient through the mask (diagonal sweep)
+    for ($py = 0; $py < $W; $py++) {
+        for ($px = 0; $px < $W; $px++) {
+            if ((imagecolorat($mask, $px, $py) & 0xFF) < 128) continue;   // outside the R
+            [$r, $g, $b] = grad_at(($px + $py) / (2 * $W));
+            imagesetpixel($im, $px, $py, imagecolorallocate($im, $r, $g, $b));
+        }
+    }
+    imagedestroy($mask);
 
-    // Open the ring at 3 o'clock so it reads as a G rather than an O.
-    $gap = $stroke * 1.5;
-    imagefilledrectangle($im, (int) $c, (int) ($c - $gap / 2), $W, (int) ($c + $gap / 2), $bg);
-
-    // Crossbar along the bottom edge of that gap, reconnecting to the lower arc.
-    $barT = $stroke * 0.92;
-    $barY = $c + $gap / 2;
-    imagefilledrectangle($im, (int) ($c - $R * 0.10), (int) ($barY - $barT), (int) ($c + $R + 1), (int) $barY, $gold);
-
-    // Downsample → smooth edges.
     $out = imagecreatetruecolor($size, $size);
     imagecopyresampled($out, $im, 0, 0, 0, 0, $size, $size, $W, $W);
     imagedestroy($im);

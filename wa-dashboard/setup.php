@@ -41,7 +41,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-$appName = (string) config('app_name', 'WhatsApp Dashboard');
+$appName = brand_name();
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -55,7 +55,7 @@ $appName = (string) config('app_name', 'WhatsApp Dashboard');
 <body class="login-screen">
   <form class="login-card" method="post">
     <?= csrf_field() ?>
-    <div class="login-brand">GILDANA</div>
+    <div class="login-brand"><?= brand_logo_svg('stack', 62) ?></div>
     <h1>First-run Setup — Create Admin</h1>
     <?php if ($ran): ?>
       <div class="alert success">Database ready (<?= count($ran) ?> migration<?= count($ran) === 1 ? '' : 's' ?> applied).</div>
