@@ -115,6 +115,9 @@ small { font-size: 12px; }
   background: var(--white); border: 1px solid var(--line); border-radius: var(--radius);
   padding: 16px 18px; position: relative;
 }
+/* These are <span>s in the markup, so without display:block the label, value and sub-text
+   run together on one line ("CREDITS4,9871 credit / message"). */
+.stat-tile .lbl, .stat-tile .val, .stat-tile .sub { display: block; }
 .stat-tile .lbl { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .09em; }
 .stat-tile .val { font-size: 27px; font-weight: 800; color: var(--ink); margin-top: 6px; line-height: 1; }
 .stat-tile .val.accent { color: var(--gold); }
@@ -250,8 +253,9 @@ textarea { resize: vertical; min-height: 84px; }
 .canvas-wrap { position: relative; width: 100%; height: 70vh; min-height: 480px; overflow: auto; background: #efe8d7; border: 1px solid var(--line-strong); border-radius: 10px; background-image: radial-gradient(rgba(75,54,33,.12) 1px, transparent 1px); background-size: 22px 22px; overscroll-behavior: contain; }
 .canvas-wrap.panning { cursor: grabbing; }
 /* The board keeps its own (large) coordinate space; --z scales it so a whole flow fits
-   the page width. All screen→canvas math must divide by --z (see toCanvas() in the builder). */
-.canvas { position: relative; width: 2800px; height: 2000px; transform: scale(var(--z, 1)); transform-origin: 0 0; }
+   the page width. All screen→canvas math must divide by --z (see toCanvas() in the builder).
+   touch-action:none stops the browser panning/zooming the page while dragging a node. */
+.canvas { position: relative; width: 2800px; height: 2000px; transform: scale(var(--z, 1)); transform-origin: 0 0; touch-action: none; }
 .canvas svg.edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
 .canvas svg.edges path { stroke: var(--brown); stroke-width: 2; fill: none; opacity: .55; }
 .canvas svg.edges path.temp { stroke: var(--gold); stroke-dasharray: 5 4; }
@@ -300,3 +304,106 @@ textarea { resize: vertical; min-height: 84px; }
 .text-muted { color: var(--muted); }
 .mt10 { margin-top: 10px; } .mt16 { margin-top: 16px; } .mt24 { margin-top: 24px; }
 .row-between { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+/* ─────────────────────────────────────────────
+   MOBILE / PWA
+   The layout above is desktop-first (fixed 232px sidebar in a flex shell). Everything
+   below adapts it for phones and tablets: the sidebar becomes an off-canvas drawer and
+   phones get a bottom tab bar, so the app is usable installed to a home screen.
+───────────────────────────────────────────── */
+
+/* Hamburger: hidden on desktop, shown once the sidebar becomes a drawer. */
+.nav-toggle {
+  display: none; align-items: center; justify-content: center;
+  width: 34px; height: 34px; margin-right: 2px;
+  background: transparent; border: 0; border-radius: 8px;
+  color: var(--gold); cursor: pointer;
+}
+.nav-toggle:hover { background: rgba(255,255,255,.08); }
+.nav-backdrop { position: fixed; inset: 0; background: rgba(26,22,18,.5); z-index: 250; }
+.sb-sep { display: none; height: 1px; background: var(--line); margin: 10px 4px; }
+.sb-who { display: none; padding: 0 10px 4px; font-size: 11.5px; color: var(--muted); word-break: break-all; }
+
+/* Bottom tab bar — phones only. */
+.tabbar { display: none; }
+
+@media (max-width: 900px) {
+  .nav-toggle { display: inline-flex; }
+  .topbar { padding: 0 12px; gap: 10px; }
+  .topbar-sub { display: none; }
+  .brand-mark { font-size: 16px; letter-spacing: .16em; }
+  .topbar-email { display: none; }
+  .topbar-nav { gap: 8px; }
+
+  /* Sidebar → off-canvas drawer. */
+  .shell { display: block; }
+  .sidebar {
+    position: fixed; top: 0; left: 0; z-index: 300;
+    width: 264px; max-width: 84vw; height: 100vh;
+    padding-top: 14px; overflow-y: auto;
+    border-right: 1px solid var(--line-strong);
+    box-shadow: 6px 0 24px rgba(26,22,18,.18);
+    transform: translateX(-100%); transition: transform .22s ease;
+  }
+  .sidebar.open { transform: translateX(0); }
+  .sb-sep, .sb-who { display: block; }
+  body.nav-open { overflow: hidden; }          /* don't scroll the page behind the drawer */
+  .sb-link { padding: 11px 10px; }              /* taller tap targets */
+
+  .content { padding: 16px 14px 30px; max-width: none; }
+  h1 { font-size: 19px; }
+  h2 { font-size: 16px; }
+  .page-head { align-items: flex-start; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+  .page-actions { width: 100%; flex-wrap: wrap; }
+}
+
+@media (max-width: 720px) {
+  /* Bottom tab bar; safe-area padding keeps it clear of the iPhone home indicator. */
+  .tabbar {
+    display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 260;
+    background: var(--panel); border-top: 1px solid var(--line-strong);
+    padding-bottom: env(safe-area-inset-bottom, 0);
+  }
+  .tab {
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 3px; padding: 8px 2px 7px; font-size: 10.5px; color: var(--muted);
+    letter-spacing: .01em; min-height: 52px;
+  }
+  .tab svg { width: 19px; height: 19px; }
+  .tab.active { color: var(--gold); font-weight: 700; }
+  /* Reserve room so the tab bar never covers the last row / submit button. */
+  .content { padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px)); }
+
+  .card { padding: 14px; border-radius: 10px; }
+  .stats-row { grid-template-columns: 1fr 1fr; }
+  .page-actions .btn { flex: 1; justify-content: center; }
+  table.data th, table.data td { padding: 9px 10px; }
+  .table-wrap { -webkit-overflow-scrolling: touch; }
+
+  /* iOS Safari zooms the page when a focused input is under 16px. */
+  input, select, textarea { font-size: 16px; }
+}
+
+/* Installed (standalone) — no browser chrome, so the topbar clears the status bar itself. */
+@media (display-mode: standalone) {
+  .topbar { padding-top: env(safe-area-inset-top, 0); height: calc(var(--topbar-h) + env(safe-area-inset-top, 0px)); }
+}
+
+/* iOS "Add to Home Screen" hint + Android install button. */
+.install-bar {
+  display: none; align-items: center; gap: 10px;
+  margin: 0 0 14px; padding: 11px 13px;
+  background: var(--info-bg); border: 1px solid var(--gold); border-radius: 10px;
+  font-size: 13px; color: var(--ink);
+}
+.install-bar.show { display: flex; }
+.install-bar .grow { flex: 1; }
+.install-bar .x { cursor: pointer; color: var(--muted); font-size: 17px; background: 0; border: 0; }
+
+/* Editing a flow on a phone is cramped even with touch support — say so rather than
+   letting the user fight it. */
+.canvas-smallnote { display: none; }
+@media (max-width: 700px) {
+  .canvas-smallnote { display: block; margin-bottom: 10px; font-size: 12.5px; }
+  .canvas-wrap { height: 60vh; min-height: 340px; }
+}

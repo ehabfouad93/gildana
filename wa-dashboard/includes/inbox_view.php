@@ -36,7 +36,22 @@ $IB_SEP = strpos($IB_ENDPOINT, '?') === false ? '?' : '&';
   .ib-bot{font-size:11.5px;padding:3px 9px;border-radius:11px;white-space:nowrap;font-weight:600}
   .ib-bot.on{background:#e8f5ea;color:#1e7a3c}
   .ib-bot.off{background:#fdf0e3;color:#a9631a}
-  @media(max-width:720px){.ib-list{width:44%;min-width:0}.ib-th .pv{max-width:110px}}
+  .ib-back{display:none;background:0;border:0;cursor:pointer;color:var(--ink,#2a221a);padding:2px 6px 2px 0;font-size:19px;line-height:1}
+  /* Phones: one pane at a time — the thread list fills the screen, and opening a chat
+     swaps to the conversation with a back arrow (the two-pane desktop view is unusable
+     at this width). */
+  @media(max-width:720px){
+    .ib-wrap{height:calc(100vh - 190px);min-height:0;border-radius:10px}
+    .ib-list{width:100%;min-width:0;border-right:0}
+    .ib-chat{display:none}
+    .ib-th .pv{max-width:60vw}
+    .ib-wrap.chatting .ib-list{display:none}
+    .ib-wrap.chatting .ib-chat{display:flex}
+    .ib-back{display:inline-block}
+    /* Both of these are scoped rules that would otherwise beat the global 16px rule,
+       and anything under 16px makes iOS Safari zoom the page on focus. */
+    .ib-foot textarea, .ib-search input{font-size:16px}
+  }
 </style>
 
 <div class="ib-wrap">
@@ -46,6 +61,7 @@ $IB_SEP = strpos($IB_ENDPOINT, '?') === false ? '?' : '&';
   </div>
   <div class="ib-chat">
     <div class="ib-chat-h" id="ib-head" style="display:none">
+      <button type="button" class="ib-back" id="ib-back" aria-label="Back to conversations">&#8592;</button>
       <div class="ib-av" id="ib-hav"></div>
       <div><div class="nm" id="ib-hname"></div><div class="pv" id="ib-hphone"></div></div>
       <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
@@ -89,6 +105,7 @@ async function loadThreads(){
 }
 function openThread(id,name,phone){
   ibCur=id; ibLast=0; el('ib-body').innerHTML='';
+  document.querySelector('.ib-wrap').classList.add('chatting');   // phones: show the chat pane
   el('ib-head').style.display='flex'; el('ib-foot').style.display='block';
   el('ib-hav').textContent=initials(name||phone); el('ib-hname').textContent=name||('+'+phone); el('ib-hphone').textContent='+'+phone;
   document.querySelectorAll('.ib-th').forEach(e=>e.classList.remove('active'));
@@ -148,6 +165,10 @@ el('ib-form').addEventListener('submit', async e=>{
   else { alert(d.error||'Could not send.'); }
 });
 el('ib-text').addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); el('ib-form').requestSubmit(); }});
+el('ib-back').addEventListener('click',()=>{
+  document.querySelector('.ib-wrap').classList.remove('chatting');
+  ibCur=0; loadThreads();
+});
 el('ib-q').addEventListener('input',()=>{ clearTimeout(window._ibq); window._ibq=setTimeout(loadThreads,300); });
 loadThreads(); setInterval(loadThreads,5000); setInterval(pollThread,3500);
 </script>

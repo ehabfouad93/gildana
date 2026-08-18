@@ -270,6 +270,7 @@ client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
       <button type="button" class="btn btn-ghost btn-sm" onclick="addNode(document.getElementById('add-type').value)">+ Add node</button>
       <span class="canvas-hint">Drag node headers to move · drag a right-side port onto another node to connect · click a node to edit · <strong>right-click a connection to delete it</strong> · Ctrl/⌘+scroll or the +/− buttons to zoom · middle-drag or space-drag to pan.</span>
     </div>
+    <div class="alert info canvas-smallnote">Flows are easier to build on a computer — you can view and adjust here, but a bigger screen helps.</div>
     <div class="canvas-stage">
       <!-- Zoom control lives outside the scroller so it stays pinned while the board scrolls. -->
       <div class="canvas-zoom">
@@ -474,7 +475,20 @@ edges.addEventListener('mouseout', e=>{
   const p=e.target.closest('path.hit'); if(!p) return;
   edges.querySelectorAll('path.edge.hot').forEach(x=>x.classList.remove('hot'));
 });
-document.addEventListener('mousedown', e=>{ if(!e.target.closest('.edge-menu')) closeEdgeMenu(); });
+document.addEventListener('pointerdown', e=>{ if(!e.target.closest('.edge-menu')) closeEdgeMenu(); });
+/* Touch has no right-click: long-press an edge opens the same menu. */
+(function(){
+  var lp=null;
+  edges.addEventListener('pointerdown', e=>{
+    if(e.pointerType==='mouse') return;
+    const p=e.target.closest('path.hit'); if(!p) return;
+    lp=setTimeout(()=>{ openEdgeMenu(e.clientX,e.clientY,p.dataset.node,p.dataset.port); lp=null; }, 500);
+  });
+  const cancel=()=>{ if(lp){ clearTimeout(lp); lp=null; } };
+  edges.addEventListener('pointerup',cancel);
+  edges.addEventListener('pointermove',cancel);
+  edges.addEventListener('pointercancel',cancel);
+})();
 document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeEdgeMenu(); });
 
 /* ── add / delete ── */
@@ -661,7 +675,7 @@ function renderKeepPanel(rebind=true){ const id=current?current.id:null; render(
 
 /* ── interactions: drag + connect + pan ── */
 let drag=null, conn=null, pan=null, spaceDown=false;
-canvas.addEventListener('mousedown',e=>{
+canvas.addEventListener('pointerdown',e=>{
   const port=e.target.closest('.port-out');
   if(port){ e.preventDefault(); const nidv=port.dataset.node, pv=port.dataset.port; conn={node:nidv,port:pv}; return; }
   const head=e.target.closest('.node-head');
@@ -670,7 +684,7 @@ canvas.addEventListener('mousedown',e=>{
     const p=toCanvas(e.clientX,e.clientY); drag={n,dx:p.x-n.x,dy:p.y-n.y}; }
 });
 // Middle-drag, or space+drag, pans the board.
-wrap.addEventListener('mousedown',e=>{
+wrap.addEventListener('pointerdown',e=>{
   if(e.button===1 || (spaceDown && !e.target.closest('.node'))){
     e.preventDefault();
     pan={x:e.clientX,y:e.clientY,sl:wrap.scrollLeft,st:wrap.scrollTop};
@@ -679,7 +693,7 @@ wrap.addEventListener('mousedown',e=>{
 });
 document.addEventListener('keydown',e=>{ if(e.code==='Space' && !/INPUT|TEXTAREA|SELECT/.test((e.target.tagName||''))) spaceDown=true; });
 document.addEventListener('keyup',  e=>{ if(e.code==='Space') spaceDown=false; });
-document.addEventListener('mousemove',e=>{
+document.addEventListener('pointermove',e=>{
   if(pan){ wrap.scrollLeft=pan.sl-(e.clientX-pan.x); wrap.scrollTop=pan.st-(e.clientY-pan.y); return; }
   if(drag){
     const p=toCanvas(e.clientX,e.clientY);
@@ -690,7 +704,7 @@ document.addEventListener('mousemove',e=>{
   }
   else if(conn){ const a=portCenter(conn.node,conn.port,'out'); redraw({a:a||{x:0,y:0},b:toCanvas(e.clientX,e.clientY)}); }
 });
-document.addEventListener('mouseup',e=>{
+document.addEventListener('pointerup',e=>{
   if(pan){ pan=null; wrap.classList.remove('panning'); }
   if(conn){ const tnode=e.target.closest('.node'); const src=conn.node==='start'?start:nodes[conn.node];
     if(tnode && tnode.dataset.id!==conn.node && tnode.dataset.id!=='start'){ src.outputs[conn.port]=tnode.dataset.id; }

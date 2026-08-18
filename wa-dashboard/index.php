@@ -43,6 +43,7 @@ $appName = (string) config('app_name', 'WhatsApp Dashboard');
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<?= pwa_head('./') ?>
 <title>Sign in — <?= e($appName) ?></title>
 <link rel="stylesheet" href="assets/dashboard.css?v=<?= @filemtime(__DIR__ . '/assets/dashboard.css') ?: '7' ?>">
 </head>
@@ -77,5 +78,6 @@ $appName = (string) config('app_name', 'WhatsApp Dashboard');
     <?php endif; ?>
     <button type="submit" class="btn btn-primary">Sign In</button>
   </form>
+<?= pwa_script('./') ?>
 </body>
 </html>

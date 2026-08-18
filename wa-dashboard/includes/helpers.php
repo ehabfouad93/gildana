@@ -340,3 +340,34 @@ function extract_text_from_upload(string $tmpPath, string $name): string
 
     return '';
 }
+
+/**
+ * PWA <head> tags: manifest, theme colour, icons and iOS standalone hints.
+ * $base is the path prefix back to the app root ('./' from the root, '../' from client/
+ * and admin/). Emitted by every page so the app is installable from wherever the user
+ * happens to land.
+ */
+function pwa_head(string $base = './'): string
+{
+    $b = rtrim($base, '/') . '/';
+    $v = @filemtime(__DIR__ . '/../manifest.webmanifest') ?: '1';
+    return
+        '<link rel="manifest" href="' . $b . 'manifest.webmanifest?v=' . $v . '">' . "\n"
+      . '<meta name="theme-color" content="#1a1612">' . "\n"
+      . '<link rel="icon" type="image/png" href="' . $b . 'assets/icons/favicon.png">' . "\n"
+      . '<link rel="apple-touch-icon" href="' . $b . 'assets/icons/apple-touch-icon.png">' . "\n"
+      // iOS ignores the manifest: these are what make an added-to-home-screen app run
+      // full-screen with the right status bar.
+      . '<meta name="apple-mobile-web-app-capable" content="yes">' . "\n"
+      . '<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">' . "\n"
+      . '<meta name="apple-mobile-web-app-title" content="Gildana">' . "\n"
+      . '<meta name="mobile-web-app-capable" content="yes">';
+}
+
+/** Registers the service worker. $base as per pwa_head(). */
+function pwa_script(string $base = './'): string
+{
+    $b = rtrim($base, '/') . '/';
+    return '<script>if("serviceWorker" in navigator){window.addEventListener("load",function(){'
+         . 'navigator.serviceWorker.register("' . $b . 'sw.js").catch(function(e){console.warn("SW failed",e);});});}</script>';
+}

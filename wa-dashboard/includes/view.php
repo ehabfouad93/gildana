@@ -36,6 +36,17 @@ function nav_items(string $role): array
     ];
 }
 
+/**
+ * The handful of destinations that get a bottom tab bar on phones. Everything else stays
+ * in the drawer. Keys must exist in nav_items() for the same role.
+ */
+function nav_primary(string $role): array
+{
+    return $role === 'admin'
+        ? ['overview', 'clients', 'inbox', 'campaigns']
+        : ['dashboard', 'inbox', 'campaigns', 'contacts'];
+}
+
 function nav_icon(string $key): string
 {
     $s = 'width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"';
@@ -56,8 +67,20 @@ function nav_icon(string $key): string
     return "<svg $s>" . ($icons[$key] ?? $icons['grid']) . "</svg>";
 }
 
+/** Remembers the current role/active nav key so layout_footer() can render the tab bar. */
+function layout_ctx(?string $role = null, ?string $active = null): array
+{
+    static $ctx = ['role' => 'client', 'active' => ''];
+    if ($role !== null)   $ctx['role'] = $role;
+    if ($active !== null) $ctx['active'] = $active;
+    return $ctx;
+}
+function layout_role(): string   { return layout_ctx()['role']; }
+function layout_active(): string { return layout_ctx()['active']; }
+
 function layout_header(string $title, string $role, string $active, array $opts = []): void
 {
+    layout_ctx($role, $active);
     $appName = (string) config('app_name', 'WhatsApp Dashboard');
     $items   = nav_items($role);
     $badge   = $role === 'admin' ? 'ADMIN' : 'CLIENT';
@@ -69,10 +92,14 @@ function layout_header(string $title, string $role, string $active, array $opts 
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title><?= e($title) ?> — <?= e($appName) ?></title>
 <link rel="stylesheet" href="../assets/dashboard.css?v=<?= @filemtime(__DIR__ . '/../assets/dashboard.css') ?: '7' ?>">
+<?= pwa_head('../') ?>
 </head>
 <body>
 <header class="topbar">
   <div class="topbar-brand">
+    <button type="button" class="nav-toggle" id="nav-toggle" aria-label="Menu" aria-expanded="false" aria-controls="sidebar">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 5h14M3 10h14M3 15h14"/></svg>
+    </button>
     <span class="brand-mark">GILDANA</span>
     <span class="topbar-sub">WhatsApp · <?= e($badge) ?></span>
   </div>
@@ -83,18 +110,27 @@ function layout_header(string $title, string $role, string $active, array $opts 
   </nav>
 </header>
 
+<div class="nav-backdrop" id="nav-backdrop" hidden></div>
 <div class="shell">
-  <aside class="sidebar">
+  <aside class="sidebar" id="sidebar">
     <nav class="sb-nav">
       <?php foreach ($items as $key => $item): ?>
         <a class="sb-link <?= $key === $active ? 'active' : '' ?>" href="<?= e($item['url']) ?>">
           <?= nav_icon($item['icon']) ?> <span><?= e($item['label']) ?></span>
         </a>
       <?php endforeach; ?>
+      <span class="sb-sep"></span>
+      <span class="sb-who"><?= e(current_user()['email'] ?? '') ?></span>
+      <a class="sb-link" href="../logout.php"><span>Log out</span></a>
     </nav>
   </aside>
 
   <main class="content">
+    <div class="install-bar" id="install-bar">
+      <span class="grow" id="install-text"></span>
+      <button type="button" class="btn btn-primary btn-sm" id="install-go" hidden>Install</button>
+      <button type="button" class="x" id="install-x" aria-label="Dismiss">&times;</button>
+    </div>
     <?php foreach (take_flashes() as $f): ?>
       <div class="alert <?= e($f['type']) ?>"><?= e($f['msg']) ?></div>
     <?php endforeach; ?>
@@ -106,8 +142,75 @@ function layout_footer(): void
     ?>
   </main>
 </div>
+<?php
+    // Bottom tab bar — phones only (hidden by CSS above 720px).
+    $tabRole  = layout_role();
+    $tabItems = nav_items($tabRole);
+    $tabActive = layout_active();
+?>
+<nav class="tabbar" aria-label="Primary">
+  <?php foreach (nav_primary($tabRole) as $key): if (empty($tabItems[$key])) continue; $it = $tabItems[$key]; ?>
+    <a class="tab <?= $key === $tabActive ? 'active' : '' ?>" href="<?= e($it['url']) ?>">
+      <?= nav_icon($it['icon']) ?><span><?= e($it['label']) ?></span>
+    </a>
+  <?php endforeach; ?>
+</nav>
 <div class="toast" id="toast"></div>
+<?= pwa_script('../') ?>
 <script>
+/* ── install prompt ──
+   Android/Chrome fires beforeinstallprompt, so we can offer a real Install button.
+   iOS never fires it and has no programmatic install, so Safari users get the manual
+   Share → Add to Home Screen steps instead — without this, almost nobody finds it. */
+(function(){
+  var bar=document.getElementById('install-bar'), txt=document.getElementById('install-text'),
+      go=document.getElementById('install-go'), x=document.getElementById('install-x');
+  if(!bar) return;
+  var KEY='gildana_install_dismissed';
+  var standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  if(standalone || localStorage.getItem(KEY)) return;     // already installed, or dismissed
+  x.addEventListener('click', function(){ localStorage.setItem(KEY,'1'); bar.classList.remove('show'); });
+
+  var deferred=null;
+  window.addEventListener('beforeinstallprompt', function(e){
+    e.preventDefault(); deferred=e;
+    txt.textContent='Install Gildana on your phone for quick access.';
+    go.hidden=false; bar.classList.add('show');
+  });
+  go.addEventListener('click', async function(){
+    if(!deferred) return;
+    deferred.prompt();
+    try { await deferred.userChoice; } catch(_){}
+    deferred=null; bar.classList.remove('show');
+  });
+  window.addEventListener('appinstalled', function(){ localStorage.setItem(KEY,'1'); bar.classList.remove('show'); });
+
+  var ua=navigator.userAgent;
+  var iOS=/iPad|iPhone|iPod/.test(ua) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
+  var safari=/Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS|OPiOS/.test(ua);
+  if(iOS && safari){
+    txt.innerHTML='Install this app: tap <strong>Share</strong> \u2191 then <strong>Add to Home Screen</strong>.';
+    bar.classList.add('show');
+  }
+})();
+
+/* ── mobile drawer ── */
+(function(){
+  var t=document.getElementById('nav-toggle'), sb=document.getElementById('sidebar'), bd=document.getElementById('nav-backdrop');
+  if(!t||!sb||!bd) return;
+  function set(open){
+    sb.classList.toggle('open', open);
+    bd.hidden = !open;
+    t.setAttribute('aria-expanded', open ? 'true' : 'false');
+    document.body.classList.toggle('nav-open', open);
+  }
+  t.addEventListener('click', function(){ set(!sb.classList.contains('open')); });
+  bd.addEventListener('click', function(){ set(false); });
+  document.addEventListener('keydown', function(e){ if(e.key==='Escape') set(false); });
+  // Closing on resize avoids a drawer stuck open when rotating to landscape/desktop.
+  window.addEventListener('resize', function(){ if(window.innerWidth>900) set(false); });
+})();
+
 function showToast(msg, err){
   const t=document.getElementById('toast');
   if(!t) return;

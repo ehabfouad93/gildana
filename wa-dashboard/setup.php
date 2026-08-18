@@ -48,6 +48,7 @@ $appName = (string) config('app_name', 'WhatsApp Dashboard');
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<?= pwa_head('./') ?>
 <title>Setup — <?= e($appName) ?></title>
 <link rel="stylesheet" href="assets/dashboard.css?v=<?= @filemtime(__DIR__ . '/assets/dashboard.css') ?: '7' ?>">
 </head>
@@ -76,5 +77,6 @@ $appName = (string) config('app_name', 'WhatsApp Dashboard');
     </div>
     <button type="submit" class="btn btn-primary">Create Admin &amp; Continue</button>
   </form>
+<?= pwa_script('./') ?>
 </body>
 </html>
