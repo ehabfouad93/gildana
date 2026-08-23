@@ -20,7 +20,7 @@ require __DIR__ . '/includes/whatsapp.php';
 require __DIR__ . '/includes/ai.php';
 require __DIR__ . '/includes/notify.php';
 require __DIR__ . '/includes/automation.php';
-require __DIR__ . '/includes/push.php';
+require_once __DIR__ . '/includes/push.php';
 
 /* ── GET verification ── */
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {

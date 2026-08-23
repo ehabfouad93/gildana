@@ -8,6 +8,7 @@ declare(strict_types=1);
  */
 require_once __DIR__ . '/crypto.php';
 require_once __DIR__ . '/whatsapp.php';
+require_once __DIR__ . '/channel.php';
 require_once __DIR__ . '/credits.php';
 
 /** Record one message. Returns the row id. $opts: type, wamid, status, error, source.
@@ -31,8 +32,11 @@ function msg_log(int $clientId, int $contactId, string $direction, string $body,
 }
 
 /** Within the 24h window (free-form text allowed) of the contact's last inbound? */
-function inbox_window_open(array $contact): bool
+function inbox_window_open(array $contact, array $client = []): bool
 {
+    // The 24-hour rule belongs to Meta's Cloud API. A personal number sends ordinary
+    // messages, so an agent can always reply from the Inbox on that channel.
+    if ($client && function_exists('channel_is_personal') && channel_is_personal($client)) return true;
     $last = $contact['last_inbound_at'] ?? null;
     return $last && strtotime((string) $last) > time() - 86400;
 }
@@ -105,7 +109,7 @@ function inbox_handle_ajax(array $client): void
         $msgs = inbox_thread($cid, $contactId, $after);
         inbox_mark_read($cid, $contactId);
         json_out([
-            'ok' => true, 'messages' => $msgs, 'window_open' => inbox_window_open($contact),
+            'ok' => true, 'messages' => $msgs, 'window_open' => inbox_window_open($contact, $client),
             'name' => (string) $contact['name'], 'phone' => (string) $contact['phone_e164'],
             'bot_paused' => inbox_bot_paused($contact),
         ]);
@@ -132,12 +136,12 @@ function inbox_send(array $client, int $contactId, string $body): array
     if ($body === '') return ['ok' => false, 'error' => 'Type a message first.'];
     $contact = db_row("SELECT * FROM contacts WHERE id=? AND client_id=?", [$contactId, (int) $client['id']]);
     if (!$contact) return ['ok' => false, 'error' => 'Contact not found.'];
-    if (!inbox_window_open($contact)) {
+    if (!inbox_window_open($contact, $client)) {
         return ['ok' => false, 'error' => 'Outside the 24-hour window — you can only reach this contact with an approved template (use Campaigns).'];
     }
     $bal = credits_adjust((int) $client['id'], -1, 'inbox', null);
     if ($bal === null) return ['ok' => false, 'error' => 'No credits left.'];
-    $res = wa_send_text($client, (string) $contact['phone_e164'], $body);
+    $res = channel_send_text($client, (string) $contact['phone_e164'], $body);
     if (empty($res['ok'])) credits_adjust((int) $client['id'], 1, 'inbox_refund', null);
     $id = msg_log((int) $client['id'], $contactId, 'out', $body, [
         'source' => 'manual', 'status' => !empty($res['ok']) ? 'sent' : 'failed',

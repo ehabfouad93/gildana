@@ -41,6 +41,13 @@ return [
     'send_batch_global'     => 1000, // hard cap across all clients per run
     'send_parallel'         => 30,   // messages sent concurrently per HTTP burst
     'send_parallel_media'   => 10,   // lower concurrency for templates with an image/video/document header
+
+    // ── Personal-number channel pacing ──
+    // A personal WhatsApp number is banned for sending fast and uniformly, so sends on that
+    // channel go one at a time with a random gap. Per-client slot size / pause live on the
+    // client record; these are the platform-wide gap bounds, in milliseconds.
+    'slot_gap_min_ms'       => 2000,
+    'slot_gap_max_ms'       => 6000,
     'no_answer_hours'       => 24,   // qualifier leads with no reply after N hours → "No answer"
 
     // ── Login CAPTCHA (needs the GD extension; auto-disables if GD is absent) ──

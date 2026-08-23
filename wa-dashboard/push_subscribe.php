@@ -9,7 +9,7 @@ declare(strict_types=1);
  *   POST action=unsubscribe→ {ok}
  */
 require __DIR__ . '/includes/bootstrap.php';
-require __DIR__ . '/includes/push.php';
+require_once __DIR__ . '/includes/push.php';
 
 header('Content-Type: application/json; charset=UTF-8');
 

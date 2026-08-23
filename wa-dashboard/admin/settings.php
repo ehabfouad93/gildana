@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/_init.php';
-require __DIR__ . '/../includes/push.php';
+require_once __DIR__ . '/../includes/push.php';
 require_once __DIR__ . '/../assets/icons/generate.php';   // icons_build()
 
 $me  = current_user();

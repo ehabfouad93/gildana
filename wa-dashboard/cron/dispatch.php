@@ -26,7 +26,7 @@ require __DIR__ . '/../includes/campaign.php';
 require __DIR__ . '/../includes/notify.php';
 require __DIR__ . '/../includes/ai.php';
 require __DIR__ . '/../includes/automation.php';
-require __DIR__ . '/../includes/push.php';
+require_once __DIR__ . '/../includes/push.php';
 
 if (PHP_SAPI !== 'cli') {
     if (!hash_equals((string) config('webhook_verify_token'), (string) ($_GET['token'] ?? ''))) {
@@ -81,6 +81,13 @@ try {
         $limit = max(0, min($perClientCap, $globalCap - ($sentTotal + $failedTotal)));
         if ($limit === 0) break;
 
+        // Personal numbers send in paced slots. slot_budget() is 0 while the client is in
+        // its cooldown, and the same budget is shared with qualifier/automation sends below
+        // so the three modules can't each burn a full slot.
+        $budget = slot_budget($client);
+        if ($budget <= 0) { out("Client {$cid}: personal slot cooling down — skipped."); continue; }
+        $limit = min($limit, $budget);
+
         $ids = array_column(db_all(
             "SELECT m.id FROM campaign_messages m JOIN campaigns c ON c.id = m.campaign_id
               WHERE m.client_id = ? AND m.status = 'queued' AND c.status = 'sending'
@@ -100,7 +107,7 @@ try {
             $campId = (int) $m['campaign_id'];
             $touchedCampaigns[$campId] = true;
             if (!isset($tplCache[$campId])) {
-                $row = db_row("SELECT t.wa_name, t.language, t.components, c.variable_map
+                $row = db_row("SELECT t.wa_name, t.language, t.components, t.body_text, c.variable_map
                                  FROM campaigns c JOIN templates t ON t.id=c.template_id WHERE c.id=?", [$campId]);
                 if ($row) {
                     $comps = json_decode((string) $row['components'], true) ?: [];
@@ -131,20 +138,39 @@ try {
                 'to' => (string) $m['phone_e164'], 'name' => (string) $tpl['wa_name'], 'lang' => (string) $tpl['language'],
                 'components' => $comps,
                 'campId' => $campId, 'contact' => (int) $m['contact_id'],
+                // Used only by the personal channel, which renders the template to text.
+                'tpl' => $tpl,
+                'cfg' => campaign_config(json_decode((string) $tpl['variable_map'], true) ?: []),
+                'contact_row' => db_row("SELECT * FROM contacts WHERE id=?", [(int) $m['contact_id']]) ?: ['name' => ''],
             ];
         }
 
         // Media templates get gentler concurrency — even by id, Meta is stricter about them.
-        $chunkSize = $anyMedia ? max(1, (int) config('send_parallel_media', 10)) : $parallel;
+        // A personal number goes strictly one at a time (see the sequential sender below).
+        $isPersonal = channel_is_personal($client);
+        $chunkSize  = $isPersonal ? 1 : ($anyMedia ? max(1, (int) config('send_parallel_media', 10)) : $parallel);
 
         // Send in parallel chunks.
+        $firstChunk = true;
         foreach (array_chunk($items, $chunkSize, true) as $chunk) {
-            $res = wa_send_template_batch($client, $chunk);
+            if ($isPersonal) {
+                // Pace between messages, but don't pay the delay before the very first one.
+                if (!$firstChunk) slot_pace_sleep();
+                $firstChunk = false;
+                $res = [];
+                foreach ($chunk as $mid => $it) {
+                    $res[$mid] = channel_send_template(
+                        $client, (string) $it['to'], $it['tpl'], $it['cfg'], $it['contact_row'], 'campaign_resolve_value'
+                    );
+                }
+            } else {
+                $res = wa_send_template_batch($client, $chunk);
+            }
 
             // Retry transient failures once before giving up — a single blip used to fail the
             // message permanently, which looked like random losses on large sends.
             $retry = [];
-            foreach ($res as $mid => $r) {
+            foreach ($isPersonal ? [] : $res as $mid => $r) {
                 if (empty($r['ok']) && wa_error_is_transient((string) ($r['error_code'] ?? ''), (string) ($r['error_title'] ?? ''))) {
                     $retry[$mid] = $chunk[$mid];
                 }
@@ -172,8 +198,12 @@ try {
                         'error' => $r['ok'] ? null : (string) $r['error_title'],
                     ]);
                 }
+                // A send attempt spends slot budget even when it fails: the number still
+                // reached out to WhatsApp, which is exactly what the pacing protects.
+                slot_consume($client, 1);
             }
         }
+        if ($isPersonal) out("Client {$cid}: personal slot used " . count($items) . " message(s).");
     }
 
     foreach (array_keys($touchedCampaigns) as $campId) {
@@ -204,6 +234,10 @@ try {
             $pdo->query("SELECT RELEASE_LOCK('wa_automation')");
         }
     }
+
+    // Start the cooldown for every personal client that sent anything this run. Done once,
+    // at the end, so campaigns + qualifier + automation share a single slot.
+    foreach (db_all("SELECT * FROM clients WHERE channel='personal'") as $pc) slot_close($pc);
 
     // Heartbeat — lets the Health Check page confirm the cron is actually running.
     @touch(__DIR__ . '/.heartbeat');

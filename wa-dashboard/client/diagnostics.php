@@ -2,7 +2,7 @@
 declare(strict_types=1);
 require __DIR__ . '/_init.php';
 require __DIR__ . '/../includes/ai.php';
-require __DIR__ . '/../includes/push.php';
+require_once __DIR__ . '/../includes/push.php';
 
 $cid = (int) $CLIENT['id'];
 

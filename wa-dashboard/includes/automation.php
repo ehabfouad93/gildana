@@ -15,7 +15,8 @@ declare(strict_types=1);
  * Depends on: db, whatsapp, credits, ai, notify, helpers.
  */
 
-require_once __DIR__ . '/inbox.php';   // unified message log (msg_log)
+require_once __DIR__ . '/inbox.php';    // unified message log (msg_log)
+require_once __DIR__ . '/channel.php';  // cloud vs personal-number dispatch
 
 const AUTO_MAX_STEPS = 60; // safety cap per run invocation
 
@@ -55,8 +56,11 @@ function auto_save_run(array $run, array $ctx): void
 }
 
 /** Within the 24h customer-service window? */
-function auto_in_window(array $contact): bool
+function auto_in_window(array $contact, array $client = []): bool
 {
+    // The 24-hour customer-service window is a Meta Cloud API rule. A personal number
+    // sends ordinary messages and has no such window, so it is never gated by it.
+    if ($client && function_exists('channel_is_personal') && channel_is_personal($client)) return true;
     $last = $contact['last_inbound_at'] ?? null;
     return $last && strtotime((string) $last) > time() - 86400;
 }
@@ -64,6 +68,15 @@ function auto_in_window(array $contact): bool
 /* ── send + log + credit ── */
 function auto_send(array $client, array $run, array $step, array $contact, string $kind, callable $sender, string $body = ''): bool
 {
+    // A personal number sends in paced slots shared with campaigns and qualifier outreach.
+    // Out of budget → leave the run waiting; the next worker run picks it up rather than
+    // burning the slot or dropping the message.
+    if (channel_is_personal($client) && slot_budget($client) <= 0) {
+        $run['status'] = 'waiting_timer';
+        $run['wait_until'] = date('Y-m-d H:i:s', time() + max(1, (int) ($client['slot_pause_sec'] ?: 180)));
+        return false;
+    }
+
     // Reserve 1 credit.
     $bal = credits_adjust((int) $client['id'], -1, 'automation', null);
     if ($bal === null) {
@@ -71,6 +84,7 @@ function auto_send(array $client, array $run, array $step, array $contact, strin
         return false;
     }
     $res = $sender();  // ['ok','wamid','error_title']
+    slot_consume($client, 1);
     $status = $res['ok'] ? 'sent' : 'failed';
     if (!$res['ok']) credits_adjust((int) $client['id'], 1, 'automation_refund', null);
     db_run(
@@ -131,7 +145,7 @@ function auto_chat_turn(array $client, array &$run, array $step, array $contact,
             (string) ($cfg['knowledge'] ?? ''), (string) ($cfg['persona'] ?? ''),
             $goals, (array) ($cfg['captures'] ?? []), (string) ($cfg['instructions'] ?? ''));
     if ($r['ok'] && $r['reply'] !== '') {
-        auto_send($client, $run, $step, $contact, 'text', fn() => wa_send_text($client, $to, $r['reply']), $r['reply']);
+        auto_send($client, $run, $step, $contact, 'text', fn() => channel_send_text($client, $to, $r['reply']), $r['reply']);
         auto_log($ctx, 'assistant', $r['reply']);
     }
     foreach ((array) ($r['captured'] ?? []) as $k => $v) $ctx['fields'][(string) $k] = $v;
@@ -179,32 +193,31 @@ function automation_run_steps(array $client, array $contact, array $run, array $
         // Free-form sends require the 24h window; templates are always allowed.
         $freeForm = in_array($type, ['text', 'image', 'buttons', 'question', 'ai_chat'], true)
                  || ($type === 'ai_branch' && trim((string) ($cfg['prompt'] ?? '')) !== '');
-        if ($freeForm && !auto_in_window($contact)) {
+        if ($freeForm && !auto_in_window($contact, $client)) {
             $run['status'] = 'blocked';
             break;
         }
 
         if ($type === 'text') {
             $body = auto_render((string) ($cfg['body'] ?? ''), $contact, $ctx);
-            if (!auto_send($client, $run, $step, $contact, 'text', fn() => wa_send_text($client, $to, $body), $body)) break;
+            if (!auto_send($client, $run, $step, $contact, 'text', fn() => channel_send_text($client, $to, $body), $body)) break;
             auto_log($ctx, 'assistant', $body);
             $run['current_step_id'] = $step['next_step_id'];
         } elseif ($type === 'image') {
             $link = (string) ($cfg['link'] ?? '');
             $cap  = auto_render((string) ($cfg['caption'] ?? ''), $contact, $ctx);
-            if (!auto_send($client, $run, $step, $contact, 'image', fn() => wa_send_image($client, $to, $link, $cap), '🖼️ ' . ($cap !== '' ? $cap : 'image'))) break;
+            if (!auto_send($client, $run, $step, $contact, 'image', fn() => channel_send_image($client, $to, $link, $cap), '🖼️ ' . ($cap !== '' ? $cap : 'image'))) break;
             $run['current_step_id'] = $step['next_step_id'];
         } elseif ($type === 'template') {
-            $tpl = db_row("SELECT wa_name, language, components FROM templates WHERE id=? AND client_id=?",
+            $tpl = db_row("SELECT wa_name, language, components, body_text FROM templates WHERE id=? AND client_id=?",
                 [(int) ($cfg['template_id'] ?? 0), (int) $client['id']]);
             if (!$tpl) { $run['status'] = 'blocked'; break; }
-            // Build the FULL payload (header media/text, body vars, dynamic buttons).
-            // Sending [] here used to break every template with an image header (#132012).
-            $comps = auto_build_components(
-                json_decode((string) $tpl['components'], true) ?: [], $cfg, $contact, $client
-            );
+            // channel_send_template() builds the FULL Cloud payload (header media/text, body
+            // vars, dynamic buttons — sending [] used to break image headers with #132012),
+            // or renders the template to plain text for a personal number, which has no
+            // approved templates.
             if (!auto_send($client, $run, $step, $contact, 'template',
-                fn() => wa_send_template($client, $to, (string) $tpl['wa_name'], (string) $tpl['language'], $comps),
+                fn() => channel_send_template($client, $to, $tpl, $cfg, $contact),
                 '📄 Template: ' . $tpl['wa_name'])) break;
             // A template is a message that needs a reply to continue (cold outreach /
             // re-engagement). Pause here; the lead's reply opens the 24h window and
@@ -217,20 +230,20 @@ function automation_run_steps(array $client, array $contact, array $run, array $
             foreach (array_slice((array) ($cfg['buttons'] ?? []), 0, 3) as $bi => $b) {
                 $btns[] = ['id' => 'b' . $bi, 'title' => (string) ($b['title'] ?? ('Option ' . ($bi + 1)))];
             }
-            if (!auto_send($client, $run, $step, $contact, 'buttons', fn() => wa_send_buttons($client, $to, $body, $btns), $body)) break;
+            if (!auto_send($client, $run, $step, $contact, 'buttons', fn() => channel_send_buttons($client, $to, $body, $btns), $body)) break;
             auto_log($ctx, 'assistant', $body);
             $run['status'] = 'waiting_input';   // await tap; stay on this step
             break;
         } elseif ($type === 'question') {
             $body = auto_render((string) ($cfg['body'] ?? ''), $contact, $ctx);
-            if (!auto_send($client, $run, $step, $contact, 'question', fn() => wa_send_text($client, $to, $body), $body)) break;
+            if (!auto_send($client, $run, $step, $contact, 'question', fn() => channel_send_text($client, $to, $body), $body)) break;
             auto_log($ctx, 'assistant', $body);
             $run['status'] = 'waiting_input';
             break;
         } elseif ($type === 'ai_branch') {
             $prompt = auto_render((string) ($cfg['prompt'] ?? ''), $contact, $ctx);
             if ($prompt !== '') {
-                if (!auto_send($client, $run, $step, $contact, 'text', fn() => wa_send_text($client, $to, $prompt), $prompt)) break;
+                if (!auto_send($client, $run, $step, $contact, 'text', fn() => channel_send_text($client, $to, $prompt), $prompt)) break;
                 auto_log($ctx, 'assistant', $prompt);
             }
             $run['status'] = 'waiting_input';   // classify on next reply
@@ -254,7 +267,7 @@ function automation_run_steps(array $client, array $contact, array $run, array $
             if (empty($ctx['chat']['intro_sent'])) {
                 $intro = auto_render((string) ($cfg['intro'] ?? ''), $contact, $ctx);
                 if ($intro !== '') {
-                    if (!auto_send($client, $run, $step, $contact, 'text', fn() => wa_send_text($client, $to, $intro), $intro)) break;
+                    if (!auto_send($client, $run, $step, $contact, 'text', fn() => channel_send_text($client, $to, $intro), $intro)) break;
                     auto_log($ctx, 'assistant', $intro);
                 }
                 $ctx['chat'] = ['intro_sent' => 1, 'turns' => 0];
@@ -629,6 +642,13 @@ function automation_send_outreach(int $maxPerRun = 0, int $onlyFlowId = 0): int
         $client = db_row("SELECT * FROM clients WHERE id=?", [$cid]);
         if (!$client || ($client['status'] ?? '') !== 'active') continue;
 
+        // Personal numbers share ONE paced slot across every module, and campaigns have
+        // already taken their share this run — send only what is left, or nothing while
+        // the client is cooling down.
+        $budget = slot_budget($client);
+        if ($budget <= 0) continue;
+        $cruns  = array_slice($cruns, 0, $budget);
+
         $tplCache = [];  // flowId => ['name','lang','varCount','vars','stepId'] | null
         $items = [];     // runId => item for wa_send_template_batch
         $meta  = [];     // runId => ['flow_id','contact_id','stepId']
@@ -639,11 +659,12 @@ function automation_send_outreach(int $maxPerRun = 0, int $onlyFlowId = 0): int
                 if (!$step) { $tplCache[$fid] = null; }
                 else {
                     $cfg = json_decode((string) $step['config'], true) ?: [];
-                    $tpl = db_row("SELECT wa_name, language, variable_count, components FROM templates WHERE id=? AND client_id=?",
+                    $tpl = db_row("SELECT wa_name, language, variable_count, components, body_text FROM templates WHERE id=? AND client_id=?",
                         [(int) ($cfg['template_id'] ?? 0), $cid]);
                     $tplCache[$fid] = $tpl
                         ? ['name' => (string) $tpl['wa_name'], 'lang' => (string) $tpl['language'],
                            'components' => json_decode((string) $tpl['components'], true) ?: [],
+                           'body_text' => (string) ($tpl['body_text'] ?? ''),
                            'cfg' => $cfg, 'stepId' => (int) $step['id']]
                         : null;
                 }
@@ -659,12 +680,32 @@ function automation_send_outreach(int $maxPerRun = 0, int $onlyFlowId = 0): int
                 // $client → header media is uploaded once and reused as a media id across
                 // the whole batch (wa_resolve_media caches on the file hash).
                 'components' => auto_build_components($t['components'], $t['cfg'], ['name' => $r['contact_name']], $client),
+                // Used only by the personal channel, which renders the template to text.
+                'tpl' => ['wa_name' => $t['name'], 'language' => $t['lang'],
+                          'components' => json_encode($t['components']), 'body_text' => (string) ($t['body_text'] ?? '')],
+                'cfg' => $t['cfg'],
+                'contact_row' => ['name' => (string) $r['contact_name'], 'phone_e164' => (string) $r['phone_e164']],
             ];
             $meta[(int) $r['id']] = ['flow_id' => $fid, 'contact_id' => (int) $r['contact_id'], 'stepId' => $t['stepId'], 'context' => $r['context']];
         }
 
-        foreach (array_chunk($items, $parallel, true) as $chunk) {
-            $res = wa_send_template_batch($client, $chunk);
+        $isPersonal = channel_is_personal($client);
+        $chunkSize  = $isPersonal ? 1 : $parallel;
+        $firstChunk = true;
+        foreach (array_chunk($items, $chunkSize, true) as $chunk) {
+            if ($isPersonal) {
+                if (!$firstChunk) slot_pace_sleep();
+                $firstChunk = false;
+                $res = [];
+                foreach ($chunk as $runId => $it) {
+                    $res[$runId] = channel_send_template(
+                        $client, (string) $it['to'], $it['tpl'], $it['cfg'], $it['contact_row']
+                    );
+                    slot_consume($client, 1);
+                }
+            } else {
+                $res = wa_send_template_batch($client, $chunk);
+            }
             foreach ($res as $runId => $rr) {
                 $m = $meta[$runId];
                 if (!empty($rr['ok'])) {
