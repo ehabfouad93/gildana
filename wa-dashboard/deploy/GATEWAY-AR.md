@@ -132,6 +132,7 @@ grep EVOLUTION_API_KEY .env
 | QR مش بيظهر | `docker logs evolution-api --tail 40` |
 | `000` في اختبار الاتصال | الكونتينرات مش على نفس الشبكة — `docker network inspect docker_revenect` |
 | الرام خلصت | `docker stats` · فكّر في Upgrade |
+| `pull access denied` | اسم الصورة قديم — اعمل `git pull` وجرّب تاني |
 | الجلسة بتفصل كل شوية | الموبايل لازم يكون أونلاين — واتساب ويب بيفصل لو التليفون قفل خالص |
 
 ---
