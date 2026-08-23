@@ -40,9 +40,24 @@ if (file_exists("$root/config.php")) {
     $s = preg_replace("/('base_url'\s*=>\s*)''/", '${1}' . $q("https://$domain"), $s, 1);
 
     file_put_contents("$root/config.php", $s);
-    chmod("$root/config.php", 0640);
     echo "✓ config.php written (fresh encryption key)\n";
 }
+
+// docker exec runs as root, so anything created here is root-owned. Apache serves as
+// www-data, and a root-owned 0640 config.php gives it "Permission denied" on every
+// request — so hand ownership over explicitly rather than relying on the default.
+$own = function (string $path, int $mode): void {
+    if (!file_exists($path)) return;
+    @chown($path, 'www-data');
+    @chgrp($path, 'www-data');
+    @chmod($path, $mode);
+};
+$own("$root/config.php", 0640);                 // secrets: owner-readable only
+foreach (['uploads', 'assets/brand', 'cron'] as $dir) {
+    if (!is_dir("$root/$dir")) @mkdir("$root/$dir", 0775, true);
+    $own("$root/$dir", 0775);                   // the app writes here at runtime
+}
+echo "✓ permissions set for www-data\n";
 
 require "$root/includes/config_loader.php";
 require "$root/includes/helpers.php";
