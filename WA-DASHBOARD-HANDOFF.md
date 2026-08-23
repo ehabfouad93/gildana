@@ -1,9 +1,60 @@
 # REVENECT by Gildana — Project Handoff
 
 > Paste this file into a new Claude chat to continue work with full context.
-> Last updated: 2026-08-18 (rebrand).
+> Last updated: 2026-08-23 (personal-number channel).
 
-## 🆕 LATEST — upload your own logo & app icon
+## 🆕 LATEST — personal WhatsApp number as a second channel
+
+A client with no Meta Cloud API number can now send from **their own personal WhatsApp
+number**, using every module (Campaigns, Automations, Lead Qualifier, Inbox).
+Needs **migration `011_personal_channel.sql`**.
+
+**This is against WhatsApp's Terms and the number can be banned**, so pacing is built in
+rather than optional: **15 messages per batch, then a 3-minute pause, then the next batch**
+(per-client `slot_size` / `slot_pause_sec`). One batch is **shared across all modules** —
+campaigns, qualifier outreach and automation steps draw from the same 15, otherwise three
+modules would each send a full batch. Sends go **one at a time** with a random 2–6 s gap
+(`slot_gap_min_ms` / `slot_gap_max_ms`), never the 30-way parallel burst the Cloud path uses.
+The pause is state-based (`clients.next_slot_at`), never `sleep()` — the worker holds
+`GET_LOCK('wa_dispatch')`, so sleeping would stall every other client.
+
+**How it fits together**
+- `includes/channel.php` — the seam. Every module calls `channel_send_*`; the personal
+  adapter returns the *identical* array shape to `wa_send_*`, so `auto_send()`, `msg_log()`,
+  credits and delivery-status handling were untouched. Also holds `slot_budget()` /
+  `slot_consume()` / `slot_close()`.
+- `includes/personal_wa.php` — gateway adapter (instance create, QR, pairing code, status,
+  logout, send, inbound parse). Endpoint paths and field names are overridable in Admin →
+  Settings, so switching gateway vendor needs no code change.
+- `webhook_personal.php` — inbound. Identified by a per-client secret in the URL, then joins
+  the **existing** path (contact upsert → `msg_log()` → `automation_handle_inbound()`), so
+  Inbox, flows, AI agent and human takeover all work unchanged.
+
+**Client experience:** Settings → **My WhatsApp Number** → Connect → scan the QR (or use the
+8-character pairing code — WhatsApp has no SMS linking). The QR auto-refreshes every 20 s
+because the codes rotate and a stale one silently stops working. Clients never see a gateway
+URL or key.
+
+**Admin:** per-client **Sending Channel** card (Cloud vs personal, batch size, pause, live
+status) on the client page; the gateway base URL + API key are set **once** in Admin → Settings.
+
+**Behaviour differences on this channel:** no approved templates and no 24-hour window, so a
+template is rendered to **plain text** with its variables filled in (an image header becomes an
+image send with that text as the caption); reply buttons degrade to a numbered list and a
+customer answering "2" is matched to the second option.
+
+**Hosting:** the gateway is a persistent WhatsApp Web session and **cannot run on cPanel
+shared hosting** — it needs a VPS (or a paid service). Point the base URL at
+`http://127.0.0.1:3000` when it runs on the same box; it holds clients' live sessions and
+should not be reachable from the internet. Use a **Baileys**-based gateway (e.g. Evolution
+API), not `whatsapp-web.js`/Puppeteer, which runs a headless Chrome per client (~300–500 MB).
+
+**Two bugs this surfaced and fixed:** `client_ready()` only checked Cloud credentials, which
+locked personal clients out of creating campaigns; and `channel.php` / `push.php` were
+plain-`require()`d from paths that can load together, which fatals on redeclare — all now
+`require_once`.
+
+## Earlier — upload your own logo & app icon
 
 **Admin → Settings → Branding.** Three slots: **Logo** (top bar + sign-in), **Logo for dark
 backgrounds** (optional — the sign-in screen is near-black, a dark logo vanishes there), and
