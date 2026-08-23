@@ -152,6 +152,7 @@ try {
                 'name' => (string) ($tpl['wa_name'] ?: 'Message'), 'lang' => (string) ($tpl['language'] ?? 'en'),
                 // Set only for plain-text (personal channel) campaigns.
                 'text' => (string) ($comps['text'] ?? ''),
+                'image' => (string) ($comps['image'] ?? ''),
                 'components' => isset($comps['text']) ? [] : $comps,
                 'campId' => $campId, 'contact' => (int) $m['contact_id'],
                 // Used only by the personal channel, which renders the template to text.
@@ -176,10 +177,15 @@ try {
                 $res = [];
                 foreach ($chunk as $mid => $it) {
                     // A plain-text campaign already has its text rendered per recipient at
-                    // creation; anything else is a template rendered to text.
-                    $res[$mid] = $it['text'] !== ''
-                        ? channel_send_text($client, (string) $it['to'], $it['text'])
-                        : channel_send_template($client, (string) $it['to'], $it['tpl'], $it['cfg'], $it['contact_row'], 'campaign_resolve_value');
+                    // creation; anything else is a template rendered to text. An image rides
+                    // with that text as its caption — one message, not two.
+                    if ($it['image'] !== '') {
+                        $res[$mid] = channel_send_image($client, (string) $it['to'], $it['image'], $it['text']);
+                    } elseif ($it['text'] !== '') {
+                        $res[$mid] = channel_send_text($client, (string) $it['to'], $it['text']);
+                    } else {
+                        $res[$mid] = channel_send_template($client, (string) $it['to'], $it['tpl'], $it['cfg'], $it['contact_row'], 'campaign_resolve_value');
+                    }
                 }
             } else {
                 $res = wa_send_template_batch($client, $chunk);
@@ -210,9 +216,10 @@ try {
                     $failedTotal++;
                 }
                 if ((int) $it['contact'] > 0) {
-                    msg_log($cid, (int) $it['contact'], 'out',
-                        $it['text'] !== '' ? $it['text'] : '📄 Template: ' . $it['name'], [
-                        'type' => 'template', 'source' => 'campaign',
+                    $logText = $it['text'] !== '' ? $it['text'] : '📄 Template: ' . $it['name'];
+                    if ($it['image'] !== '') $logText = '🖼️ ' . ($it['text'] !== '' ? $it['text'] : 'Image');
+                    msg_log($cid, (int) $it['contact'], 'out', $logText, [
+                        'type' => $it['image'] !== '' ? 'image' : 'template', 'source' => 'campaign',
                         'status' => $r['ok'] ? 'sent' : 'failed', 'wamid' => $r['wamid'] ?? null,
                         'error' => $r['ok'] ? null : (string) $r['error_title'],
                     ]);

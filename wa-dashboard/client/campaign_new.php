@@ -29,6 +29,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
     // A personal number has no approved templates — the campaign carries its own text.
     $isPersonal = channel_is_personal($CLIENT);
     $bodyText   = trim((string) ($_POST['body_text'] ?? ''));
+    $bodyMedia  = trim((string) ($_POST['body_media'] ?? ''));   // optional image, sent with the text as its caption
     $when       = (string) ($_POST['when'] ?? 'now');
     $schedRaw   = trim((string) ($_POST['scheduled_at'] ?? ''));
 
@@ -86,6 +87,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
         $varMap['buttons'][(string) $bi] = trim((string) ($_POST['btn_value'][$bi] ?? ''));
     }
 
+    // A personal campaign's image lives in the same slot as a template's header media, so the
+    // report and the worker read it from one place on either channel.
+    if ($isPersonal) $varMap['header_media'] = $bodyMedia;
+
     // Catch the missing-header-media case here rather than letting Meta reject every message.
     if (!$isPersonal && $template && in_array($hf, ['IMAGE', 'VIDEO', 'DOCUMENT'], true) && $varMap['header_media'] === '') {
         $err = $err ?: 'This template has a ' . strtolower($hf) . ' header — upload or paste a ' . strtolower($hf) . ' URL before sending.';
@@ -120,7 +125,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
                     // Personal: store the finished text per recipient (same slot as the
                     // Cloud path's components) so the worker sends without re-rendering.
                     $components = $isPersonal
-                        ? ['text' => campaign_render_text($bodyText, $c)]
+                        ? ['text' => campaign_render_text($bodyText, $c)] + ($bodyMedia !== '' ? ['image' => $bodyMedia] : [])
                         : campaign_components($varMap, $tplComponents, $c);
                     $ins->execute([
                         $campaignId, $cid, (int) $c['id'], (string) $c['phone_e164'],
@@ -185,6 +190,16 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
           Personalise with <code>{{name}}</code>, <code>{{phone}}</code>, or any contact attribute
           (e.g. <code>{{city}}</code>). Blank if the contact has no value.
         </span>
+      </div>
+      <div class="field">
+        <span class="lbl">Image <span class="text-muted">(optional)</span></span>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <input type="text" id="pm-url" name="body_media" value="<?= old('body_media') ?>" placeholder="https://… or click Upload" style="flex:1;min-width:220px">
+          <input type="file" id="pm-file" style="display:none" accept=".jpg,.jpeg,.png,.webp">
+          <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('pm-file').click()">Upload</button>
+          <span id="pm-status" class="text-muted" style="font-size:12px"></span>
+        </div>
+        <span class="text-muted" style="font-size:12px">Sent as a photo with the message above as its caption.</span>
       </div>
       <div class="alert info" style="font-size:12.5px">
         Sending from <strong>your own number</strong> — no template approval needed. Messages go out
@@ -380,6 +395,20 @@ function bindUpload(){
     }catch(e){ st.textContent='⚠ Upload failed'; }
   });
 }
+/* Personal channel: the campaign's own image (no template, so it has its own uploader). */
+(function bindPersonalUpload(){
+  const f=document.getElementById('pm-file'); if(!f) return;
+  f.addEventListener('change', async ()=>{
+    if(!f.files || !f.files[0]) return;
+    const st=document.getElementById('pm-status'); st.textContent='Uploading…';
+    const fd=new FormData(); fd.append('csrf_token',CSRF); fd.append('media',f.files[0]);
+    try{
+      const r=await fetch('upload_media.php',{method:'POST',body:fd}); const d=await r.json();
+      if(d.ok){ document.getElementById('pm-url').value=d.url; st.textContent='✓ Uploaded'; }
+      else st.textContent='⚠ '+(d.error||'Upload failed');
+    }catch(e){ st.textContent='⚠ Upload failed'; }
+  });
+})();
 async function onList(){
   const lid = document.getElementById('list_id').value;
   if(!lid){ reach=0; updateCost(); document.getElementById('reach-hint').textContent=''; return; }

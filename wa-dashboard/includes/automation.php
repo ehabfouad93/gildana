@@ -209,6 +209,21 @@ function automation_run_steps(array $client, array $contact, array $run, array $
             if (!auto_send($client, $run, $step, $contact, 'image', fn() => channel_send_image($client, $to, $link, $cap), '🖼️ ' . ($cap !== '' ? $cap : 'image'))) break;
             $run['current_step_id'] = $step['next_step_id'];
         } elseif ($type === 'template') {
+            // A personal number has no approved templates, so the outreach node carries its own
+            // text (and optional image) instead of a template id. Same node type either way, so
+            // the qualifier's outreach sender keeps finding it.
+            $plain = trim((string) ($cfg['text'] ?? ''));
+            if ($plain !== '') {
+                $body  = auto_render($plain, $contact, $ctx);
+                $media = trim((string) ($cfg['media'] ?? ''));
+                $ok = $media !== ''
+                    ? auto_send($client, $run, $step, $contact, 'image', fn() => channel_send_image($client, $to, $media, $body), '🖼️ ' . ($body !== '' ? $body : 'Image'))
+                    : auto_send($client, $run, $step, $contact, 'text',  fn() => channel_send_text($client, $to, $body), $body);
+                if (!$ok) break;
+                if ($body !== '') auto_log($ctx, 'assistant', $body);
+                $run['status'] = 'waiting_input';   // cold outreach: wait for the reply
+                break;
+            }
             $tpl = db_row("SELECT wa_name, language, components, body_text FROM templates WHERE id=? AND client_id=?",
                 [(int) ($cfg['template_id'] ?? 0), (int) $client['id']]);
             if (!$tpl) { $run['status'] = 'blocked'; break; }
@@ -666,14 +681,23 @@ function automation_send_outreach(int $maxPerRun = 0, int $onlyFlowId = 0): int
                 if (!$step) { $tplCache[$fid] = null; }
                 else {
                     $cfg = json_decode((string) $step['config'], true) ?: [];
-                    $tpl = db_row("SELECT wa_name, language, variable_count, components, body_text FROM templates WHERE id=? AND client_id=?",
-                        [(int) ($cfg['template_id'] ?? 0), $cid]);
-                    $tplCache[$fid] = $tpl
-                        ? ['name' => (string) $tpl['wa_name'], 'lang' => (string) $tpl['language'],
-                           'components' => json_decode((string) $tpl['components'], true) ?: [],
-                           'body_text' => (string) ($tpl['body_text'] ?? ''),
-                           'cfg' => $cfg, 'stepId' => (int) $step['id']]
-                        : null;
+                    // Personal channel: the node carries the message itself, with no template row.
+                    $plain = trim((string) ($cfg['text'] ?? ''));
+                    $pmed  = trim((string) ($cfg['media'] ?? ''));
+                    if ($plain !== '' || $pmed !== '') {
+                        $tplCache[$fid] = ['plain' => $plain, 'media' => $pmed,
+                                           'name' => 'Message', 'lang' => 'en', 'components' => [], 'body_text' => '',
+                                           'cfg' => $cfg, 'stepId' => (int) $step['id']];
+                    } else {
+                        $tpl = db_row("SELECT wa_name, language, variable_count, components, body_text FROM templates WHERE id=? AND client_id=?",
+                            [(int) ($cfg['template_id'] ?? 0), $cid]);
+                        $tplCache[$fid] = $tpl
+                            ? ['name' => (string) $tpl['wa_name'], 'lang' => (string) $tpl['language'],
+                               'components' => json_decode((string) $tpl['components'], true) ?: [],
+                               'body_text' => (string) ($tpl['body_text'] ?? ''),
+                               'cfg' => $cfg, 'stepId' => (int) $step['id']]
+                            : null;
+                    }
                 }
             }
             $t = $tplCache[$fid];
@@ -695,6 +719,9 @@ function automation_send_outreach(int $maxPerRun = 0, int $onlyFlowId = 0): int
                           'components' => json_encode($t['components']), 'body_text' => (string) ($t['body_text'] ?? '')],
                 'cfg' => $t['cfg'],
                 'contact_row' => ['name' => (string) $r['contact_name'], 'phone_e164' => (string) $r['phone_e164']],
+                // Personal channel with a written outreach message (no template row at all).
+                'plain' => (string) ($t['plain'] ?? ''),
+                'media' => (string) ($t['media'] ?? ''),
             ];
             $meta[(int) $r['id']] = ['flow_id' => $fid, 'contact_id' => (int) $r['contact_id'], 'stepId' => $t['stepId'], 'context' => $r['context']];
         }
@@ -708,9 +735,18 @@ function automation_send_outreach(int $maxPerRun = 0, int $onlyFlowId = 0): int
                 $firstChunk = false;
                 $res = [];
                 foreach ($chunk as $runId => $it) {
-                    $res[$runId] = channel_send_template(
-                        $client, (string) $it['to'], $it['tpl'], $it['cfg'], $it['contact_row']
-                    );
+                    // Either a written outreach message (personal channel, no template row)
+                    // or a template rendered down to text.
+                    if ($it['plain'] !== '' || $it['media'] !== '') {
+                        $body = auto_render($it['plain'], $it['contact_row'], ['fields' => []]);
+                        $res[$runId] = $it['media'] !== ''
+                            ? channel_send_image($client, (string) $it['to'], $it['media'], $body)
+                            : channel_send_text($client, (string) $it['to'], $body);
+                    } else {
+                        $res[$runId] = channel_send_template(
+                            $client, (string) $it['to'], $it['tpl'], $it['cfg'], $it['contact_row']
+                        );
+                    }
                     slot_consume($client, 1);
                 }
             } else {
@@ -718,11 +754,17 @@ function automation_send_outreach(int $maxPerRun = 0, int $onlyFlowId = 0): int
             }
             foreach ($res as $runId => $rr) {
                 $m = $meta[$runId];
+                // What the Inbox thread shows for this outreach.
+                $it     = $chunk[$runId];
+                $plain  = auto_render((string) $it['plain'], $it['contact_row'], ['fields' => []]);
+                $logTxt = $it['media'] !== '' ? '🖼️ ' . ($plain !== '' ? $plain : 'Image')
+                        : ($plain !== '' ? $plain : '📄 Template: ' . $it['name']);
+                $logTyp = $it['media'] !== '' ? 'image' : ($plain !== '' ? 'text' : 'template');
                 if (!empty($rr['ok'])) {
                     db_run("UPDATE flow_runs SET status='waiting_input', current_step_id=?, updated_at=NOW() WHERE id=?", [$m['stepId'], $runId]);
                     db_run("INSERT INTO flow_messages (flow_id,step_id,run_id,client_id,contact_id,wa_message_id,status,created_at) VALUES (?,?,?,?,?,?, 'sent', NOW())",
                         [$m['flow_id'], $m['stepId'], $runId, $cid, $m['contact_id'], $rr['wamid'] ?? null]);
-                    if (function_exists('msg_log')) msg_log($cid, $m['contact_id'], 'out', '📄 Template: ' . $chunk[$runId]['name'], ['type' => 'template', 'source' => 'qualifier', 'status' => 'sent', 'wamid' => $rr['wamid'] ?? null]);
+                    if (function_exists('msg_log')) msg_log($cid, $m['contact_id'], 'out', $logTxt, ['type' => $logTyp, 'source' => 'qualifier', 'status' => 'sent', 'wamid' => $rr['wamid'] ?? null]);
                     $sent++;
                 } else {
                     credits_adjust($cid, 1, 'automation_refund', null);
@@ -732,7 +774,7 @@ function automation_send_outreach(int $maxPerRun = 0, int $onlyFlowId = 0): int
                     db_run("UPDATE flow_runs SET status='blocked', context=?, updated_at=NOW() WHERE id=?", [json_encode($ctx, JSON_UNESCAPED_UNICODE), $runId]);
                     db_run("INSERT INTO flow_messages (flow_id,step_id,run_id,client_id,contact_id,wa_message_id,status,error_title,created_at) VALUES (?,?,?,?,?,?, 'failed', ?, NOW())",
                         [$m['flow_id'], $m['stepId'], $runId, $cid, $m['contact_id'], $rr['wamid'] ?? null, substr($err, 0, 255)]);
-                    if (function_exists('msg_log')) msg_log($cid, $m['contact_id'], 'out', '📄 Template: ' . $chunk[$runId]['name'], ['type' => 'template', 'source' => 'qualifier', 'status' => 'failed', 'error' => $err]);
+                    if (function_exists('msg_log')) msg_log($cid, $m['contact_id'], 'out', $logTxt, ['type' => $logTyp, 'source' => 'qualifier', 'status' => 'failed', 'error' => $err]);
                 }
             }
         }

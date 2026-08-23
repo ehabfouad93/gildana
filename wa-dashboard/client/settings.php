@@ -50,6 +50,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'test_
 
 $err = '';
 
+/* ── Switch sending channel ──
+   The client owns this choice: they may have both a Cloud API number and their own phone and
+   want to move between them without waiting on support. Each direction is only offered when
+   it can actually send, so switching can't leave the account unable to send at all. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_channel') {
+    verify_csrf();
+    $want = ($_POST['channel'] ?? 'cloud') === 'personal' ? 'personal' : 'cloud';
+    if ($want === channel_of($CLIENT)) {
+        redirect('settings.php#channel');
+    } elseif ($want === 'personal' && !pw_configured()) {
+        $err = 'Sending from your own number isn\'t available on your account yet — contact ' . BRAND_PARENT . '.';
+    } elseif ($want === 'cloud' && !($CLIENT['access_token_enc'] && $CLIENT['phone_number_id'])) {
+        $err = 'Your WhatsApp Cloud API number isn\'t set up, so there is nothing to switch to. Contact ' . BRAND_PARENT . '.';
+    } else {
+        db_run("UPDATE clients SET channel=? WHERE id=?", [$want, $cid]);
+        flash($want === 'personal'
+            ? 'Now sending from your own number — link it below to start.'
+            : 'Now sending through the WhatsApp Cloud API.');
+        redirect('settings.php#' . ($want === 'personal' ? 'mynumber' : 'channel'));
+    }
+}
+
 /* ── Save AI settings ── */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_ai') {
     verify_csrf();
@@ -106,6 +128,61 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
   </div>
   <p class="text-muted" style="font-size:12.5px">Need more credits or a credential change? Contact <?= e(BRAND_PARENT) ?> — these are managed for you.</p>
 </div>
+
+<?php
+$onPersonal  = channel_is_personal($CLIENT);
+$hasCloud    = (bool) ($CLIENT['access_token_enc'] && $CLIENT['phone_number_id']);
+$hasPersonal = pw_configured();
+// The card always shows where messages currently go out from; the option they can't use yet
+// is disabled with the reason on it, rather than hidden with no explanation.
+?>
+<div class="card" id="channel">
+  <h2>Sending Channel</h2>
+  <p class="text-muted" style="font-size:12.5px;margin:-6px 0 14px">
+    Where your messages go out from. Campaigns, Automations, the Lead Qualifier and the Inbox all
+    follow this one setting — switch it and every module follows immediately.
+  </p>
+  <form method="post">
+    <?= csrf_field() ?><input type="hidden" name="action" value="save_channel">
+    <div class="field" style="max-width:420px"><span class="lbl">Send from</span>
+      <select name="channel" id="ch-sel" onchange="chNote()">
+        <option value="cloud"    <?= $onPersonal ? '' : 'selected' ?> <?= $hasCloud    ? '' : 'disabled' ?>>Business number (WhatsApp Cloud API)<?= $hasCloud ? '' : ' — not set up' ?></option>
+        <option value="personal" <?= $onPersonal ? 'selected' : '' ?> <?= $hasPersonal ? '' : 'disabled' ?>>My own WhatsApp number<?= $hasPersonal ? '' : ' — not available' ?></option>
+      </select>
+    </div>
+    <div id="ch-note-personal" style="display:<?= $onPersonal ? 'block' : 'none' ?>">
+      <div class="alert error" style="font-size:12.5px">
+        <strong>Read this before switching.</strong> Sending from your own number uses a WhatsApp Web
+        session, which is against WhatsApp's Terms — the number can be banned, and the risk rises the
+        faster it sends. That's why messages go out
+        <strong><?= (int) ($CLIENT['slot_size'] ?: 15) ?> at a time</strong> with a
+        <strong><?= round((int) ($CLIENT['slot_pause_sec'] ?: 180) / 60, 1) ?>-minute</strong> pause between
+        batches, shared across every module. There are no approved templates and no 24-hour window
+        here — you write your messages directly.
+      </div>
+    </div>
+    <div id="ch-note-cloud" style="display:<?= $onPersonal ? 'none' : 'block' ?>">
+      <div class="alert info" style="font-size:12.5px">
+        The official channel: full speed, no ban risk, but the first message to a customer must use a
+        Meta-<strong>approved template</strong> and free-form replies only work inside the 24-hour window.
+      </div>
+    </div>
+    <?php if ($onPersonal ? $hasCloud : $hasPersonal): ?>
+      <button type="submit" class="btn btn-primary">Save channel</button>
+    <?php else: ?>
+      <p class="text-muted" style="font-size:12.5px;margin:0">
+        There is only one channel set up on your account. To add the other one, contact <?= e(BRAND_PARENT) ?>.
+      </p>
+    <?php endif; ?>
+  </form>
+</div>
+<script>
+function chNote(){
+  var p = document.getElementById('ch-sel').value === 'personal';
+  document.getElementById('ch-note-personal').style.display = p ? 'block' : 'none';
+  document.getElementById('ch-note-cloud').style.display    = p ? 'none' : 'block';
+}
+</script>
 
 <?php if (channel_is_personal($CLIENT)): $pwState = (string) $CLIENT['personal_status']; ?>
 <div class="card" id="mynumber">
