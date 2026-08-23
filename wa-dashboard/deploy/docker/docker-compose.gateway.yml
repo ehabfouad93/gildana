@@ -46,8 +46,16 @@ services:
     volumes:
       - evolution-instances:/evolution/instances
     depends_on:
-      - evolution-db
-      - evolution-redis
+      evolution-db:
+        condition: service_healthy      # وليس مجرد "started": Evolution يشغّل
+      evolution-redis:                  # migrations فور الإقلاع ويفشل لو القاعدة
+        condition: service_started      # لسه بتجهّز
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080 >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
     networks:
       - revenect
 
@@ -62,6 +70,11 @@ services:
     volumes:
       - evolution-db:/var/lib/postgresql/data
     command: postgres -c max_connections=50 -c shared_buffers=128MB
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evolution -d evolution"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     networks:
       - revenect
 
