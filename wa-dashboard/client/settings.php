@@ -2,8 +2,43 @@
 declare(strict_types=1);
 require __DIR__ . '/_init.php';
 require __DIR__ . '/../includes/ai.php';
+require_once __DIR__ . '/../includes/channel.php';
 
 $cid = (int) $CLIENT['id'];
+
+/* ── AJAX: connect / inspect this client's own WhatsApp number ──
+   Only meaningful on the personal channel. The client never sees a gateway URL or key —
+   they scan a QR (or use the pairing code), exactly like WhatsApp Web. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array(($_POST['action'] ?? ''), ['pw_connect', 'pw_qr', 'pw_status', 'pw_pair', 'pw_logout'], true)) {
+    verify_csrf();
+    $fresh = db_row("SELECT * FROM clients WHERE id=?", [$cid]) ?: [];
+    if (!channel_is_personal($fresh)) json_out(['ok' => false, 'error' => 'This account sends through the WhatsApp Cloud API.']);
+    if (!pw_configured())            json_out(['ok' => false, 'error' => 'The WhatsApp gateway is not set up yet — contact support.']);
+
+    $action = (string) $_POST['action'];
+    if ($action === 'pw_connect') {
+        $r = pw_instance_create($fresh);
+        if (empty($r['ok'])) json_out(['ok' => false, 'error' => $r['error']]);
+        $fresh = db_row("SELECT * FROM clients WHERE id=?", [$cid]) ?: [];
+        $q = pw_qr($fresh);
+        json_out(['ok' => $q['ok'], 'qr' => $q['qr'], 'error' => $q['error']]);
+    }
+    if ($action === 'pw_qr') {
+        // QR codes rotate every ~20-60s, so the page re-fetches instead of showing a dead one.
+        $q = pw_qr($fresh);
+        json_out(['ok' => $q['ok'], 'qr' => $q['qr'], 'error' => $q['error']]);
+    }
+    if ($action === 'pw_pair') {
+        $r = pw_pair_code($fresh, (string) ($_POST['msisdn'] ?? ''));
+        json_out(['ok' => $r['ok'], 'code' => $r['code'], 'error' => $r['error']]);
+    }
+    if ($action === 'pw_logout') {
+        pw_logout($fresh);
+        json_out(['ok' => true]);
+    }
+    $st = pw_status($fresh);
+    json_out(['ok' => true, 'state' => $st['state'], 'msisdn' => $st['msisdn'], 'error' => $st['error']]);
+}
 
 /* ── AJAX: test the AI key ── */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'test_ai') {
@@ -60,11 +95,130 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
     <div class="field"><span class="lbl">Login Email</span><input type="text" value="<?= e((string) $ME['email']) ?>" disabled></div>
     <div class="field"><span class="lbl">Credit Balance</span><input type="text" value="<?= number_format((int) $CLIENT['credits_balance']) ?> credits" disabled></div>
     <div class="field"><span class="lbl">WhatsApp Connection</span>
-      <input type="text" value="<?= client_ready($CLIENT) ? 'Connected' : 'Not connected — contact Gildana' ?>" disabled>
+      <?php if (channel_is_personal($CLIENT)): ?>
+        <input type="text" value="<?= $CLIENT['personal_status'] === 'connected'
+            ? 'Your own number' . ($CLIENT['personal_msisdn'] ? ' (+' . e((string) $CLIENT['personal_msisdn']) . ')' : '')
+            : 'Your own number — not linked yet' ?>" disabled>
+      <?php else: ?>
+        <input type="text" value="<?= client_ready($CLIENT) ? 'Connected' : 'Not connected — contact support' ?>" disabled>
+      <?php endif; ?>
     </div>
   </div>
-  <p class="text-muted" style="font-size:12.5px">Need more credits or a credential change? Contact Gildana — these are managed for you.</p>
+  <p class="text-muted" style="font-size:12.5px">Need more credits or a credential change? Contact <?= e(BRAND_PARENT) ?> — these are managed for you.</p>
 </div>
+
+<?php if (channel_is_personal($CLIENT)): $pwState = (string) $CLIENT['personal_status']; ?>
+<div class="card" id="mynumber">
+  <h2>My WhatsApp Number</h2>
+  <p class="text-muted" style="font-size:12.5px;margin:-6px 0 14px">
+    Link your own WhatsApp so campaigns, automations and the Inbox send from your number.
+    Messages are sent in small batches with a pause between them to keep your number safe.
+  </p>
+
+  <!-- connected -->
+  <div id="pw-connected" style="display:<?= $pwState === 'connected' ? 'block' : 'none' ?>">
+    <div class="alert success" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <strong>Connected</strong>
+      <span id="pw-number" class="text-muted"><?= $CLIENT['personal_msisdn'] ? '+' . e((string) $CLIENT['personal_msisdn']) : '' ?></span>
+      <button type="button" class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="pwLogout()">Disconnect</button>
+    </div>
+  </div>
+
+  <!-- not connected -->
+  <div id="pw-idle" style="display:<?= $pwState === 'connected' ? 'none' : 'block' ?>">
+    <button type="button" class="btn btn-primary" id="pw-start" onclick="pwConnect()">Connect my WhatsApp</button>
+    <span id="pw-msg" class="text-muted" style="margin-left:10px;font-size:12.5px"></span>
+  </div>
+
+  <!-- linking -->
+  <div id="pw-linking" style="display:none;margin-top:14px">
+    <div style="display:flex;gap:22px;flex-wrap:wrap;align-items:flex-start">
+      <div style="text-align:center">
+        <img id="pw-qr" alt="WhatsApp QR code" style="width:230px;height:230px;border:1px solid var(--line);border-radius:10px;background:#fff">
+        <div class="text-muted" style="font-size:11.5px;margin-top:6px">The code refreshes automatically</div>
+      </div>
+      <div style="flex:1;min-width:230px">
+        <ol style="padding-left:18px;line-height:1.9;font-size:13.5px;margin:0">
+          <li>Open <strong>WhatsApp</strong> on your phone</li>
+          <li>Tap <strong>Settings</strong> → <strong>Linked devices</strong></li>
+          <li>Tap <strong>Link a device</strong> and scan this code</li>
+        </ol>
+        <div style="margin-top:14px">
+          <button type="button" class="btn-link" onclick="pwTogglePair()">Can't scan? Link with your phone number instead</button>
+        </div>
+        <div id="pw-pair" style="display:none;margin-top:10px">
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <input type="text" id="pw-msisdn" placeholder="201012345678" style="flex:1;min-width:170px">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="pwPair()">Get code</button>
+          </div>
+          <div id="pw-code" style="display:none;margin-top:10px">
+            <div class="text-muted" style="font-size:12px">On your phone: Linked devices → Link with phone number, then enter:</div>
+            <div style="font-size:26px;letter-spacing:.22em;font-weight:700;margin-top:4px" id="pw-code-val"></div>
+          </div>
+        </div>
+        <div style="margin-top:14px"><button type="button" class="btn btn-ghost btn-sm" onclick="pwCancel()">Cancel</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const PW_CSRF = <?= json_encode(csrf_token()) ?>;
+let pwQrTimer = null, pwStatusTimer = null;
+const pwEl = id => document.getElementById(id);
+
+async function pwPost(action, extra) {
+  const fd = new FormData();
+  fd.append('csrf_token', PW_CSRF); fd.append('action', action);
+  for (const k in (extra || {})) fd.append(k, extra[k]);
+  const r = await fetch('settings.php', { method: 'POST', body: fd });
+  return r.json();
+}
+function pwShow(which) {
+  pwEl('pw-idle').style.display      = which === 'idle'      ? 'block' : 'none';
+  pwEl('pw-linking').style.display   = which === 'linking'   ? 'block' : 'none';
+  pwEl('pw-connected').style.display = which === 'connected' ? 'block' : 'none';
+}
+function pwStop() { clearInterval(pwQrTimer); clearInterval(pwStatusTimer); pwQrTimer = pwStatusTimer = null; }
+
+async function pwConnect() {
+  const b = pwEl('pw-start'); b.disabled = true; pwEl('pw-msg').textContent = 'Preparing…';
+  const d = await pwPost('pw_connect');
+  b.disabled = false; pwEl('pw-msg').textContent = '';
+  if (!d.ok) { pwEl('pw-msg').textContent = d.error || 'Could not start.'; return; }
+  if (d.qr) pwEl('pw-qr').src = d.qr;
+  pwShow('linking');
+  // A stale QR silently stops working, so refresh it and watch for the link to complete.
+  pwQrTimer     = setInterval(pwRefreshQr, 20000);
+  pwStatusTimer = setInterval(pwPollStatus, 3000);
+}
+async function pwRefreshQr() {
+  const d = await pwPost('pw_qr');
+  if (d.ok && d.qr) pwEl('pw-qr').src = d.qr;
+}
+async function pwPollStatus() {
+  const d = await pwPost('pw_status');
+  if (d.ok && d.state === 'connected') {
+    pwStop();
+    pwEl('pw-number').textContent = d.msisdn ? '+' + d.msisdn : '';
+    pwShow('connected');
+  }
+}
+function pwTogglePair() { const p = pwEl('pw-pair'); p.style.display = p.style.display === 'none' ? 'block' : 'none'; }
+async function pwPair() {
+  const d = await pwPost('pw_pair', { msisdn: pwEl('pw-msisdn').value });
+  if (!d.ok) { alert(d.error || 'Could not get a code.'); return; }
+  pwEl('pw-code-val').textContent = d.code;
+  pwEl('pw-code').style.display = 'block';
+}
+function pwCancel() { pwStop(); pwShow('idle'); }
+async function pwLogout() {
+  if (!confirm('Disconnect your WhatsApp number? Sending will stop until you link it again.')) return;
+  await pwPost('pw_logout');
+  pwShow('idle');
+}
+</script>
+<?php endif; ?>
 
 <div class="card" id="ai">
   <h2>AI Engine (for AI-powered automations)</h2>

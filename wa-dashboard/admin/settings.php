@@ -78,6 +78,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
+    if ($action === 'save_gateway') {
+        setting_set('pw_base_url', trim((string) ($_POST['pw_base_url'] ?? '')));
+        $k = trim((string) ($_POST['pw_api_key'] ?? ''));
+        if ($k !== '') setting_set('pw_api_key', encrypt_secret($k));   // blank = keep current
+        setting_set('pw_auth_header', trim((string) ($_POST['pw_auth_header'] ?? 'apikey')) ?: 'apikey');
+        flash('WhatsApp gateway settings saved.');
+        redirect('settings.php#gateway');
+    }
+
     if ($action === 'update_email') {
         $email = strtolower(trim((string) ($_POST['email'] ?? '')));
         if (!filter_var($email, FILTER_VALIDATE_EMAIL)) $err = 'Enter a valid email.';
@@ -187,6 +196,43 @@ if ($ok):  ?><div class="alert success"><?= e($ok) ?></div><?php endif; ?>
     </form>
     <p class="text-muted" style="font-size:12px;margin-top:8px">Run this once. Regenerating later would silently break every device already subscribed.</p>
   <?php endif; ?>
+</div>
+
+<div class="card" id="gateway">
+  <h2>Personal-Number Gateway</h2>
+  <?php
+    require_once __DIR__ . '/../includes/personal_wa.php';
+    $gwBase = (string) (setting_get('pw_base_url', '') ?? '');
+    $gwHdr  = (string) (setting_get('pw_auth_header', 'apikey') ?? 'apikey');
+    $gwKey  = decrypt_secret((string) (setting_get('pw_api_key', '') ?? ''));
+    $gwCount = 0;
+    try { $gwCount = (int) db_val("SELECT COUNT(*) FROM clients WHERE channel='personal'"); } catch (Throwable $e) {}
+  ?>
+  <p class="text-muted" style="font-size:12.5px;margin:-6px 0 14px">
+    Lets a client send from their <strong>own WhatsApp number</strong> instead of the Cloud API.
+    Set once here for the whole platform — clients never see these details, they just scan a QR
+    in their own Settings. <strong><?= $gwCount ?></strong> account<?= $gwCount === 1 ? '' : 's' ?> currently on this channel.
+  </p>
+  <div class="alert info" style="font-size:12.5px;margin-bottom:14px">
+    Sending from a personal number is against WhatsApp's Terms and the number can be banned.
+    Every send on this channel is paced (a small batch, then a pause) to reduce that risk — the
+    limits are set per client. Point the base URL at <code>http://127.0.0.1:3000</code> when the
+    gateway runs on this server: it holds your clients' live WhatsApp sessions and should not be
+    reachable from the internet.
+  </div>
+  <form method="post">
+    <?= csrf_field() ?><input type="hidden" name="action" value="save_gateway">
+    <div class="grid2">
+      <div class="field"><span class="lbl">Gateway base URL</span>
+        <input type="text" name="pw_base_url" value="<?= e($gwBase) ?>" placeholder="http://127.0.0.1:3000"></div>
+      <div class="field"><span class="lbl">Auth header</span>
+        <input type="text" name="pw_auth_header" value="<?= e($gwHdr) ?>" placeholder="apikey">
+        <span class="text-muted" style="font-size:11.5px">Header name the gateway expects, or <code>bearer</code>.</span></div>
+      <div class="field"><span class="lbl">API key <?= $gwKey !== '' ? '<span class="pill green" style="margin-left:6px">••• set</span>' : '' ?></span>
+        <input type="text" name="pw_api_key" autocomplete="off" placeholder="<?= $gwKey !== '' ? 'Leave blank to keep current' : 'Gateway API key' ?>"></div>
+    </div>
+    <button type="submit" class="btn btn-primary">Save gateway</button>
+  </form>
 </div>
 
 <div class="card">

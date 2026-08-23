@@ -18,7 +18,9 @@ client_header('Dashboard', 'dashboard', $CLIENT);
 page_head('Welcome, ' . $CLIENT['name']);
 
 if (!client_ready($CLIENT)): ?>
-  <div class="alert info">Your WhatsApp number isn't connected yet. Gildana needs to add your API credentials before you can send campaigns.</div>
+  <div class="alert info"><?= channel_is_personal($CLIENT)
+      ? 'Your WhatsApp number isn\'t linked yet. Go to <strong>Settings → My WhatsApp Number</strong> and scan the QR code to start sending.'
+      : 'Your WhatsApp number isn\'t connected yet. ' . e(BRAND_PARENT) . ' needs to add your API credentials before you can send campaigns.' ?></div>
 <?php endif; ?>
 
 <div class="stats-row">

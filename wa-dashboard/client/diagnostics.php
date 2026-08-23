@@ -3,6 +3,7 @@ declare(strict_types=1);
 require __DIR__ . '/_init.php';
 require __DIR__ . '/../includes/ai.php';
 require_once __DIR__ . '/../includes/push.php';
+require_once __DIR__ . '/../includes/channel.php';
 
 $cid = (int) $CLIENT['id'];
 
@@ -33,11 +34,33 @@ $add = function (string $state, string $title, string $detail, string $fix = '')
     $checks[] = compact('state', 'title', 'detail', 'fix');
 };
 
-// 1. WhatsApp credentials
-if ($CLIENT['access_token_enc'] && $CLIENT['phone_number_id']) {
+// 1. WhatsApp connection — depends on which channel this account sends through.
+if (channel_is_personal($CLIENT)) {
+    $st = (string) ($CLIENT['personal_status'] ?? 'disconnected');
+    if ($st === 'connected') {
+        $num = $CLIENT['personal_msisdn'] ? ' (+' . $CLIENT['personal_msisdn'] . ')' : '';
+        $add('ok', 'Your WhatsApp number is linked', 'Sending from your own number' . $num . '.', '');
+    } else {
+        $add('fail', 'Your WhatsApp number is not linked',
+            'Nothing can send until you scan the QR code.',
+            'Go to Settings → My WhatsApp Number and tap "Connect my WhatsApp".');
+    }
+    // Pacing: explain the current state rather than showing it as a problem.
+    $size  = (int) ($CLIENT['slot_size'] ?: 15);
+    $pause = (int) ($CLIENT['slot_pause_sec'] ?: 180);
+    if (slot_cooling($CLIENT)) {
+        $wait = max(0, strtotime((string) $CLIENT['next_slot_at']) - time());
+        $add('warn', 'Sending is paused between batches',
+            "Waiting {$wait}s before the next batch of {$size}.",
+            'This is normal — it protects your number from being banned for sending too fast.');
+    } else {
+        $add('ok', 'Sending pace',
+            "Up to {$size} messages at a time, then a " . round($pause / 60, 1) . " minute pause.", '');
+    }
+} elseif ($CLIENT['access_token_enc'] && $CLIENT['phone_number_id']) {
     $add('ok', 'WhatsApp connected', 'Phone Number ID + access token are set.', '');
 } else {
-    $add('fail', 'WhatsApp not connected', 'Missing phone number ID or access token — nothing can send.', 'Contact Gildana to add your WhatsApp API credentials.');
+    $add('fail', 'WhatsApp not connected', 'Missing phone number ID or access token — nothing can send.', 'Contact support to add your WhatsApp API credentials.');
 }
 
 // 2. Credits

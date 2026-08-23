@@ -138,7 +138,9 @@ client_header('New Campaign', 'campaigns', $CLIENT);
 page_head('New Campaign');
 
 if (!client_ready($CLIENT)): ?>
-  <div class="alert error">Your WhatsApp account isn't connected yet. Contact Gildana before sending campaigns.</div>
+  <div class="alert error"><?= channel_is_personal($CLIENT)
+      ? 'Your WhatsApp number isn\'t linked yet. Go to <strong>Settings → My WhatsApp Number</strong> and scan the QR code first.'
+      : 'Your WhatsApp account isn\'t connected yet. Contact ' . e(BRAND_PARENT) . ' before sending campaigns.' ?></div>
   <?php layout_footer(); exit;
 endif;
 

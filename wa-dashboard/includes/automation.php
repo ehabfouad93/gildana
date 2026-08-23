@@ -467,6 +467,13 @@ function automation_handle_inbound(array $client, array $contact, array $message
                     if (mb_strtolower(trim((string) ($b['title'] ?? ''))) === mb_strtolower(trim($text))) { $idx = $bi; break; }
                 }
             }
+            if ($idx < 0 && preg_match('/^\s*([1-9])\b/u', $text, $nm)) {
+                // A personal number can't send interactive buttons, so they go out as a
+                // numbered list — "2" means the second option. Harmless on Cloud too,
+                // where someone may type the number instead of tapping.
+                $n = (int) $nm[1] - 1;
+                if (isset($btns[$n])) $idx = $n;
+            }
             if ($idx >= 0 && isset($btns[$idx])) {
                 $run['score'] = (int) $run['score'] + (int) ($btns[$idx]['points'] ?? 0);
                 $next = $btns[$idx]['next_step_id'] ?? $next;

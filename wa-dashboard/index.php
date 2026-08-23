@@ -53,7 +53,7 @@ $appName = brand_name();
     <div class="login-brand"><?= brand_logo('stack', 62, './', true) ?></div>
     <h1><?= e(BRAND_TAGLINE) ?></h1>
     <?php if (isset($_GET['disabled'])): ?>
-      <div class="alert error">This account is disabled. Contact Gildana.</div>
+      <div class="alert error">This account is disabled. Contact <?= e(BRAND_PARENT) ?>.</div>
     <?php endif; ?>
     <?php if ($error): ?>
       <div class="alert error"><?= e($error) ?></div>

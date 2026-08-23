@@ -52,6 +52,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         redirect('client.php?id=' . $id);
     }
 
+    if ($action === 'save_channel') {
+        $ch = ($_POST['channel'] ?? 'cloud') === 'personal' ? 'personal' : 'cloud';
+        // Clamp the pacing: a slot of 0 would stall sending, and an unbounded slot would
+        // defeat the protection this channel exists to provide.
+        $size  = max(1, min(50, (int) ($_POST['slot_size'] ?? 15)));
+        $pause = max(30, min(3600, (int) ($_POST['slot_pause_sec'] ?? 180)));
+        db_run("UPDATE clients SET channel=?, slot_size=?, slot_pause_sec=? WHERE id=?", [$ch, $size, $pause, $id]);
+        flash($ch === 'personal'
+            ? 'Switched to the client\'s own WhatsApp number. They now link it from their Settings.'
+            : 'Switched to the WhatsApp Cloud API.');
+        redirect('client.php?id=' . $id . '#channel');
+    }
+
     if ($action === 'save_credentials') {
         $token = (string) ($_POST['access_token'] ?? '');
         $secret= (string) ($_POST['app_secret'] ?? '');
@@ -183,8 +196,66 @@ layout_header('Client · ' . $client['name'], 'admin', 'clients');
   <div class="stat-tile"><span class="lbl">Last Campaign</span><span class="val" style="font-size:14px;padding-top:8px"><?= $lastCampaign ? e($lastCampaign['name']) : '—' ?></span><span class="sub"><?= $lastCampaign ? e(date('d M Y', strtotime((string) $lastCampaign['created_at']))) : '' ?></span></div>
 </div>
 
+<!-- ── Sending channel ── -->
+<?php $isPersonal = ($client['channel'] ?? 'cloud') === 'personal'; ?>
+<div class="card" id="channel">
+  <h2>Sending Channel</h2>
+  <p class="text-muted" style="font-size:12.5px;margin:-6px 0 14px">
+    How this account's messages leave the system. Campaigns, Automations, the Lead Qualifier
+    and the Inbox all follow this setting.
+  </p>
+  <form method="post">
+    <?= csrf_field() ?><input type="hidden" name="action" value="save_channel">
+    <div class="field"><span class="lbl">Channel</span>
+      <select name="channel" id="ch-sel" onchange="chToggle()">
+        <option value="cloud" <?= $isPersonal ? '' : 'selected' ?>>WhatsApp Cloud API (official)</option>
+        <option value="personal" <?= $isPersonal ? 'selected' : '' ?>>Client's own personal number</option>
+      </select>
+    </div>
+
+    <div id="ch-personal" style="display:<?= $isPersonal ? 'block' : 'none' ?>">
+      <div class="alert error" style="font-size:12.5px">
+        <strong>Read this before switching.</strong> Sending from a personal number goes through a
+        WhatsApp Web session, which is against WhatsApp's Terms — the number can be banned,
+        and the risk rises the faster and more uniformly it sends. The limits below are the
+        protection: messages go out in small batches with a pause between them, and one batch is
+        shared across campaigns, automations and the qualifier. There are no approved templates
+        and no 24-hour window on this channel, so templates are sent as plain text.
+      </div>
+      <div class="grid2">
+        <div class="field"><span class="lbl">Messages per batch</span>
+          <input type="number" name="slot_size" min="1" max="50" value="<?= (int) ($client['slot_size'] ?: 15) ?>">
+          <span class="text-muted" style="font-size:11.5px">15 is a sensible default.</span></div>
+        <div class="field"><span class="lbl">Pause between batches (seconds)</span>
+          <input type="number" name="slot_pause_sec" min="30" max="3600" value="<?= (int) ($client['slot_pause_sec'] ?: 180) ?>">
+          <span class="text-muted" style="font-size:11.5px">180 = 3 minutes.</span></div>
+      </div>
+      <div class="field"><span class="lbl">Connection</span>
+        <?php
+          $pwSt = (string) ($client['personal_status'] ?? 'disconnected');
+          $pill = $pwSt === 'connected' ? 'green' : 'amber';
+          $lbl  = $pwSt === 'connected'
+                ? 'Linked' . ($client['personal_msisdn'] ? ' · +' . e((string) $client['personal_msisdn']) : '')
+                : ($pwSt === 'qr_pending' ? 'Waiting for the QR to be scanned' : 'Not linked yet');
+        ?>
+        <div><span class="pill <?= $pill ?>"><?= $lbl ?></span></div>
+        <span class="text-muted" style="font-size:11.5px">The client links their phone themselves under
+          <strong>Settings → My WhatsApp Number</strong>. You never handle their number.</span>
+      </div>
+    </div>
+    <button type="submit" class="btn btn-primary mt10">Save channel</button>
+  </form>
+</div>
+<script>
+function chToggle(){ document.getElementById('ch-personal').style.display =
+  document.getElementById('ch-sel').value === 'personal' ? 'block' : 'none'; }
+</script>
+
 <!-- ── Credentials ── -->
-<div class="card" id="credentials">
+<div class="card" id="credentials" style="<?= $isPersonal ? 'opacity:.55' : '' ?>">
+  <?php if ($isPersonal): ?>
+    <div class="alert info" style="font-size:12.5px">Not used while this account sends from its own number — kept in case you switch back.</div>
+  <?php endif; ?>
   <h2>WhatsApp API Credentials</h2>
   <p class="text-muted" style="font-size:12.5px;margin:-6px 0 16px">Lets the dashboard send campaigns from this client's own number. Secrets are stored encrypted.</p>
   <form method="post">
