@@ -104,10 +104,12 @@ function pw_request(string $method, string $path, ?array $body = null, int $time
     $json = json_decode((string) $raw, true);
     $err  = '';
     if ($http < 200 || $http >= 300) {
-        $err = is_array($json)
-            ? (string) ($json['message'] ?? $json['error'] ?? ('HTTP ' . $http))
-            : ('HTTP ' . $http);
-        if (is_array($err)) $err = (string) reset($err);
+        // The gateway nests the useful text under response.message (often an array) while
+        // `error` is just "Bad Request" — surface the detail or there is nothing to act on.
+        $detail = $json['response']['message'] ?? $json['message'] ?? $json['error'] ?? null;
+        if (is_array($detail)) $detail = implode(' · ', array_map(fn($m) => is_scalar($m) ? (string) $m : json_encode($m), $detail));
+        $err = trim((string) ($detail ?? '')) !== '' ? (string) $detail : ('HTTP ' . $http);
+        error_log('pw_request ' . $method . ' ' . $path . ' → ' . $http . ' ' . substr((string) $raw, 0, 400));
     }
     return ['http' => $http, 'json' => is_array($json) ? $json : null, 'error' => $err];
 }
@@ -130,12 +132,20 @@ function pw_instance_create(array $client): array
     // app_base_url() prefers config('base_url') and falls back to the current request.
     $hook = rtrim(app_base_url(), '/') . '/webhook_personal.php?k=' . $secret;
 
+    // Evolution v2 payload shape:
+    //   - `integration` is REQUIRED (v1 had no such field) — omitting it returns 400.
+    //   - the webhook moved from flat keys (webhook / webhook_by_events / events) to a
+    //     nested object in v2.2+.
     $res = pw_request('POST', pw_path('create', $inst), [
         'instanceName' => $inst,
         'qrcode'       => true,
-        'webhook'      => $hook,
-        'webhook_by_events' => false,
-        'events'       => ['MESSAGES_UPSERT', 'CONNECTION_UPDATE'],
+        'integration'  => 'WHATSAPP-BAILEYS',
+        'webhook'      => [
+            'url'      => $hook,
+            'byEvents' => false,
+            'base64'   => false,
+            'events'   => ['MESSAGES_UPSERT', 'CONNECTION_UPDATE'],
+        ],
     ]);
     // An instance that already exists is not an error — we just reuse it.
     $exists = $res['http'] === 403 || $res['http'] === 409
