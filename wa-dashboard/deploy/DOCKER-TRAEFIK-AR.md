@@ -166,14 +166,37 @@ exit
 
 ---
 
-## خطوة 7 — الكرون (كل دقيقة)
+## خطوة 7 — الـ worker (بيبعت الحملات)
+
+**مش محتاج كرون على السيرفر** — الـ worker بقى كونتينر ضمن الـ stack، بيشتغل كل دقيقة
+لوحده وبيقوم تاني لو وقع أو لو السيرفر اترستِرت.
+
+اتأكد إنه شغال:
 
 ```
-( crontab -l 2>/dev/null; echo "* * * * * docker exec revenect php /var/www/html/cron/dispatch.php >/dev/null 2>&1" ) | crontab -
+docker ps | grep revenect-cron
 ```
 
 ```
-crontab -l
+docker logs revenect-cron --tail 5
+```
+
+**اختبار فوري:**
+
+```
+docker exec revenect php /var/www/html/cron/dispatch.php
+```
+
+لازم يطبع `Campaigns: sent=0 failed=0`.
+
+> **ليه مش كرون عادي؟** صورة الـ VPS دي مش فيها خدمة `cron` أصلاً — يعني سطر الـ crontab
+> بيتقبل بس عمره ما بيشتغل، والداشبورد بيقول *"Cron never ran"* ومفيش أي رسالة بتتبعت.
+> الكونتينر بيشيل الاعتماد ده كله.
+
+**لو كنت ضفت سطر كرون قبل كده، امسحه** عشان ميشتغلش مرتين:
+
+```
+crontab -l | grep -v dispatch.php | crontab -
 ```
 
 ---

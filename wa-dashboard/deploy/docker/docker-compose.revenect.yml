@@ -39,6 +39,35 @@ services:
       - traefik.http.routers.revenect.tls.certresolver=${TRAEFIK_CERTRESOLVER}
       - traefik.http.services.revenect.loadbalancer.server.port=80
 
+  # The send worker, as part of the stack rather than a host crontab entry.
+  #
+  # Host cron is a dependency that can silently not exist: this VPS image ships without
+  # the cron daemon, so the crontab line was accepted and never ran — and nothing sends
+  # without this worker. Running it here means it starts with the stack, restarts on
+  # failure, and survives a reboot.
+  #
+  # Runs as www-data so the files it touches (cron/.heartbeat) stay owned by the same
+  # user Apache runs as. Overlap is not a concern: dispatch.php takes a MySQL
+  # GET_LOCK('wa_dispatch') and exits immediately if another run holds it.
+  revenect-cron:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    container_name: revenect-cron
+    restart: unless-stopped
+    user: www-data
+    volumes:
+      - ../..:/var/www/html
+    environment:
+      TZ: ${TZ:-Africa/Cairo}
+    depends_on:
+      revenect-db:
+        condition: service_healthy
+    networks:
+      - revenect
+    command: >-
+      sh -c 'while true; do php /var/www/html/cron/dispatch.php >/dev/null 2>&1; sleep 60; done'
+
   revenect-db:
     image: mariadb:11
     container_name: revenect-db
