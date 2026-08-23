@@ -105,3 +105,27 @@ function campaign_refresh_counts(int $campaignId): void
         );
     }
 }
+
+/**
+ * Render a plain-text campaign message for one contact (personal channel only).
+ *
+ * Cloud campaigns personalise through numbered template parameters ({{1}}, {{2}});
+ * a personal number sends ordinary text, so it uses readable names instead —
+ * {{name}}, {{phone}}, and any contact attribute by key.
+ */
+function campaign_render_text(string $body, array $contact): string
+{
+    $attrs = [];
+    if (!empty($contact['attributes'])) {
+        $decoded = is_array($contact['attributes'])
+            ? $contact['attributes']
+            : json_decode((string) $contact['attributes'], true);
+        if (is_array($decoded)) $attrs = $decoded;
+    }
+    $map = ['name' => trim((string) ($contact['name'] ?? '')), 'phone' => (string) ($contact['phone_e164'] ?? '')];
+    foreach ($attrs as $k => $v) if (is_scalar($v)) $map[strtolower((string) $k)] = (string) $v;
+
+    return (string) preg_replace_callback('/\{\{\s*([a-z0-9_]+)\s*\}\}/i', function ($m) use ($map) {
+        return $map[strtolower($m[1])] ?? '';
+    }, $body);
+}

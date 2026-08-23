@@ -26,6 +26,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
     $name       = trim((string) ($_POST['name'] ?? ''));
     $templateId = (int) ($_POST['template_id'] ?? 0);
     $listId     = (int) ($_POST['list_id'] ?? 0);
+    // A personal number has no approved templates — the campaign carries its own text.
+    $isPersonal = channel_is_personal($CLIENT);
+    $bodyText   = trim((string) ($_POST['body_text'] ?? ''));
     $when       = (string) ($_POST['when'] ?? 'now');
     $schedRaw   = trim((string) ($_POST['scheduled_at'] ?? ''));
 
@@ -39,12 +42,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
         else $scheduledAt = date('Y-m-d H:i:s', $ts);
     }
 
-    if ($name === '')          $err = $err ?: 'Enter a campaign name.';
-    elseif (!$template)        $err = $err ?: 'Choose an approved template.';
-    elseif (!$list)            $err = $err ?: 'Choose an audience list.';
+    if ($name === '')                      $err = $err ?: 'Enter a campaign name.';
+    elseif ($isPersonal && $bodyText === '') $err = $err ?: 'Write the message you want to send.';
+    elseif (!$isPersonal && !$template)      $err = $err ?: 'Choose an approved template.';
+    elseif (!$list)                          $err = $err ?: 'Choose an audience list.';
 
     // ── Build the FULL field config from POST (header media/text/location, body vars,
-    //    dynamic buttons) so templates with an image header send correctly. ──
+    //    dynamic buttons) so templates with an image header send correctly.
+    //    Skipped entirely on the personal channel, which sends plain text. ──
     $tplComponents = $template ? (json_decode((string) $template['components'], true) ?: []) : [];
     $spec = wa_template_spec($tplComponents);
 
@@ -82,7 +87,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
     }
 
     // Catch the missing-header-media case here rather than letting Meta reject every message.
-    if ($template && in_array($hf, ['IMAGE', 'VIDEO', 'DOCUMENT'], true) && $varMap['header_media'] === '') {
+    if (!$isPersonal && $template && in_array($hf, ['IMAGE', 'VIDEO', 'DOCUMENT'], true) && $varMap['header_media'] === '') {
         $err = $err ?: 'This template has a ' . strtolower($hf) . ' header — upload or paste a ' . strtolower($hf) . ' URL before sending.';
     }
 
@@ -100,9 +105,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
             try {
                 $status = $scheduledAt ? 'scheduled' : 'sending';
                 $campaignId = db_insert(
-                    "INSERT INTO campaigns (client_id,name,template_id,list_id,variable_map,status,scheduled_at,total_count,created_at,started_at)
-                     VALUES (?,?,?,?,?,?,?,?,NOW(),?)",
-                    [$cid, $name, $templateId, $listId, json_encode($varMap, JSON_UNESCAPED_UNICODE),
+                    "INSERT INTO campaigns (client_id,name,template_id,body_text,list_id,variable_map,status,scheduled_at,total_count,created_at,started_at)
+                     VALUES (?,?,?,?,?,?,?,?,?,NOW(),?)",
+                    [$cid, $name, $isPersonal ? null : $templateId, $isPersonal ? $bodyText : null,
+                     $listId, json_encode($varMap, JSON_UNESCAPED_UNICODE),
                      $status, $scheduledAt, count($recipients), $scheduledAt ? null : date('Y-m-d H:i:s')]
                 );
 
@@ -111,7 +117,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
                      VALUES (?,?,?,?,?, 'queued', NOW())"
                 );
                 foreach ($recipients as $c) {
-                    $components = campaign_components($varMap, $tplComponents, $c);
+                    // Personal: store the finished text per recipient (same slot as the
+                    // Cloud path's components) so the worker sends without re-rendering.
+                    $components = $isPersonal
+                        ? ['text' => campaign_render_text($bodyText, $c)]
+                        : campaign_components($varMap, $tplComponents, $c);
                     $ins->execute([
                         $campaignId, $cid, (int) $c['id'], (string) $c['phone_e164'],
                         json_encode($components, JSON_UNESCAPED_UNICODE),
@@ -144,7 +154,9 @@ if (!client_ready($CLIENT)): ?>
   <?php layout_footer(); exit;
 endif;
 
-if (!$templates): ?>
+$PERSONAL = channel_is_personal($CLIENT);
+// Templates are a Cloud API concept — a personal number has none and needs none.
+if (!$PERSONAL && !$templates): ?>
   <div class="alert info">You have no <strong>approved</strong> templates yet. Go to <a href="templates.php">Templates</a> and sync them first.</div>
   <?php layout_footer(); exit;
 endif;
@@ -160,27 +172,46 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
   <input type="hidden" name="action" value="create">
 
   <div class="card">
-    <h2>1 · Campaign &amp; Template</h2>
+    <h2>1 · Campaign &amp; Message</h2>
     <div class="field"><span class="lbl">Campaign Name</span><input type="text" name="name" value="<?= old('name') ?>" placeholder="e.g. July Promo" required></div>
-    <div class="field">
-      <span class="lbl">Template</span>
-      <select name="template_id" id="template_id" required onchange="onTemplate()">
-        <option value="">— choose an approved template —</option>
-        <?php foreach ($templates as $t): ?>
-          <option value="<?= (int) $t['id'] ?>"
-                  data-body="<?= e((string) $t['body_text']) ?>" data-lang="<?= e((string) $t['language']) ?>">
-            <?= e((string) $t['wa_name']) ?> (<?= e((string) $t['language']) ?>)
-          </option>
-        <?php endforeach; ?>
-      </select>
-    </div>
-    <div id="tpl-preview" class="mt10" style="display:none">
-      <span class="lbl">Preview</span>
-      <div style="background:var(--paper);border-radius:10px;padding:14px;white-space:pre-wrap;font-size:13.5px" id="tpl-preview-body"></div>
-    </div>
+
+    <?php if ($PERSONAL): ?>
+      <!-- Personal number: no approved templates exist, so the message is written here. -->
+      <div class="field">
+        <span class="lbl">Message</span>
+        <textarea name="body_text" id="body_text" rows="6" required
+                  placeholder="أهلاً {{name}} 👋&#10;عرض خاص النهاردة…"><?= old('body_text') ?></textarea>
+        <span class="text-muted" style="font-size:12px">
+          Personalise with <code>{{name}}</code>, <code>{{phone}}</code>, or any contact attribute
+          (e.g. <code>{{city}}</code>). Blank if the contact has no value.
+        </span>
+      </div>
+      <div class="alert info" style="font-size:12.5px">
+        Sending from <strong>your own number</strong> — no template approval needed. Messages go out
+        <strong><?= (int) ($CLIENT['slot_size'] ?: 15) ?> at a time</strong>, then pause
+        <strong><?= round((int) ($CLIENT['slot_pause_sec'] ?: 180) / 60, 1) ?> minutes</strong>, to protect the number.
+      </div>
+    <?php else: ?>
+      <div class="field">
+        <span class="lbl">Template</span>
+        <select name="template_id" id="template_id" required onchange="onTemplate()">
+          <option value="">— choose an approved template —</option>
+          <?php foreach ($templates as $t): ?>
+            <option value="<?= (int) $t['id'] ?>"
+                    data-body="<?= e((string) $t['body_text']) ?>" data-lang="<?= e((string) $t['language']) ?>">
+              <?= e((string) $t['wa_name']) ?> (<?= e((string) $t['language']) ?>)
+            </option>
+          <?php endforeach; ?>
+        </select>
+      </div>
+      <div id="tpl-preview" class="mt10" style="display:none">
+        <span class="lbl">Preview</span>
+        <div style="background:var(--paper);border-radius:10px;padding:14px;white-space:pre-wrap;font-size:13.5px" id="tpl-preview-body"></div>
+      </div>
+    <?php endif; ?>
   </div>
 
-  <div class="card" id="vars-card" style="display:none">
+  <div class="card" id="vars-card" style="display:<?= $PERSONAL ? 'none' : 'none' ?>"<?= $PERSONAL ? ' hidden' : '' ?>>
     <h2>2 · Template Fields</h2>
     <p class="text-muted" style="font-size:12.5px;margin:-6px 0 14px">Fill everything this template needs — header media, variables and dynamic buttons. Variables can be a fixed value or pulled from each contact's name / attribute (with a fallback if empty).</p>
     <div id="header-wrap"></div>
@@ -236,6 +267,8 @@ let reach = 0;
 const eatt = s => (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
 
 function onTemplate(){
+  const sel = document.getElementById('template_id');
+  if (!sel) return;                     // personal channel: no template picker on the page
   const opt = document.querySelector('#template_id option:checked');
   const body = opt?.dataset.body || '';
   const prev = document.getElementById('tpl-preview');

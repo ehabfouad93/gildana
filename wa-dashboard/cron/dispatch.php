@@ -107,9 +107,13 @@ try {
             $campId = (int) $m['campaign_id'];
             $touchedCampaigns[$campId] = true;
             if (!isset($tplCache[$campId])) {
-                $row = db_row("SELECT t.wa_name, t.language, t.components, t.body_text, c.variable_map
-                                 FROM campaigns c JOIN templates t ON t.id=c.template_id WHERE c.id=?", [$campId]);
-                if ($row) {
+                // LEFT JOIN: a personal-channel campaign has no template — it carries its
+                // own text in campaigns.body_text.
+                $row = db_row("SELECT t.wa_name, t.language, t.components, t.body_text,
+                                      c.variable_map, c.body_text AS campaign_text
+                                 FROM campaigns c LEFT JOIN templates t ON t.id=c.template_id
+                                WHERE c.id=?", [$campId]);
+                if ($row && !empty($row['wa_name'])) {
                     $comps = json_decode((string) $row['components'], true) ?: [];
                     $row['has_media'] = wa_template_has_media($comps);
                     // Upload the header image ONCE per campaign and send by media id. Sending a
@@ -126,17 +130,26 @@ try {
                 $tplCache[$campId] = $row;
             }
             $tpl = $tplCache[$campId];
-            if (!$tpl) { db_run("UPDATE campaign_messages SET status='failed', error_code='no_template', error_title='Template missing', updated_at=NOW() WHERE id=?", [(int) $m['id']]); $failedTotal++; continue; }
+            $plainText = trim((string) ($tpl['campaign_text'] ?? ''));
+            if (!$tpl || ($plainText === '' && empty($tpl['wa_name']))) {
+                db_run("UPDATE campaign_messages SET status='failed', error_code='no_template', error_title='Template missing', updated_at=NOW() WHERE id=?", [(int) $m['id']]);
+                $failedTotal++; continue;
+            }
             if (credits_adjust($cid, -1, 'send', $campId) === null) {
                 db_run("UPDATE campaign_messages SET status='failed', error_code='no_credits', error_title='Insufficient credits', updated_at=NOW() WHERE id=?", [(int) $m['id']]);
                 $failedTotal++; $noCreditClients[$cid] = (string) $client['name']; continue;
             }
             if (!empty($tpl['has_media'])) $anyMedia = true;
             $comps = json_decode((string) $m['rendered_components'], true) ?: [];
-            $comps = wa_apply_media_id($comps, $tpl['media_id'] ?? null);   // no-op without an id
+            if (!isset($comps['text'])) {
+                $comps = wa_apply_media_id($comps, $tpl['media_id'] ?? null);   // no-op without an id
+            }
             $items[(int) $m['id']] = [
-                'to' => (string) $m['phone_e164'], 'name' => (string) $tpl['wa_name'], 'lang' => (string) $tpl['language'],
-                'components' => $comps,
+                'to' => (string) $m['phone_e164'],
+                'name' => (string) ($tpl['wa_name'] ?: 'Message'), 'lang' => (string) ($tpl['language'] ?? 'en'),
+                // Set only for plain-text (personal channel) campaigns.
+                'text' => (string) ($comps['text'] ?? ''),
+                'components' => isset($comps['text']) ? [] : $comps,
                 'campId' => $campId, 'contact' => (int) $m['contact_id'],
                 // Used only by the personal channel, which renders the template to text.
                 'tpl' => $tpl,
@@ -159,9 +172,11 @@ try {
                 $firstChunk = false;
                 $res = [];
                 foreach ($chunk as $mid => $it) {
-                    $res[$mid] = channel_send_template(
-                        $client, (string) $it['to'], $it['tpl'], $it['cfg'], $it['contact_row'], 'campaign_resolve_value'
-                    );
+                    // A plain-text campaign already has its text rendered per recipient at
+                    // creation; anything else is a template rendered to text.
+                    $res[$mid] = $it['text'] !== ''
+                        ? channel_send_text($client, (string) $it['to'], $it['text'])
+                        : channel_send_template($client, (string) $it['to'], $it['tpl'], $it['cfg'], $it['contact_row'], 'campaign_resolve_value');
                 }
             } else {
                 $res = wa_send_template_batch($client, $chunk);
@@ -192,7 +207,8 @@ try {
                     $failedTotal++;
                 }
                 if ((int) $it['contact'] > 0) {
-                    msg_log($cid, (int) $it['contact'], 'out', '📄 Template: ' . $it['name'], [
+                    msg_log($cid, (int) $it['contact'], 'out',
+                        $it['text'] !== '' ? $it['text'] : '📄 Template: ' . $it['name'], [
                         'type' => 'template', 'source' => 'campaign',
                         'status' => $r['ok'] ? 'sent' : 'failed', 'wamid' => $r['wamid'] ?? null,
                         'error' => $r['ok'] ? null : (string) $r['error_title'],
