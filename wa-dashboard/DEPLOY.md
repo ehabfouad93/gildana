@@ -1,5 +1,9 @@
 # Deploy & Test on a Real Host
 
+> **On a VPS?** Use **[`deploy/VPS-SETUP.md`](deploy/VPS-SETUP.md)** instead — one script
+> installs nginx + PHP + MariaDB, creates the database and runs every migration.
+> The guide below is for cPanel / shared hosting.
+
 A step-by-step for putting the WhatsApp dashboard live (cPanel / shared or VPS) and
 running a real end-to-end test with WhatsApp. Times assume a cPanel host; adapt paths
 for your setup.
