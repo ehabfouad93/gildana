@@ -12,8 +12,10 @@ declare(strict_types=1);
  * API key, and optional endpoint/field overrides so a different gateway vendor can be used
  * without code changes. A client never sees a URL or a token — they only scan a QR.
  *
- * The base URL should point at loopback (http://127.0.0.1:3000) when the gateway runs on
- * the same VPS: this process holds clients' live WhatsApp sessions and must not be exposed.
+ * The base URL is the gateway's address as seen FROM THIS APP. When both run as Docker
+ * containers that is the service name on the shared network (http://evolution-api:8080) —
+ * NOT 127.0.0.1, which inside a container means the container itself. The gateway holds
+ * clients' live WhatsApp sessions and must never be published to the internet.
  *
  * Every pw_send_* returns the same array shape as wa_send_* so callers can't tell them apart.
  */

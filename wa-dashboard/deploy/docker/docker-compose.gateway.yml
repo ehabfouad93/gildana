@@ -1,0 +1,78 @@
+# WhatsApp Web gateway (Evolution API) for the personal-number channel.
+#
+#   docker compose -f docker-compose.revenect.yml -f docker-compose.gateway.yml up -d
+#
+# Deliberately publishes NO ports. The dashboard reaches it over the internal `revenect`
+# network as http://evolution-api:8080 — this process holds clients' live WhatsApp
+# sessions, so anything that can reach it can send from their numbers and read their chats.
+#
+# Set in .env alongside the existing values:
+#   EVOLUTION_API_KEY=<a long random string>   (openssl rand -hex 24)
+#   EVOLUTION_DB_PASS=<another one>
+#
+# ⚠️ RAM: this adds Evolution + Postgres + Redis (~700MB-1GB). On KVM 1 (4GB, with n8n
+# already resident) that is workable but leaves little headroom — watch `docker stats`.
+
+services:
+  evolution-api:
+    image: atendai/evolution-api:v2.1.1
+    container_name: evolution-api
+    restart: unless-stopped
+    environment:
+      # Auth — this key is what the dashboard sends in the `apikey` header.
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY}
+      SERVER_URL: http://evolution-api:8080
+
+      # Sessions must survive a restart, otherwise every client re-scans their QR.
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://evolution:${EVOLUTION_DB_PASS}@evolution-db:5432/evolution
+      DATABASE_CONNECTION_CLIENT_NAME: evolution
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "false"     # the dashboard stores messages itself
+      DATABASE_SAVE_MESSAGE_UPDATE: "false"
+      DATABASE_SAVE_DATA_CONTACTS: "false"
+      DATABASE_SAVE_DATA_CHATS: "false"
+
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://evolution-redis:6379/6
+      CACHE_REDIS_PREFIX_KEY: evolution
+      CACHE_LOCAL_ENABLED: "false"
+
+      # Per-instance webhooks are set by the dashboard when a client links their phone.
+      WEBHOOK_GLOBAL_ENABLED: "false"
+      LOG_LEVEL: ERROR
+      DEL_INSTANCE: "false"
+    volumes:
+      - evolution-instances:/evolution/instances
+    depends_on:
+      - evolution-db
+      - evolution-redis
+    networks:
+      - revenect
+
+  evolution-db:
+    image: postgres:16-alpine
+    container_name: evolution-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: evolution
+      POSTGRES_USER: evolution
+      POSTGRES_PASSWORD: ${EVOLUTION_DB_PASS}
+    volumes:
+      - evolution-db:/var/lib/postgresql/data
+    command: postgres -c max_connections=50 -c shared_buffers=128MB
+    networks:
+      - revenect
+
+  evolution-redis:
+    image: redis:7-alpine
+    container_name: evolution-redis
+    restart: unless-stopped
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru --save ""
+    networks:
+      - revenect
+
+volumes:
+  evolution-instances:
+  evolution-db:

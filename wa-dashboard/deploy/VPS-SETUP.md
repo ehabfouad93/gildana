@@ -166,7 +166,7 @@ https://app.yourdomain.com
 **Admin → Settings → Personal-Number Gateway**
 
 ```
-Gateway base URL : http://127.0.0.1:3000
+Gateway base URL : http://evolution-api:8080   # اسم الخدمة، مش 127.0.0.1
 Auth header      : apikey
 API key          : <المفتاح بتاع الجيتواي>
 ```
