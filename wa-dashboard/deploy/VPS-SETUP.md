@@ -50,16 +50,28 @@ ssh root@145.79.1.124
 
 ### الطريقة الأسهل — Git (بتخلّي التحديث بعد كده أمر واحد)
 
+> ⚠️ **مهم:** الشغل الجديد (قناة الرقم الشخصي + مجلد `deploy`) لسه على فرع
+> **`main-r0e4x9`** مش على `main`، لأن PR #1 لسه متعملّهوش merge.
+> لازم تحدّد الفرع بـ `-b`، وإلا هتجيب نسخة قديمة من غير الملفات دي أصلاً.
+> بعد ما تعمل merge للـ PR، امسح `-b main-r0e4x9` من الأمر.
+
 ```bash
 apt-get update && apt-get install -y git
 mkdir -p /var/www && cd /var/www
-git clone https://github.com/ehabfouad93/gildana.git tmp-repo
+git clone -b main-r0e4x9 https://github.com/ehabfouad93/gildana.git tmp-repo
 mv tmp-repo/wa-dashboard /var/www/app
 rm -rf tmp-repo
 ```
 
+اتأكد إن الملفات وصلت فعلاً قبل ما تكمّل:
+
+```bash
+ls /var/www/app/deploy/vps-setup.sh          # لازم يبقى موجود
+ls /var/www/app/migrations/011_*.sql          # قناة الرقم الشخصي
+```
+
 > ريبو خاص؟ استخدم Personal Access Token:
-> `git clone https://<TOKEN>@github.com/ehabfouad93/gildana.git`
+> `git clone -b main-r0e4x9 https://<TOKEN>@github.com/ehabfouad93/gildana.git`
 
 ### أو ZIP / SFTP
 
@@ -167,7 +179,7 @@ https://app.yourdomain.com/webhook_personal.php
 
 ```bash
 cd /var/www/app
-git pull
+git pull                       # لو نزّلت من فرع الـ PR: git pull origin main-r0e4x9
 php -r 'require "includes/config_loader.php";require "includes/helpers.php";
         require "includes/crypto.php";require "includes/db.php"; print_r(migrate());'
 chown -R www-data:www-data /var/www/app
