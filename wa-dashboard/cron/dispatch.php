@@ -121,7 +121,10 @@ try {
                     // shared hosting and shows up as #131053 on big sends. Resolved here (not at
                     // creation) so a campaign scheduled weeks out can't ship an expired id.
                     $row['media_id'] = null;
-                    if ($row['has_media']) {
+                    // Meta media ids are a Cloud API concept. A personal-channel client has no
+                    // Meta credentials, so resolving one there just fails with an
+                    // "Authentication Error" on every campaign — skip it.
+                    if ($row['has_media'] && !channel_is_personal($client)) {
                         $vm  = json_decode((string) $row['variable_map'], true) ?: [];
                         $url = trim((string) (campaign_config($vm)['header_media'] ?? ''));
                         if ($url !== '') $row['media_id'] = wa_resolve_media($client, $url);

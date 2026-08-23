@@ -269,12 +269,43 @@ function pw_send_image(array $client, string $to, string $link, string $caption 
         return ['ok' => false, 'wamid' => null, 'error_code' => 'no_gateway',
                 'error_title' => 'Personal-number gateway is not configured.', 'http' => 0];
     }
+
+    // Prefer sending the bytes over sending a URL.
+    //
+    // Handing the gateway a link makes it fetch the image back over the public internet,
+    // so anything between here and there breaks the send: a missing file 404s, and the
+    // failure surfaces as an opaque "AxiosError 404" from inside the gateway rather than
+    // as something the operator can act on. When the file is ours, read it directly.
+    $media = $link;
+    $path  = (string) parse_url($link, PHP_URL_PATH);
+    $isOurs = strpos($path, '/uploads/') !== false;
+
+    if ($isOurs) {
+        // wa_local_path_for_url() returns null both for "not ours" and "ours but missing",
+        // so the two must be told apart here — otherwise a missing file is quietly sent as
+        // a URL and 404s inside the gateway, which is the failure this replaces.
+        $local = function_exists('wa_local_path_for_url') ? wa_local_path_for_url($link) : null;
+        if ($local === null || !is_readable($local)) {
+            return ['ok' => false, 'wamid' => null, 'error_code' => 'media_missing',
+                    'error_title' => 'The image is missing on the server (' . basename($path) . '). Re-upload it in the campaign.',
+                    'http' => 0];
+        }
+        $bytes = @file_get_contents($local);
+        if ($bytes === false || $bytes === '') {
+            return ['ok' => false, 'wamid' => null, 'error_code' => 'media_unreadable',
+                    'error_title' => 'The image could not be read on the server (' . basename($path) . ').',
+                    'http' => 0];
+        }
+        $media = base64_encode($bytes);
+    }
+
     $res = pw_request('POST', pw_path('send_img', pw_instance($client)), [
         'number'    => preg_replace('/\D+/', '', $to),
         'mediatype' => 'image',
-        'media'     => $link,
+        'media'     => $media,
         'caption'   => $caption,
-    ], 45);
+        'fileName'  => basename((string) parse_url($link, PHP_URL_PATH)) ?: 'image.jpg',
+    ], 60);
     return pw_result($res);
 }
 

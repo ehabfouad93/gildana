@@ -686,7 +686,10 @@ function automation_send_outreach(int $maxPerRun = 0, int $onlyFlowId = 0): int
                 'to'   => (string) $r['phone_e164'], 'name' => $t['name'], 'lang' => $t['lang'],
                 // $client → header media is uploaded once and reused as a media id across
                 // the whole batch (wa_resolve_media caches on the file hash).
-                'components' => auto_build_components($t['components'], $t['cfg'], ['name' => $r['contact_name']], $client),
+                // $client → header media is uploaded once and reused as a media id (Cloud only;
+                // a personal client has no Meta account, so pass none and keep the link).
+                'components' => auto_build_components($t['components'], $t['cfg'], ['name' => $r['contact_name']],
+                                                      channel_is_personal($client) ? [] : $client),
                 // Used only by the personal channel, which renders the template to text.
                 'tpl' => ['wa_name' => $t['name'], 'language' => $t['lang'],
                           'components' => json_encode($t['components']), 'body_text' => (string) ($t['body_text'] ?? '')],
