@@ -45,25 +45,28 @@ mkdir -p /opt && cd /opt
 ```
 
 ```
-git clone -b main-r0e4x9 https://github.com/ehabfouad93/gildana.git tmp
+git clone -b main-r0e4x9 https://github.com/ehabfouad93/gildana.git gildana
 ```
 
-```
-mv tmp/wa-dashboard /opt/revenect && rm -rf tmp
-```
+> **متعملش `mv` للمجلد الداخلي!** لو نقلت `wa-dashboard` لبرّه، مجلد `.git` هيفضل
+> في مكانه القديم و`git pull` مش هيشتغل تاني. سيب الريبو كامل زي ما هو —
+> التطبيق بيشتغل من `/opt/gildana/wa-dashboard` عادي.
 
 ```
-ls /opt/revenect/deploy/docker/Dockerfile
+ls /opt/gildana/wa-dashboard/deploy/docker/Dockerfile
 ```
 
 آخر أمر لازم يطبع اسم الملف. لو **No such file** يبقى الفرع غلط.
+
+> لو الـ clone طلب Username/Password → الريبو خاص. اكتب اسم المستخدم، وفي
+> خانة Password **الصق الـ Personal Access Token** (مش الباسورد).
 
 ---
 
 ## خطوة 4 — ملف الإعدادات
 
 ```
-cd /opt/revenect/deploy/docker
+cd /opt/gildana/wa-dashboard/deploy/docker
 ```
 
 اعمل الملف (غيّر الدومين والقيم من خطوة 2):
@@ -188,7 +191,7 @@ Traefik هيجيب شهادة SSL لوحده (ممكن ياخد دقيقة أو�
 ## التحديث بعد كده
 
 ```
-cd /opt/revenect && git pull origin main-r0e4x9
+cd /opt/gildana && git pull origin main-r0e4x9
 ```
 
 ```
@@ -209,4 +212,4 @@ docker exec revenect php -r 'require "includes/config_loader.php";require "inclu
 | خطأ اتصال بالقاعدة | `docker logs revenect-db --tail 20` · اتأكد إن `host` = `revenect-db` |
 | الرام قربت تخلص | `docker stats --no-stream` |
 
-⚠️ خُد نسخة من `/opt/revenect/config.php` — المفتاح اللي جوّاه بيفك تشفير كل التوكنز.
+⚠️ خُد نسخة من `/opt/gildana/wa-dashboard/config.php` — المفتاح اللي جوّاه بيفك تشفير كل التوكنز.

@@ -88,25 +88,21 @@ cd /var/www
 ```
 
 ```
-git clone -b main-r0e4x9 https://github.com/ehabfouad93/gildana.git tmp-repo
+git clone -b main-r0e4x9 https://github.com/ehabfouad93/gildana.git gildana
 ```
 
 > لو طلب منك username/password → الريبو خاص. اعمل **Personal Access Token** من
 > GitHub (Settings → Developer settings → Tokens) واستخدم:
 > `git clone -b main-r0e4x9 https://<TOKEN>@github.com/ehabfouad93/gildana.git tmp-repo`
 
-```
-mv tmp-repo/wa-dashboard /var/www/app
-```
-
-```
-rm -rf tmp-repo
-```
+> **متنقلش `wa-dashboard` لبرّه بـ `mv`** — مجلد `.git` هيفضل في مكانه
+> و`git pull` مش هيشتغل تاني. التطبيق بيشتغل من مكانه عادي:
+> `/var/www/gildana/wa-dashboard`
 
 ### اتأكد إن الملفات وصلت
 
 ```
-ls /var/www/app/deploy/vps-setup.sh
+ls /var/www/gildana/wa-dashboard/deploy/vps-setup.sh
 ```
 
 لازم يطبع اسم الملف. لو قال **No such file** → الـ clone جاب فرع غلط، أعِد الخطوة
@@ -117,7 +113,7 @@ ls /var/www/app/deploy/vps-setup.sh
 # الخطوة 5 — التنصيب (أمر واحد)
 
 ```
-cd /var/www/app
+cd /var/www/gildana/wa-dashboard
 ```
 
 ```
@@ -170,7 +166,7 @@ https://app.yourdomain.com
 # ✅ اتأكد إن كل حاجة تمام
 
 ```
-php /var/www/app/cron/dispatch.php
+php /var/www/gildana/wa-dashboard/cron/dispatch.php
 ```
 
 لازم يطبع سطور زي `Campaigns: sent=0 failed=0`. لو طبع ده يبقى الشغل تمام.
@@ -185,9 +181,9 @@ php /var/www/app/cron/dispatch.php
 | `^[[200~` في أول السطر | امسحه قبل Enter، أو استخدم SSH من جهازك بدل الـ console |
 | صفحة بيضا / 500 | `tail -30 /var/log/nginx/app.yourdomain.com.error.log` |
 | n8n وقع | `systemctl stop nginx` فورًا وابعتلي ناتج `docker ps` |
-| نسيت باسورد القاعدة | `grep pass /var/www/app/config.php` |
+| نسيت باسورد القاعدة | `grep pass /var/www/gildana/wa-dashboard/config.php` |
 
 ---
 
-⚠️ **آخر حاجة:** خُد نسخة من `/var/www/app/config.php` على جهازك.
+⚠️ **آخر حاجة:** خُد نسخة من `/var/www/gildana/wa-dashboard/config.php` على جهازك.
 المفتاح اللي جوّاه بيفك تشفير كل توكنز واتساب — لو ضاع، كل العملاء هيدخّلوا بياناتهم تاني.
