@@ -6,11 +6,8 @@
 # Before `docker compose up`, set these in the same folder's .env file:
 #   REVENECT_DOMAIN=app.yourdomain.com
 #   REVENECT_DB_PASS=<a long random password>
-#   TRAEFIK_NETWORK=<the network Traefik is on>     e.g. root_default
-#   TRAEFIK_CERTRESOLVER=<the resolver n8n uses>    e.g. mytlschallenge
-#
-# The last two must match your existing n8n compose file — check with:
-#   docker inspect root-traefik-1 --format '{{json .Config.Labels}}' | tr ',' '\n'
+#   TRAEFIK_NETWORK=root_default          (confirmed on this server)
+#   TRAEFIK_CERTRESOLVER=mytlschallenge    (confirmed on this server)
 
 services:
   revenect:
@@ -34,15 +31,13 @@ services:
       - traefik.enable=true
       - traefik.docker.network=${TRAEFIK_NETWORK}
       - traefik.http.routers.revenect.rule=Host(`${REVENECT_DOMAIN}`)
+      # websecure = :443. No HTTP->HTTPS middleware here: this Traefik already redirects
+      # globally (--entrypoints.web.http.redirections.entryPoint.to=websecure), so adding
+      # our own would just duplicate it.
       - traefik.http.routers.revenect.entrypoints=websecure
       - traefik.http.routers.revenect.tls=true
       - traefik.http.routers.revenect.tls.certresolver=${TRAEFIK_CERTRESOLVER}
       - traefik.http.services.revenect.loadbalancer.server.port=80
-      # Send plain HTTP to HTTPS, same as n8n.
-      - traefik.http.routers.revenect-http.rule=Host(`${REVENECT_DOMAIN}`)
-      - traefik.http.routers.revenect-http.entrypoints=web
-      - traefik.http.routers.revenect-http.middlewares=revenect-https
-      - traefik.http.middlewares.revenect-https.redirectscheme.scheme=https
 
   revenect-db:
     image: mariadb:11

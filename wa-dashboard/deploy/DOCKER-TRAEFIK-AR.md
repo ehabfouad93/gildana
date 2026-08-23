@@ -15,20 +15,18 @@ A record: `app.yourdomain.com` → `145.79.1.124`
 
 ---
 
-## خطوة 2 — هات إعدادات Traefik الحالية
+## خطوة 2 — ✅ اتعملت خلاص
 
-محتاجين اسم الـ network واسم الـ certresolver اللي n8n مستخدمهم.
+القيم اتأكدت من السيرفر بتاعك:
 
-```
-docker inspect root-traefik-1 --format '{{json .Config.Labels}}' | tr ',' '\n' | grep -i cert
-```
+| | |
+|---|---|
+| Network | `root_default` |
+| certresolver | `mytlschallenge` |
+| entrypoints | `web` = :80 · `websecure` = :443 |
+| HTTP → HTTPS | Traefik بيعمله عالميًا (مش محتاجين نضيف حاجة) |
 
-```
-docker inspect root-n8n-1 --format '{{json .NetworkSettings.Networks}}' | tr ',' '\n' | head -5
-```
-
-**ابعتلي ناتج الأمرين دول** — منهم هنعرف نحط إيه في `.env`.
-(الشائع: network = `root_default` · certresolver = `mytlschallenge`)
+n8n شغال على `n8n.srv982416.hstgr.cloud` بنفس الإعدادات.
 
 ---
 
@@ -78,11 +76,13 @@ nano .env
 
 ```
 REVENECT_DOMAIN=app.yourdomain.com
-REVENECT_DB_PASS=ضع_باسورد_طويل_عشوائي_هنا
+REVENECT_DB_PASS=ضع_الباسورد_هنا
 TRAEFIK_NETWORK=root_default
 TRAEFIK_CERTRESOLVER=mytlschallenge
 TZ=Africa/Cairo
 ```
+
+> غيّر **`REVENECT_DOMAIN`** و **`REVENECT_DB_PASS`** بس — الباقي مظبوط لسيرفرك بالفعل.
 
 احفظ بـ **Ctrl+O** ثم **Enter** ثم **Ctrl+X**.
 
