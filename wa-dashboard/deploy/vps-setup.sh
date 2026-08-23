@@ -26,8 +26,23 @@ ok()   { echo "   ✓ $*"; }
 
 # ── 0. Don't break whatever already owns :80 / :443 (n8n's proxy, usually) ─────────
 info "Checking ports 80/443"
-PORT_OWNER="$(ss -ltnp 2>/dev/null | grep -E ':(80|443)\s' || true)"
-if [[ -n "$PORT_OWNER" ]] && ! echo "$PORT_OWNER" | grep -qi nginx; then
+# Not every image ships iproute2 (ss) or net-tools (netstat), and this box runs n8n in
+# Docker — so try each source in turn instead of depending on one tool being present.
+PORT_OWNER=""
+if command -v ss >/dev/null; then
+    PORT_OWNER="$(ss -ltnp 2>/dev/null | grep -E ':(80|443)[[:space:]]' || true)"
+elif command -v netstat >/dev/null; then
+    PORT_OWNER="$(netstat -ltnp 2>/dev/null | grep -E ':(80|443)[[:space:]]' || true)"
+fi
+# Docker publishes ports without them showing up under some tools' output.
+if command -v docker >/dev/null; then
+    DOCKER_PORTS="$(docker ps --format '{{.Names}} {{.Ports}}' 2>/dev/null | grep -E ':(80|443)->' || true)"
+    [[ -n "$DOCKER_PORTS" ]] && PORT_OWNER="${PORT_OWNER}"$'\n'"docker: ${DOCKER_PORTS}"
+fi
+if [[ -z "${PORT_OWNER// /}" ]] && ! command -v ss >/dev/null && ! command -v netstat >/dev/null && ! command -v docker >/dev/null; then
+    echo "   ⚠  Could not check the ports (no ss/netstat/docker). Verify 80/443 are free yourself."
+fi
+if [[ -n "${PORT_OWNER// /}" ]] && ! echo "$PORT_OWNER" | grep -qi nginx; then
     echo "$PORT_OWNER"
     cat <<'WARN'
 
