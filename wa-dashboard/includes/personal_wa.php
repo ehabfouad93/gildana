@@ -315,6 +315,35 @@ function pw_result(array $res): array
             'error_code' => null, 'error_title' => null, 'http' => $res['http']];
 }
 
+/**
+ * What to put in the gateway's `number` field for this recipient.
+ *
+ * Normally the digits. But a contact WhatsApp addresses by LID has no usable number — the
+ * gateway answers {"exists":false} for it — so when we know the exact address they last
+ * messaged from, send to that instead. Every module passes a phone string around, so the
+ * lookup happens here rather than threading the contact row through channel.php and back.
+ */
+function pw_target(array $client, string $to): string
+{
+    $digits = preg_replace('/\D+/', '', $to) ?? '';
+    if ($digits === '') return $to;
+    try {
+        $jid = (string) db_val("SELECT wa_jid FROM contacts WHERE client_id=? AND phone_e164=? AND wa_jid IS NOT NULL",
+            [(int) $client['id'], $digits]);
+    } catch (Throwable $e) {
+        return $digits;                      // migration 013 not applied yet
+    }
+    if (stripos($jid, '@lid') === false) return $digits;
+
+    // A LID is on file. That only matters when the number we hold IS that LID's digits —
+    // i.e. we never learned the real one. If we did learn it, the number is the better
+    // address: it is what the person actually dials, and it survives WhatsApp reassigning
+    // the LID. Overriding it with the LID here is what made the first fix send to the wrong
+    // address even after the number was known.
+    $lidDigits = preg_replace('/\D+/', '', explode('@', $jid)[0]) ?? '';
+    return ($digits === $lidDigits) ? $jid : $digits;
+}
+
 function pw_send_text(array $client, string $to, string $body): array
 {
     if (!pw_configured()) {
@@ -322,7 +351,7 @@ function pw_send_text(array $client, string $to, string $body): array
                 'error_title' => 'Personal-number gateway is not configured.', 'http' => 0];
     }
     $res = pw_request('POST', pw_path('send_text', pw_instance($client)), [
-        'number' => preg_replace('/\D+/', '', $to),
+        'number' => pw_target($client, $to),
         'text'   => $body,
         // keep the gateway's own pacing helpers on where supported
         'options' => ['delay' => 0, 'presence' => 'composing'],
@@ -367,7 +396,7 @@ function pw_send_image(array $client, string $to, string $link, string $caption 
     }
 
     $res = pw_request('POST', pw_path('send_img', pw_instance($client)), [
-        'number'    => preg_replace('/\D+/', '', $to),
+        'number'    => pw_target($client, $to),
         'mediatype' => 'image',
         'media'     => $media,
         'caption'   => $caption,
@@ -379,8 +408,31 @@ function pw_send_image(array $client, string $to, string $link, string $caption 
 /* ── inbound ── */
 
 /**
+ * A real phone number out of a JID, or '' when the JID isn't one.
+ *
+ * WhatsApp addresses many chats by LID now — "<id>@lid", an opaque per-user identifier that
+ * deliberately hides the phone number. Its digits look like a number and are even a
+ * plausible length, so the only reliable tell is the @lid suffix. Treating those digits as
+ * a phone is what makes every reply come back {"exists":false}.
+ */
+function pw_jid_number(string $jid): string
+{
+    $jid = trim($jid);
+    if ($jid === '') return '';
+    if (stripos($jid, '@lid') !== false) return '';      // opaque id, never dialable
+    if (stripos($jid, '@g.us') !== false) return '';     // group
+    if (stripos($jid, '@broadcast') !== false) return '';
+
+    $local  = explode(':', explode('@', $jid)[0])[0];    // strip any :device suffix
+    $digits = preg_replace('/\D+/', '', $local) ?? '';
+    // E.164 is 8-15 digits. Outside that it's an identifier of some kind, not a number.
+    return (strlen($digits) >= 8 && strlen($digits) <= 15) ? $digits : '';
+}
+
+/**
  * Normalise a gateway webhook payload to the shape webhook_personal.php needs:
- *   ['from'=>digits, 'text'=>string, 'type'=>string, 'wamid'=>string, 'from_me'=>bool, 'name'=>string]
+ *   ['from'=>digits, 'jid'=>string, 'is_lid'=>bool, 'text'=>string, 'type'=>string,
+ *    'wamid'=>string, 'from_me'=>bool, 'name'=>string]
  * Returns null when the payload is not an inbound message (status/connection events).
  */
 function pw_parse_inbound(array $payload): ?array
@@ -395,7 +447,25 @@ function pw_parse_inbound(array $payload): ?array
     $remote = (string) ($key['remoteJid'] ?? $d['from'] ?? '');
     if ($remote === '' || strpos($remote, '@g.us') !== false) return null;   // ignore groups
 
-    $from = preg_replace('/\D+/', '', explode('@', $remote)[0]) ?? '';
+    $isLid = stripos($remote, '@lid') !== false;
+
+    // Prefer the phone number the address itself carries; if it's a LID, take the mapping
+    // WhatsApp sends alongside — remoteJidAlt for a direct chat, the participant/sender
+    // variants elsewhere. Field naming differs between Baileys and Evolution builds, so try
+    // each rather than depending on one.
+    $from = pw_jid_number($remote);
+    if ($from === '') {
+        foreach ([$key['remoteJidAlt'] ?? '', $key['senderPn'] ?? '', $key['participantPn'] ?? '',
+                  $key['participantAlt'] ?? '', $key['senderJid'] ?? '',
+                  $d['senderPn'] ?? '', $d['participantPn'] ?? '', $d['sender'] ?? ''] as $alt) {
+            $from = pw_jid_number((string) $alt);
+            if ($from !== '') break;
+        }
+    }
+    // Still nothing: WhatsApp sent no mapping for this LID and there is no way to derive one.
+    // Keep the message anyway — dropping it would lose the conversation silently — keyed by
+    // the LID's digits. Replies go to `jid`, not to these digits, so they still deliver.
+    if ($from === '') $from = preg_replace('/\D+/', '', explode('@', $remote)[0]) ?? '';
     if ($from === '') return null;
 
     $m = (array) ($d['message'] ?? []);
@@ -417,6 +487,10 @@ function pw_parse_inbound(array $payload): ?array
 
     return [
         'from'    => $from,
+        // The exact address this arrived from. Replies target this rather than a number
+        // rebuilt from it, which is the only thing that works for a LID-addressed chat.
+        'jid'     => $remote,
+        'is_lid'  => $isLid,
         'text'    => trim($text),
         'type'    => $type,
         'wamid'   => (string) ($key['id'] ?? $d['id'] ?? ''),

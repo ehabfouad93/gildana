@@ -85,17 +85,43 @@ if (!empty($in['from_me'])) exit;     // our own outgoing message echoed back
 $from = (string) $in['from'];
 $text = (string) $in['text'];
 $type = (string) $in['type'];
+$jid  = (string) ($in['jid'] ?? '');
 if ($from === '') exit;
 
-// Upsert the contact and open the conversation.
-$contact = db_row("SELECT * FROM contacts WHERE client_id=? AND phone_e164=?", [$cid, $from]);
+/* ── Upsert the contact and open the conversation ──
+   Match on the exact JID first. WhatsApp moves a person between their phone-number address
+   and their @lid one, and matching only on digits then files the same human under two
+   contacts — one of which can never be replied to. */
+$contact = null;
+if ($jid !== '') $contact = db_row("SELECT * FROM contacts WHERE client_id=? AND wa_jid=?", [$cid, $jid]);
+if (!$contact)   $contact = db_row("SELECT * FROM contacts WHERE client_id=? AND phone_e164=?", [$cid, $from]);
+// Last resort: rows created before wa_jid existed were filed under the LID's own digits.
+// Without this they never match, and each message from that person makes another contact.
+if (!$contact && $jid !== '' && !empty($in['is_lid'])) {
+    $lidDigits = preg_replace('/\D+/', '', explode('@', $jid)[0]) ?? '';
+    if ($lidDigits !== '' && $lidDigits !== $from) {
+        $contact = db_row("SELECT * FROM contacts WHERE client_id=? AND phone_e164=?", [$cid, $lidDigits]);
+    }
+}
+
 if (!$contact) {
-    db_run("INSERT INTO contacts (client_id,phone_e164,name,opt_in_status,source,created_at,last_inbound_at)
-            VALUES (?,?,?, 'in','inbound',NOW(),NOW())", [$cid, $from, (string) $in['name']]);
+    db_run("INSERT INTO contacts (client_id,phone_e164,wa_jid,name,opt_in_status,source,created_at,last_inbound_at)
+            VALUES (?,?,?,?, 'in','inbound',NOW(),NOW())", [$cid, $from, $jid ?: null, (string) $in['name']]);
     $contact = db_row("SELECT * FROM contacts WHERE client_id=? AND phone_e164=?", [$cid, $from]);
 } else {
-    db_run("UPDATE contacts SET last_inbound_at=NOW() WHERE id=?", [(int) $contact['id']]);
-    $contact['last_inbound_at'] = date('Y-m-d H:i:s');
+    db_run("UPDATE contacts SET last_inbound_at=NOW(), wa_jid=COALESCE(NULLIF(?,''), wa_jid) WHERE id=?",
+        [$jid, (int) $contact['id']]);
+
+    // Heal a contact saved before the number was known: it was filed under the LID's digits,
+    // which nothing can dial. Now that WhatsApp has sent the real number, correct it — unless
+    // that number is already taken by another contact, in which case leave it alone rather
+    // than break the (client_id, phone_e164) key. Replies work either way, via wa_jid.
+    if ($from !== (string) $contact['phone_e164'] && pw_jid_number($from . '@s.whatsapp.net') !== '') {
+        $taken = db_val("SELECT id FROM contacts WHERE client_id=? AND phone_e164=? AND id<>?",
+            [$cid, $from, (int) $contact['id']]);
+        if (!$taken) db_run("UPDATE contacts SET phone_e164=? WHERE id=?", [$from, (int) $contact['id']]);
+    }
+    $contact = db_row("SELECT * FROM contacts WHERE id=?", [(int) $contact['id']]);
 }
 if (!$contact) exit;
 
