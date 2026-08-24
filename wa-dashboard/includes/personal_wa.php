@@ -39,6 +39,10 @@ function pw_cfg(): array
     return [
         'base'    => rtrim($base, '/'),
         'key'     => $key,
+        // Where the GATEWAY should call US back. Usually the public site URL, but when both
+        // run as containers the internal service name (http://revenect) is far more reliable
+        // — see pw_hook_url().
+        'hook'    => rtrim(trim((string) (setting_get('pw_hook_base', '') ?? '')), '/'),
         // Endpoint templates — {instance} is substituted per client. Overridable in Admin.
         'paths'   => $paths + [
             'create'      => '/instance/create',
@@ -124,6 +128,27 @@ function pw_path(string $key, string $instance): string
 /* ── instance lifecycle ── */
 
 /**
+ * The inbound callback URL handed to the gateway.
+ *
+ * Defaults to the public site URL, which is correct when the gateway is a separate host.
+ * But when the gateway runs as a container beside this app, that public URL makes its
+ * callback leave the server and come back in through the reverse proxy — a hairpin that
+ * many Docker/NAT setups drop silently, so inbound messages vanish with the webhook
+ * looking perfectly configured on both sides. Setting pw_hook_base to the app's internal
+ * service name (e.g. http://revenect) keeps the hop on the container network: no DNS, no
+ * TLS, no round trip through the internet.
+ *
+ * The secret in the query string is what authenticates the call either way, so an internal
+ * URL is no less safe — and it is never reachable from outside at all.
+ */
+function pw_hook_url(string $secret): string
+{
+    $c = pw_cfg();
+    $base = $c['hook'] !== '' ? $c['hook'] : rtrim(app_base_url(), '/');
+    return $base . '/webhook_personal.php?k=' . $secret;
+}
+
+/**
  * The webhook object shape the gateway needs, shared by instance creation and the
  * standalone webhook_set call below. `enabled` is required — several Evolution builds
  * default it to false even when a url and events are supplied, which silently produces
@@ -155,7 +180,7 @@ function pw_set_webhook(array $client): array
 {
     $secret = trim((string) ($client['personal_hook_secret'] ?? ''));
     if ($secret === '') return ['ok' => false, 'error' => 'No webhook secret yet — connect first.'];
-    $hook = rtrim(app_base_url(), '/') . '/webhook_personal.php?k=' . $secret;
+    $hook = pw_hook_url($secret);
 
     $res = pw_request('POST', pw_path('webhook_set', pw_instance($client)), [
         'webhook' => pw_webhook_payload($hook),
@@ -170,8 +195,7 @@ function pw_instance_create(array $client): array
     $secret = trim((string) ($client['personal_hook_secret'] ?? ''));
     if ($secret === '') $secret = bin2hex(random_bytes(16));
 
-    // app_base_url() prefers config('base_url') and falls back to the current request.
-    $hook = rtrim(app_base_url(), '/') . '/webhook_personal.php?k=' . $secret;
+    $hook = pw_hook_url($secret);
 
     // Evolution v2 payload shape:
     //   - `integration` is REQUIRED (v1 had no such field) — omitting it returns 400.

@@ -80,6 +80,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($action === 'save_gateway') {
         setting_set('pw_base_url', trim((string) ($_POST['pw_base_url'] ?? '')));
+        setting_set('pw_hook_base', trim((string) ($_POST['pw_hook_base'] ?? '')));
         $k = trim((string) ($_POST['pw_api_key'] ?? ''));
         if ($k !== '') setting_set('pw_api_key', encrypt_secret($k));   // blank = keep current
         setting_set('pw_auth_header', trim((string) ($_POST['pw_auth_header'] ?? 'apikey')) ?: 'apikey');
@@ -203,6 +204,7 @@ if ($ok):  ?><div class="alert success"><?= e($ok) ?></div><?php endif; ?>
   <?php
     require_once __DIR__ . '/../includes/personal_wa.php';
     $gwBase = (string) (setting_get('pw_base_url', '') ?? '');
+    $gwHook = (string) (setting_get('pw_hook_base', '') ?? '');
     $gwHdr  = (string) (setting_get('pw_auth_header', 'apikey') ?? 'apikey');
     $gwKey  = decrypt_secret((string) (setting_get('pw_api_key', '') ?? ''));
     $gwCount = 0;
@@ -230,6 +232,13 @@ if ($ok):  ?><div class="alert success"><?= e($ok) ?></div><?php endif; ?>
         <span class="text-muted" style="font-size:11.5px">Header name the gateway expects, or <code>bearer</code>.</span></div>
       <div class="field"><span class="lbl">API key <?= $gwKey !== '' ? '<span class="pill green" style="margin-left:6px">••• set</span>' : '' ?></span>
         <input type="text" name="pw_api_key" autocomplete="off" placeholder="<?= $gwKey !== '' ? 'Leave blank to keep current' : 'Gateway API key' ?>"></div>
+      <div class="field"><span class="lbl">Callback base URL <span class="text-muted">(optional)</span></span>
+        <input type="text" name="pw_hook_base" value="<?= e($gwHook) ?>" placeholder="<?= e(app_base_url()) ?>">
+        <span class="text-muted" style="font-size:11.5px">Where the gateway calls back to deliver
+          incoming messages. Blank = this site's public URL. If the gateway runs as a container
+          beside the dashboard, set the internal name (e.g. <code>http://revenect</code>) — the
+          public URL makes its callback leave the server and hairpin back through the proxy,
+          which many Docker setups drop silently and inbound messages just never arrive.</span></div>
     </div>
     <button type="submit" class="btn btn-primary">Save gateway</button>
   </form>
