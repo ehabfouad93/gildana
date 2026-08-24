@@ -9,7 +9,7 @@ $cid = (int) $CLIENT['id'];
 /* ── AJAX: connect / inspect this client's own WhatsApp number ──
    Only meaningful on the personal channel. The client never sees a gateway URL or key —
    they scan a QR (or use the pairing code), exactly like WhatsApp Web. */
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array(($_POST['action'] ?? ''), ['pw_connect', 'pw_qr', 'pw_status', 'pw_pair', 'pw_logout'], true)) {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array(($_POST['action'] ?? ''), ['pw_connect', 'pw_qr', 'pw_status', 'pw_pair', 'pw_logout', 'pw_resync'], true)) {
     verify_csrf();
     $fresh = db_row("SELECT * FROM clients WHERE id=?", [$cid]) ?: [];
     if (!channel_is_personal($fresh)) json_out(['ok' => false, 'error' => 'This account sends through the WhatsApp Cloud API.']);
@@ -22,6 +22,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array(($_POST['action'] ?? ''), 
         $fresh = db_row("SELECT * FROM clients WHERE id=?", [$cid]) ?: [];
         $q = pw_qr($fresh);
         json_out(['ok' => $q['ok'], 'qr' => $q['qr'], 'error' => $q['error']]);
+    }
+    if ($action === 'pw_resync') {
+        // Re-registers the inbound webhook without touching the linked session — for a
+        // number that's already connected but whose replies never showed up in the Inbox.
+        $r = pw_set_webhook($fresh);
+        json_out(['ok' => $r['ok'], 'error' => $r['error']]);
     }
     if ($action === 'pw_qr') {
         // QR codes rotate every ~20-60s, so the page re-fetches instead of showing a dead one.
@@ -199,6 +205,10 @@ function chNote(){
       <span id="pw-number" class="text-muted"><?= $CLIENT['personal_msisdn'] ? '+' . e((string) $CLIENT['personal_msisdn']) : '' ?></span>
       <button type="button" class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="pwLogout()">Disconnect</button>
     </div>
+    <div style="margin-top:10px;font-size:12.5px" class="text-muted">
+      Not seeing customer replies come in? <button type="button" class="btn-link" onclick="pwResync()">Resync connection</button>
+      <span id="pw-resync-msg"></span>
+    </div>
   </div>
 
   <!-- not connected -->
@@ -293,6 +303,11 @@ async function pwLogout() {
   if (!confirm('Disconnect your WhatsApp number? Sending will stop until you link it again.')) return;
   await pwPost('pw_logout');
   pwShow('idle');
+}
+async function pwResync() {
+  const m = pwEl('pw-resync-msg'); m.textContent = ' Resyncing…';
+  const d = await pwPost('pw_resync');
+  m.textContent = d.ok ? ' Done — replies should arrive now.' : ' Could not resync: ' + (d.error || 'unknown error');
 }
 </script>
 <?php endif; ?>

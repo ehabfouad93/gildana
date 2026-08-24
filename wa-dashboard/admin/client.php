@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/_init.php';
+require_once __DIR__ . '/../includes/channel.php';
 
 $id = (int) ($_GET['id'] ?? 0);
 $client = db_row("SELECT * FROM clients WHERE id = ?", [$id]);
@@ -15,6 +16,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'test_
         json_out(['ok' => true, 'count' => count($res['templates']), 'approved' => $approved]);
     }
     json_out(['ok' => false, 'error' => $res['error']]);
+}
+
+/* ── AJAX: resync the personal-channel gateway webhook ──
+   For a number that's already linked but whose replies never reach the Inbox — the gateway
+   silently drops the webhook config on any reconnect of an existing instance (see
+   pw_set_webhook()). This re-registers it without disturbing the linked session. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'pw_resync') {
+    verify_csrf();
+    if (!channel_is_personal($client)) json_out(['ok' => false, 'error' => 'This account sends through the WhatsApp Cloud API.']);
+    $r = pw_set_webhook($client);
+    json_out(['ok' => $r['ok'], 'error' => $r['error']]);
 }
 
 /* ── AJAX: enable/disable ── */
@@ -238,9 +250,17 @@ layout_header('Client · ' . $client['name'], 'admin', 'clients');
                 ? 'Linked' . ($client['personal_msisdn'] ? ' · +' . e((string) $client['personal_msisdn']) : '')
                 : ($pwSt === 'qr_pending' ? 'Waiting for the QR to be scanned' : 'Not linked yet');
         ?>
-        <div><span class="pill <?= $pill ?>"><?= $lbl ?></span></div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span class="pill <?= $pill ?>"><?= $lbl ?></span>
+          <?php if ($pwSt === 'connected'): ?>
+            <button type="button" class="btn-link" onclick="pwAdminResync()">Resync webhook</button>
+            <span id="pw-admin-resync-msg" class="text-muted" style="font-size:11.5px"></span>
+          <?php endif; ?>
+        </div>
         <span class="text-muted" style="font-size:11.5px">The client links their phone themselves under
-          <strong>Settings → My WhatsApp Number</strong>. You never handle their number.</span>
+          <strong>Settings → My WhatsApp Number</strong>. You never handle their number.
+          If they report replies not showing up in the Inbox although they're linked, use
+          <strong>Resync webhook</strong> — it repairs the gateway's callback without disconnecting them.</span>
       </div>
     </div>
     <button type="submit" class="btn btn-primary mt10">Save channel</button>
@@ -408,6 +428,15 @@ function chToggle(){ document.getElementById('ch-personal').style.display =
 
 <script>
 const CSRF = <?= json_encode(csrf_token()) ?>;
+async function pwAdminResync(){
+  const m = document.getElementById('pw-admin-resync-msg'); if(!m) return;
+  m.textContent = 'Resyncing…';
+  const fd = new FormData(); fd.append('action','pw_resync'); fd.append('csrf_token',CSRF);
+  try{
+    const r = await fetch('', {method:'POST', body:fd}); const d = await r.json();
+    m.textContent = d.ok ? 'Done — the gateway webhook was re-registered.' : 'Failed: '+(d.error||'unknown error');
+  }catch(e){ m.textContent = 'Network error.'; }
+}
 document.getElementById('btn-test').addEventListener('click', async function(){
   const box=document.getElementById('test-result'); this.disabled=true; this.textContent='Testing…'; box.innerHTML='';
   try{

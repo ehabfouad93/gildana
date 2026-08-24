@@ -74,10 +74,22 @@ if ($CLIENT['ai_provider'] && $CLIENT['ai_api_key_enc']) {
     $add('warn', 'AI engine not set', 'AI branch and lead scoring won\'t work without a key.', 'Settings → AI Engine → add your Claude/OpenAI key.');
 }
 
-// 4. Webhook receiving (global signal — any client's inbound proves Meta reaches webhook.php)
-$lastWh = db_val("SELECT MAX(received_at) FROM webhook_events");
-if ($lastWh) {
-    $mins = (int) round((time() - strtotime((string) $lastWh)) / 60);
+// 4. Inbound receiving — scoped to THIS client's own messages, not a global signal, so it
+//    actually tells a personal-channel client whether their replies are arriving.
+$lastIn = db_val("SELECT MAX(created_at) FROM messages WHERE client_id=? AND direction='in'", [$cid]);
+if (channel_is_personal($CLIENT)) {
+    if ($lastIn) {
+        $mins = (int) round((time() - strtotime((string) $lastIn)) / 60);
+        $add('ok', 'Receiving replies', 'Your last inbound message arrived ' . ($mins <= 1 ? 'just now' : $mins . ' min ago') . '.', '');
+    } elseif (($CLIENT['personal_status'] ?? '') === 'connected') {
+        $add('warn', 'No inbound messages yet',
+            'Your number is linked but no reply has come in yet — either nobody has messaged it, or the gateway\'s webhook needs resyncing.',
+            'Ask a friend to message your number as a test, or use "Resync connection" in Settings → My WhatsApp Number.');
+    } else {
+        $add('warn', 'Not linked yet', 'Nothing can arrive until you connect your number.', 'Go to Settings → My WhatsApp Number.');
+    }
+} elseif ($lastIn) {
+    $mins = (int) round((time() - strtotime((string) $lastIn)) / 60);
     $add('ok', 'Webhook receiving', 'Meta last reached your webhook ' . ($mins <= 1 ? 'just now' : $mins . ' min ago') . '.', '');
 } else {
     $add('fail', 'Webhook never received anything', 'Meta has NOT contacted webhook.php. Chatbot replies and lead conversations cannot work.',

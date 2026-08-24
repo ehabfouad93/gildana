@@ -41,13 +41,14 @@ function pw_cfg(): array
         'key'     => $key,
         // Endpoint templates — {instance} is substituted per client. Overridable in Admin.
         'paths'   => $paths + [
-            'create'    => '/instance/create',
-            'qr'        => '/instance/connect/{instance}',
-            'pair'      => '/instance/connect/{instance}',
-            'status'    => '/instance/connectionState/{instance}',
-            'logout'    => '/instance/logout/{instance}',
-            'send_text' => '/message/sendText/{instance}',
-            'send_img'  => '/message/sendMedia/{instance}',
+            'create'      => '/instance/create',
+            'qr'          => '/instance/connect/{instance}',
+            'pair'        => '/instance/connect/{instance}',
+            'status'      => '/instance/connectionState/{instance}',
+            'logout'      => '/instance/logout/{instance}',
+            'webhook_set' => '/webhook/set/{instance}',
+            'send_text'   => '/message/sendText/{instance}',
+            'send_img'    => '/message/sendMedia/{instance}',
         ],
         'header'  => (string) (setting_get('pw_auth_header', 'apikey') ?? 'apikey'),
     ];
@@ -122,6 +123,46 @@ function pw_path(string $key, string $instance): string
 
 /* ── instance lifecycle ── */
 
+/**
+ * The webhook object shape the gateway needs, shared by instance creation and the
+ * standalone webhook_set call below. `enabled` is required — several Evolution builds
+ * default it to false even when a url and events are supplied, which silently produces
+ * an instance that sends and receives QR/status fine but never posts an inbound message.
+ */
+function pw_webhook_payload(string $hook): array
+{
+    return [
+        'enabled'  => true,
+        'url'      => $hook,
+        'byEvents' => false,
+        'base64'   => false,
+        'events'   => ['MESSAGES_UPSERT', 'CONNECTION_UPDATE'],
+    ];
+}
+
+/**
+ * (Re-)register the inbound webhook on the gateway for an ALREADY-EXISTING instance, using
+ * the dedicated set-webhook endpoint rather than instance/create.
+ *
+ * This exists because instance/create is a create-or-fail call: for an instance the gateway
+ * already knows about (any client reconnecting, or one whose instance predates a webhook
+ * events/URL change) it returns 403/409 "already exists", and the webhook payload inside
+ * that same request body is discarded along with it — the instance keeps working for QR,
+ * status and sending, but silently stops delivering inbound messages, which is exactly the
+ * "received messages don't sync" symptom with no error anywhere to point at.
+ */
+function pw_set_webhook(array $client): array
+{
+    $secret = trim((string) ($client['personal_hook_secret'] ?? ''));
+    if ($secret === '') return ['ok' => false, 'error' => 'No webhook secret yet — connect first.'];
+    $hook = rtrim(app_base_url(), '/') . '/webhook_personal.php?k=' . $secret;
+
+    $res = pw_request('POST', pw_path('webhook_set', pw_instance($client)), [
+        'webhook' => pw_webhook_payload($hook),
+    ]);
+    return ['ok' => $res['error'] === '', 'error' => $res['error']];
+}
+
 /** Create this client's gateway instance and persist its name + webhook secret. */
 function pw_instance_create(array $client): array
 {
@@ -140,12 +181,7 @@ function pw_instance_create(array $client): array
         'instanceName' => $inst,
         'qrcode'       => true,
         'integration'  => 'WHATSAPP-BAILEYS',
-        'webhook'      => [
-            'url'      => $hook,
-            'byEvents' => false,
-            'base64'   => false,
-            'events'   => ['MESSAGES_UPSERT', 'CONNECTION_UPDATE'],
-        ],
+        'webhook'      => pw_webhook_payload($hook),
     ]);
     // An instance that already exists is not an error — we just reuse it.
     $exists = $res['http'] === 403 || $res['http'] === 409
@@ -156,6 +192,13 @@ function pw_instance_create(array $client): array
 
     db_run("UPDATE clients SET personal_instance=?, personal_hook_secret=? WHERE id=?",
         [$inst, $secret, (int) $client['id']]);
+
+    // The create call's own webhook block is only honoured for a BRAND NEW instance — for
+    // an existing one (the $exists branch above) the gateway ignored it entirely. Registering
+    // it again here, unconditionally, via the dedicated endpoint means every connect (first
+    // time or a reconnect) leaves the webhook correctly set, regardless of which branch fired.
+    pw_set_webhook(['id' => (int) $client['id'], 'personal_instance' => $inst, 'personal_hook_secret' => $secret]);
+
     return ['ok' => true, 'instance' => $inst, 'secret' => $secret, 'error' => ''];
 }
 
