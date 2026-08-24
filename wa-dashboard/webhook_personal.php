@@ -81,7 +81,13 @@ if (strpos($ev, 'connection') !== false) {
    One delivery can carry several: a phone coming back online, or someone sending three
    messages in a row. Handling only the first is why some arrived and some didn't. */
 foreach (pw_parse_inbound_all($data) as $in) {
-    if (!empty($in['from_me'])) continue;    // our own outgoing message echoed back
+    if (!empty($in['from_me'])) {
+        // Not noise: the echo of our own message is the one place WhatsApp reveals which
+        // @lid a contact we already know is addressed by. Discarding it is what left
+        // replies unmatched.
+        pw_learn_from_echo($client, $in);
+        continue;
+    }
     pw_handle_inbound($client, $in);
 }
 exit;

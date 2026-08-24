@@ -302,6 +302,44 @@ function pw_logout(array $client): array
 /* ── sending ── */
 
 /**
+ * Learn a contact's LID from the gateway's echo of a message WE sent.
+ *
+ * This is the mapping that actually survives. Real payloads from Evolution v2.3.7 show that
+ * an inbound LID message carries NO phone number at all — no remoteJidAlt, nothing — and
+ * WhatsApp does not support resolving a LID back to a number. So the number cannot be
+ * recovered from the incoming message, ever.
+ *
+ * But the gateway also echoes our own outgoing messages back through the same webhook, and
+ * that echo is addressed the way WhatsApp addresses the recipient — their @lid. Its key.id
+ * is the id the gateway handed us at send time, which we already stored on the outgoing row.
+ * So the echo tells us "the person you sent message X to is this @lid", and message X tells
+ * us which contact that was. One join, and the mapping is ours.
+ *
+ * With it, a reply from that @lid lands on the contact we imported and messaged — which is
+ * what lets the Lead Qualifier and automations see it, instead of it opening a stranger's
+ * thread named after the LID's digits.
+ */
+function pw_learn_from_echo(array $client, array $in): void
+{
+    $jid = (string) ($in['jid'] ?? '');
+    if (stripos($jid, '@lid') === false) return;          // a phone-addressed echo teaches nothing
+    $wamid = (string) ($in['wamid'] ?? '');
+    if ($wamid === '') return;
+
+    try {
+        $contactId = (int) db_val(
+            "SELECT contact_id FROM messages
+              WHERE client_id=? AND wa_message_id=? AND direction='out'
+              ORDER BY id DESC LIMIT 1",
+            [(int) $client['id'], $wamid]
+        );
+        if ($contactId > 0) {
+            db_run("UPDATE contacts SET wa_jid=? WHERE id=? AND COALESCE(wa_jid,'')<>?", [$jid, $contactId, $jid]);
+        }
+    } catch (Throwable $e) { /* migration 013 not applied yet */ }
+}
+
+/**
  * Learn a contact's LID from our own outgoing message.
  *
  * This is the piece that makes replies land on the RIGHT contact. When we message a real
@@ -506,7 +544,10 @@ function pw_parse_one(array $d): ?array
     $remote = (string) ($key['remoteJid'] ?? $d['from'] ?? '');
     if ($remote === '' || strpos($remote, '@g.us') !== false) return null;   // ignore groups
 
-    $isLid = stripos($remote, '@lid') !== false;
+    // The gateway states this outright — real payloads carry "addressingMode":"lid" — so use
+    // it as well as the suffix rather than relying on string shape alone.
+    $isLid = stripos($remote, '@lid') !== false
+          || strtolower((string) ($d['key']['addressingMode'] ?? $d['addressingMode'] ?? '')) === 'lid';
 
     // Prefer the phone number the address itself carries; if it's a LID, take the mapping
     // WhatsApp sends alongside — remoteJidAlt for a direct chat, the participant/sender
