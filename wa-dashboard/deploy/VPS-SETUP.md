@@ -63,17 +63,19 @@ ssh root@145.79.1.124
 
 ```bash
 apt-get update && apt-get install -y git
-mkdir -p /var/www && cd /var/www
-git clone -b main-r0e4x9 https://github.com/ehabfouad93/gildana.git tmp-repo
-mv tmp-repo/wa-dashboard /var/www/app
-rm -rf tmp-repo
+mkdir -p /opt && cd /opt
+git clone -b main-r0e4x9 https://github.com/ehabfouad93/gildana.git gildana
 ```
+
+> **متنقلش `wa-dashboard` لبرّه بـ `mv`.** مجلد `.git` بيفضل في `/opt/gildana`،
+> ولو فصلته عن التطبيق `git pull` مش هيشتغل تاني أبدًا وهتضطر تعيد الـ clone من الأول.
+> التطبيق بيشتغل من مكانه عادي: `/opt/gildana/wa-dashboard`.
 
 اتأكد إن الملفات وصلت فعلاً قبل ما تكمّل:
 
 ```bash
-ls /var/www/app/deploy/vps-setup.sh          # لازم يبقى موجود
-ls /var/www/app/migrations/011_*.sql          # قناة الرقم الشخصي
+ls /opt/gildana/wa-dashboard/deploy/vps-setup.sh          # لازم يبقى موجود
+ls /opt/gildana/wa-dashboard/migrations/011_*.sql          # قناة الرقم الشخصي
 ```
 
 > ريبو خاص؟ استخدم Personal Access Token:
@@ -84,23 +86,23 @@ ls /var/www/app/migrations/011_*.sql          # قناة الرقم الشخصي
 من جهازك:
 
 ```bash
-scp -r wa-dashboard root@145.79.1.124:/var/www/app
+scp -r wa-dashboard root@145.79.1.124:/opt/gildana/wa-dashboard
 ```
 
 أو ارفع ZIP بـ FileZilla (SFTP · بورت 22 · user: `root`) وفكّه:
 
 ```bash
-cd /var/www && unzip app.zip -d app
+cd /opt && unzip app.zip -d gildana
 ```
 
-المهم في الآخر يبقى عندك `/var/www/app/index.php` موجود.
+المهم في الآخر يبقى عندك `/opt/gildana/wa-dashboard/index.php` موجود.
 
 ---
 
 ## 3. التنصيب + قاعدة البيانات (أمر واحد)
 
 ```bash
-cd /var/www/app
+cd /opt/gildana/wa-dashboard
 bash deploy/vps-setup.sh app.yourdomain.com
 ```
 
@@ -184,11 +186,11 @@ https://app.yourdomain.com/webhook_personal.php
 ## التحديثات بعد كده
 
 ```bash
-cd /var/www/app
+cd /opt/gildana/wa-dashboard
 git pull                       # لو نزّلت من فرع الـ PR: git pull origin main-r0e4x9
 php -r 'require "includes/config_loader.php";require "includes/helpers.php";
         require "includes/crypto.php";require "includes/db.php"; print_r(migrate());'
-chown -R www-data:www-data /var/www/app
+chown -R www-data:www-data /opt/gildana/wa-dashboard
 ```
 
 `config.php` مش بيتغيّر أبدًا مع الـ pull (مستثنى من git).
@@ -200,9 +202,9 @@ chown -R www-data:www-data /var/www/app
 | المشكلة | الحل |
 |---|---|
 | صفحة بيضا / خطأ 500 | `tail -50 /var/log/nginx/app.yourdomain.com.error.log` |
-| الحملات مش بتتبعت | `php /var/www/app/cron/dispatch.php` وشوف الخرج · اتأكد `crontab -l` فيه السطر |
+| الحملات مش بتتبعت | `php /opt/gildana/wa-dashboard/cron/dispatch.php` وشوف الخرج · اتأكد `crontab -l` فيه السطر |
 | n8n وقع بعد التنصيب | البورت اتاخد منه — `systemctl stop nginx` وارجع لخيار (أ) فوق |
-| صور القوالب مش بتوصل | `/var/www/app/uploads` لازم تكون `www-data` و 775 |
+| صور القوالب مش بتوصل | `/opt/gildana/wa-dashboard/uploads` لازم تكون `www-data` و 775 |
 | نسيت باسورد القاعدة | موجود جوّه `config.php` |
 
 ⚠️ **خُد نسخة من `config.php`.** المفتاح اللي جوّاه هو اللي بيفك تشفير كل التوكنز
