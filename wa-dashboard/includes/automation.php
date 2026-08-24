@@ -457,25 +457,75 @@ function auto_start(array $client, array $contact, array $flow, string $inboundT
 }
 
 /* ── inbound (from webhook) ── */
+/**
+ * Record why an inbound did or did not get an answer.
+ *
+ * Several exits below are legitimately silent — a human has taken over, the message was a
+ * photo with no caption, nothing matched and there is no catch-all flow. From the customer's
+ * side they are indistinguishable from a fault, and from the operator's side there was
+ * previously nothing at all to inspect. One row per inbound makes the difference visible.
+ */
+function auto_note_inbound(array $client, array $contact, string $body, string $decision, string $detail = ''): void
+{
+    try {
+        db_run("INSERT INTO inbound_log (client_id,contact_id,body,decision,detail,created_at) VALUES (?,?,?,?,?,NOW())", [
+            (int) $client['id'], (int) ($contact['id'] ?? 0) ?: null,
+            mb_substr(trim($body), 0, 200), $decision, $detail !== '' ? mb_substr($detail, 0, 255) : null,
+        ]);
+    } catch (Throwable $e) { /* migration 014 not applied yet — never break a reply over logging */ }
+}
+
 function automation_handle_inbound(array $client, array $contact, array $message): void
 {
     // Everything from here on is a reply to a message we just received, so it is not subject
     // to the cold-outbound slot throttle.
     auto_replying(true);
 
+    // Count only messages that actually LEFT. A failed send still writes a row, and counting
+    // those would report a gateway error as a successful reply — the one thing this must never
+    // do, since it is exactly the case being investigated.
+    $sentSql = "SELECT COUNT(*) FROM messages WHERE contact_id=? AND direction='out' AND COALESCE(status,'') <> 'failed'";
+    $before = (int) db_val($sentSql, [(int) $contact['id']]);
+    $reason = auto_inbound_decide($client, $contact, $message);
+    $after  = (int) db_val($sentSql, [(int) $contact['id']]);
+
+    // What was actually sent outranks what was decided: a flow can start and still not manage
+    // to send (no credits, gateway error), and that distinction is the whole point here.
+    [$decision, $detail] = array_pad(explode('|', $reason, 2), 2, '');
+    if ($after > $before) {
+        $detail = $decision . ($detail !== '' ? ' ' . $detail : '');
+        $decision = 'replied';
+    } elseif ($decision === 'started' || $decision === 'resumed') {
+        $decision = 'no_send';
+        // Prefer the gateway's own words over a generic "nothing sent".
+        $err = (string) db_val(
+            "SELECT error_title FROM messages WHERE contact_id=? AND direction='out' AND status='failed'
+              ORDER BY id DESC LIMIT 1", [(int) $contact['id']]);
+        $detail = $err !== '' ? $err : ($detail !== '' ? $detail : 'The flow ran but no message went out (check credits)');
+    }
+
+    auto_note_inbound($client, $contact, (string) ($message['text'] ?? ''), $decision, $detail);
+}
+
+/**
+ * Decide what to do with an inbound and do it. Returns a short reason code (optionally
+ * "code|detail") so the caller can record why — including for the paths that send nothing.
+ */
+function auto_inbound_decide(array $client, array $contact, array $message): string
+{
     $text     = (string) ($message['text'] ?? '');
     $buttonId = (string) ($message['button_id'] ?? '');
 
     // A human is handling this chat (they replied from the Inbox) — stay out of the way.
     // The inbound is still logged by webhook.php, so nothing is lost.
-    if (auto_bot_paused($contact)) return;
+    if (auto_bot_paused($contact)) return 'bot_paused|A human took over this chat from the Inbox';
 
     $run = auto_active_run((int) $contact['id']);
     if ($run && $run['status'] === 'waiting_input') {
         $ctx  = auto_ctx($run);
         auto_log($ctx, 'user', $text !== '' ? $text : $buttonId);
         $step = auto_step((int) $run['current_step_id']);
-        if (!$step) { $run['status'] = 'stopped'; auto_save_run($run, $ctx); return; }
+        if (!$step) { $run['status'] = 'stopped'; auto_save_run($run, $ctx); return 'flow_broken|The step this conversation was waiting on no longer exists'; }
         $cfg  = auto_cfg($step);
         $type = (string) $step['type'];
         $next = $step['next_step_id'];
@@ -492,7 +542,7 @@ function automation_handle_inbound(array $client, array $contact, array $message
                 $run['status'] = 'waiting_input';     // keep chatting on this node
                 auto_save_run($run, $ctx);
             }
-            return;
+            return 'resumed|AI conversation';
         }
 
         if ($type === 'question') {
@@ -531,21 +581,33 @@ function automation_handle_inbound(array $client, array $contact, array $message
         $run['status'] = 'active';
         $run['current_step_id'] = $next;
         automation_run_steps($client, $contact, $run, $ctx);
-        return;
+        return 'resumed|step type: ' . $type;
     }
 
     // No waiting run → try to start one (text triggers only).
-    if ($text === '') return;
+    if ($text === '') {
+        return 'no_text|Nothing to match on: a photo or voice note with no caption';
+    }
     $flow = auto_match_keyword((int) $client['id'], $text);
+    $how  = $flow ? 'keyword' : '';
     if (!$flow) {
         // welcome: first inbound and no prior run for this contact
         $prior = (int) db_val("SELECT COUNT(*) FROM flow_runs WHERE contact_id=?", [(int) $contact['id']]);
-        if ($prior === 0) $flow = auto_welcome_flow((int) $client['id']);
+        if ($prior === 0) { $flow = auto_welcome_flow((int) $client['id']); if ($flow) $how = 'welcome'; }
         // Catch-all: nothing matched and they're not new → answer anyway (e.g. an AI agent
         // acting as an always-on FAQ) instead of leaving the message unanswered.
-        if (!$flow) $flow = auto_default_flow((int) $client['id']);
+        if (!$flow) { $flow = auto_default_flow((int) $client['id']); if ($flow) $how = 'default'; }
     }
-    if ($flow) auto_start($client, $contact, $flow, $text);
+    if (!$flow) {
+        // The commonest silent case by far, and the one that looks most like a bug: the first
+        // message from someone gets the welcome flow, and every message after it matches
+        // nothing. Only a default (catch-all) flow answers those.
+        return $run
+            ? 'no_flow|A conversation is already open (' . $run['status'] . ') but nothing matched this message, and there is no default flow'
+            : 'no_flow|No keyword matched and no default (catch-all) flow is active';
+    }
+    auto_start($client, $contact, $flow, $text);
+    return 'started|' . $how . ': ' . (string) $flow['name'];
 }
 
 /* ── cron: resume due timer waits ── */

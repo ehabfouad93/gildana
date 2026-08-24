@@ -190,6 +190,54 @@ page_head('Automation Health Check');
   </table></div>
 </div>
 
+<?php
+/* Why each recent incoming message did or did not get an answer. Silence has several
+   legitimate causes and they are indistinguishable from a fault without this. */
+$inbound = [];
+try {
+    $inbound = db_all("SELECT * FROM inbound_log WHERE client_id=? ORDER BY id DESC LIMIT 25", [$cid]);
+} catch (Throwable $e) { /* migration 014 not applied yet */ }
+$LABEL = [
+    'replied'     => ['green', 'Replied'],
+    'no_send'     => ['red',   'Tried but nothing sent'],
+    'no_flow'     => ['amber', 'No automation matched'],
+    'bot_paused'  => ['gray',  'Bot paused — human handling'],
+    'no_text'     => ['gray',  'No text to match'],
+    'flow_broken' => ['red',   'Flow step missing'],
+];
+?>
+<div class="card">
+  <h2>Why incoming messages were or weren't answered</h2>
+  <p class="text-muted" style="font-size:12.5px;margin:-6px 0 14px">
+    The last 25 messages your number received, and what the bot decided for each one.
+    <strong>Not every silence is a fault</strong> — but this says which is which.
+  </p>
+  <?php if (!$inbound): ?>
+    <div class="alert info" style="font-size:12.5px">Nothing recorded yet. Send your number a message and refresh this page.</div>
+  <?php else: ?>
+    <div class="table-wrap"><table class="data">
+      <thead><tr><th>When</th><th>Message</th><th>Outcome</th><th>Why</th></tr></thead>
+      <tbody>
+      <?php foreach ($inbound as $r):
+        [$cls, $lbl] = $LABEL[(string) $r['decision']] ?? ['gray', (string) $r['decision']]; ?>
+        <tr>
+          <td class="text-muted" style="white-space:nowrap"><?= e(date('d M H:i', strtotime((string) $r['created_at']))) ?></td>
+          <td><?= e(mb_substr((string) $r['body'], 0, 60)) ?: '<span class="text-muted">—</span>' ?></td>
+          <td><span class="pill <?= $cls ?>"><?= e($lbl) ?></span></td>
+          <td class="text-muted" style="font-size:12px"><?= e((string) $r['detail']) ?></td>
+        </tr>
+      <?php endforeach; ?>
+      </tbody>
+    </table></div>
+    <div class="hint" style="margin-top:10px">
+      <strong>No automation matched</strong> is the usual reason a follow-up message goes unanswered:
+      a new contact's first message starts your <em>welcome</em> flow, but everything after it only
+      gets a reply if a keyword matches or you have a <em>default</em> catch-all flow switched on.
+      Set one in <a href="automations.php">Automations</a> or use the <a href="agents.php">AI Chat Agent</a>.
+    </div>
+  <?php endif; ?>
+</div>
+
 <div class="card">
   <h2>Live tests</h2>
   <div style="display:flex;gap:10px;flex-wrap:wrap">
