@@ -66,12 +66,32 @@ function auto_in_window(array $contact, array $client = []): bool
 }
 
 /* ── send + log + credit ── */
+/**
+ * Is the engine answering an inbound message right now, rather than sending cold outbound?
+ *
+ * The slot throttle exists to stop BULK outbound — campaigns and cold qualifier outreach —
+ * from getting a personal number banned. A reply to someone who has just messaged you is the
+ * opposite kind of traffic: it is solicited, it is paced by the human on the other end, and
+ * it is what WhatsApp expects a real person to do. Throttling it made the bot go silent for
+ * three minutes at a time — answering the first message and ignoring the second and third.
+ *
+ * Set for the duration of an inbound, so auto_send() can tell the two apart. A webhook is one
+ * short-lived process handling one delivery, so a static flag is the whole of the state.
+ */
+function auto_replying(?bool $set = null): bool
+{
+    static $on = false;
+    if ($set !== null) $on = $set;
+    return $on;
+}
+
 function auto_send(array $client, array $run, array $step, array $contact, string $kind, callable $sender, string $body = ''): bool
 {
-    // A personal number sends in paced slots shared with campaigns and qualifier outreach.
-    // Out of budget → leave the run waiting; the next worker run picks it up rather than
-    // burning the slot or dropping the message.
-    if (channel_is_personal($client) && slot_budget($client) <= 0) {
+    // A personal number sends COLD traffic in paced slots shared with campaigns and qualifier
+    // outreach. Out of budget → leave the run waiting; the next worker run picks it up rather
+    // than burning the slot or dropping the message. Conversational replies are exempt: see
+    // auto_replying().
+    if (channel_is_personal($client) && !auto_replying() && slot_budget($client) <= 0) {
         $run['status'] = 'waiting_timer';
         $run['wait_until'] = date('Y-m-d H:i:s', time() + max(1, (int) ($client['slot_pause_sec'] ?: 180)));
         return false;
@@ -439,6 +459,10 @@ function auto_start(array $client, array $contact, array $flow, string $inboundT
 /* ── inbound (from webhook) ── */
 function automation_handle_inbound(array $client, array $contact, array $message): void
 {
+    // Everything from here on is a reply to a message we just received, so it is not subject
+    // to the cold-outbound slot throttle.
+    auto_replying(true);
+
     $text     = (string) ($message['text'] ?? '');
     $buttonId = (string) ($message['button_id'] ?? '');
 

@@ -50,11 +50,11 @@ if (!$client || ($client['status'] ?? '') !== 'active') {
 }
 
 // Ack immediately: gateways retry on a slow response, and a retry would double-handle.
-http_response_code(200);
-echo 'ok';
-if (function_exists('fastcgi_finish_request')) @fastcgi_finish_request();
-
+// Read the body BEFORE releasing the connection — php://input is not readable afterwards.
 $raw  = file_get_contents('php://input') ?: '';
+http_response_code(200);
+respond_and_continue('ok');
+
 $data = json_decode($raw, true);
 if (!is_array($data)) exit;
 

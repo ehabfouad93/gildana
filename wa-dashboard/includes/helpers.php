@@ -271,6 +271,35 @@ function check_captcha(string $input): bool
  * Prefers config('base_url'); otherwise derives it from the request, stripping a trailing
  * /client or /admin so we always land on the app root.
  */
+/**
+ * Send the response now and keep working after the caller has hung up.
+ *
+ * Webhook senders time out on a slow response and retry, and a retry means handling the same
+ * message twice. Answering an inbound can take seconds — an AI reply plus a send — so the
+ * response has to be released before that work starts.
+ *
+ * fastcgi_finish_request() does this on PHP-FPM, but this app runs on Apache with mod_php,
+ * where that function does not exist: the `if (function_exists(...))` guard around it silently
+ * did nothing and the gateway waited for the whole AI round trip. On Apache the connection is
+ * closed by declaring the length and finishing the buffer instead.
+ */
+function respond_and_continue(string $body = 'ok', string $contentType = 'text/plain'): void
+{
+    ignore_user_abort(true);                 // keep running once the caller disconnects
+    if (!headers_sent()) {
+        header('Content-Type: ' . $contentType);
+        header('Content-Length: ' . strlen($body));
+        header('Connection: close');
+    }
+    // Drop any buffering that would otherwise hold the bytes back (mod_deflate included).
+    while (ob_get_level() > 0) @ob_end_clean();
+    echo $body;
+
+    if (function_exists('fastcgi_finish_request')) { @fastcgi_finish_request(); return; }
+    @ob_flush();
+    @flush();
+}
+
 function app_base_url(): string
 {
     $base = rtrim((string) config('base_url', ''), '/');
