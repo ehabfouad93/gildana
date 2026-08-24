@@ -93,13 +93,22 @@ docker exec revenect curl -s -o /dev/null -w '%{http_code}\n' http://evolution-a
 
 ## 4. ظبطه في الداشبورد
 
-هات المفتاح:
+**أمر واحد** بينقل المفتاح من `.env` للداشبورد ويختبره:
 
 ```
-grep EVOLUTION_API_KEY .env
+docker exec revenect php /var/www/html/deploy/docker/sync-gateway-key.php
 ```
 
-وبعدين في الداشبورد → **Admin → Settings → Personal-Number Gateway**:
+لازم ينتهي بـ **`✓ Gateway accepted the key`**. لو فشل، هو نفسه بيقولك السبب
+والأمر المطلوب.
+
+> المفتاح **مبيظهرش على الشاشة** في الطريقة دي. الطريقة اليدوية بتضطرك تعرضه
+> عشان تنسخه، وساعتها ممكن ينتهي في screenshot — والمفتاح ده بيدي تحكم كامل في
+> جلسات واتساب بتاعة عملائك.
+
+### يدوي (لو احتجت)
+
+**Admin → Settings → Personal-Number Gateway**:
 
 | الخانة | القيمة |
 |---|---|
@@ -111,6 +120,31 @@ grep EVOLUTION_API_KEY .env
 > معناها الكونتينر نفسه — الداشبورد بيوصل للجيتواي باسم الخدمة على الشبكة الداخلية.
 
 اضغط **Save gateway**.
+
+---
+
+## تغيير المفتاح لاحقًا (لو اتكشف)
+
+المفتاح بيتغيّر في مكانين: الكونتينر والداشبورد. لو غيّرته في واحد بس، الجيتواي
+هيرد **Unauthorized** من غير ما يوضّح مين الناقص. الخطوات دي بتظبط الاتنين:
+
+```
+cd /opt/gildana/wa-dashboard/deploy/docker
+```
+
+```
+sed -i "s|^EVOLUTION_API_KEY=.*|EVOLUTION_API_KEY=$(openssl rand -hex 24)|" .env
+```
+
+```
+docker compose -f docker-compose.revenect.yml -f docker-compose.gateway.yml up -d --force-recreate evolution-api
+```
+
+```
+docker exec revenect php /var/www/html/deploy/docker/sync-gateway-key.php
+```
+
+المفتاح مبيتعرضش في أي خطوة منهم.
 
 ---
 
