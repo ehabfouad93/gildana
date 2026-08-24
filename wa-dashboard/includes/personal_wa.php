@@ -301,6 +301,35 @@ function pw_logout(array $client): array
 
 /* ── sending ── */
 
+/**
+ * Learn a contact's LID from our own outgoing message.
+ *
+ * This is the piece that makes replies land on the RIGHT contact. When we message a real
+ * number, the gateway's response comes back addressed to whatever WhatsApp actually uses for
+ * that person — which, once they are migrated, is their @lid. Recording it means their reply
+ * (which arrives from that @lid, often with no phone mapping attached) matches the contact we
+ * already have, instead of creating a second one named after the LID's digits.
+ *
+ * That second contact is why automations and the Lead Qualifier looked dead: the flow run is
+ * attached to the contact we imported and messaged, while the reply was being filed against
+ * a stranger, so nothing was ever waiting for it. It is also why messaging someone first made
+ * them "work" — that send is exactly what teaches us the mapping.
+ */
+function pw_learn_jid(array $client, string $to, array $res): void
+{
+    $jid = (string) (($res['json']['key']['remoteJid'] ?? '') ?: '');
+    if (stripos($jid, '@lid') === false) return;          // only a LID tells us anything new
+
+    $digits = preg_replace('/\D+/', '', $to) ?? '';
+    if ($digits === '' || strpos($to, '@') !== false) return;   // we sent to a JID already
+    if ($digits === (preg_replace('/\D+/', '', explode('@', $jid)[0]) ?? '')) return;
+
+    try {
+        db_run("UPDATE contacts SET wa_jid=? WHERE client_id=? AND phone_e164=? AND COALESCE(wa_jid,'')<>?",
+            [$jid, (int) $client['id'], $digits, $jid]);
+    } catch (Throwable $e) { /* migration 013 not applied yet — sending still works */ }
+}
+
 /** Normalise a gateway send response into the wa_send_* contract. */
 function pw_result(array $res): array
 {
@@ -356,6 +385,7 @@ function pw_send_text(array $client, string $to, string $body): array
         // keep the gateway's own pacing helpers on where supported
         'options' => ['delay' => 0, 'presence' => 'composing'],
     ], 30);
+    pw_learn_jid($client, $to, $res);
     return pw_result($res);
 }
 
@@ -402,6 +432,7 @@ function pw_send_image(array $client, string $to, string $link, string $caption 
         'caption'   => $caption,
         'fileName'  => basename((string) parse_url($link, PHP_URL_PATH)) ?: 'image.jpg',
     ], 60);
+    pw_learn_jid($client, $to, $res);
     return pw_result($res);
 }
 
@@ -437,11 +468,39 @@ function pw_jid_number(string $jid): string
  */
 function pw_parse_inbound(array $payload): ?array
 {
+    $all = pw_parse_inbound_all($payload);
+    return $all ? $all[0] : null;
+}
+
+/**
+ * Every inbound message in one webhook delivery.
+ *
+ * The gateway batches: a phone coming back online, or someone firing off three messages in a
+ * row, arrives as an ARRAY under `data`. Taking only the first and discarding the rest is why
+ * some incoming messages appeared and others silently didn't.
+ *
+ * @return array<int,array> parsed messages, oldest first; empty when this isn't a message event
+ */
+function pw_parse_inbound_all(array $payload): array
+{
     $ev = strtolower((string) ($payload['event'] ?? ''));
-    if ($ev !== '' && strpos($ev, 'messages') === false) return null;
+    if ($ev !== '' && strpos($ev, 'messages') === false) return [];
 
     $d = $payload['data'] ?? $payload;
-    if (isset($d[0]) && is_array($d[0])) $d = $d[0];   // some gateways batch
+    $batch = (isset($d[0]) && is_array($d[0])) ? array_values($d) : [$d];
+
+    $out = [];
+    foreach ($batch as $one) {
+        if (!is_array($one)) continue;
+        $m = pw_parse_one($one);
+        if ($m !== null) $out[] = $m;
+    }
+    return $out;
+}
+
+/** Parse a single message object out of a gateway payload. */
+function pw_parse_one(array $d): ?array
+{
 
     $key = (array) ($d['key'] ?? []);
     $remote = (string) ($key['remoteJid'] ?? $d['from'] ?? '');
@@ -455,16 +514,23 @@ function pw_parse_inbound(array $payload): ?array
     // each rather than depending on one.
     $from = pw_jid_number($remote);
     if ($from === '') {
+        // Deliberately NOT `sender`: in Evolution's payload that is the instance owner's own
+        // number, so using it would file the client themselves as the contact.
         foreach ([$key['remoteJidAlt'] ?? '', $key['senderPn'] ?? '', $key['participantPn'] ?? '',
                   $key['participantAlt'] ?? '', $key['senderJid'] ?? '',
-                  $d['senderPn'] ?? '', $d['participantPn'] ?? '', $d['sender'] ?? ''] as $alt) {
+                  $d['senderPn'] ?? '', $d['participantPn'] ?? ''] as $alt) {
             $from = pw_jid_number((string) $alt);
             if ($from !== '') break;
         }
     }
-    // Still nothing: WhatsApp sent no mapping for this LID and there is no way to derive one.
-    // Keep the message anyway — dropping it would lose the conversation silently — keyed by
-    // the LID's digits. Replies go to `jid`, not to these digits, so they still deliver.
+    // Whether $from is a genuine phone number or a stand-in. Everything that WRITES a phone
+    // number has to know the difference: LID digits are a placeholder, and treating them as
+    // real would overwrite a contact's correct number with something undialable.
+    $mapped = $from !== '';
+
+    // Nothing mapped: WhatsApp sent no phone for this LID and there is no way to derive one.
+    // Keep the message anyway — dropping it loses the conversation silently — keyed by the
+    // LID's digits. Replies go to `jid`, not to these digits, so they still deliver.
     if ($from === '') $from = preg_replace('/\D+/', '', explode('@', $remote)[0]) ?? '';
     if ($from === '') return null;
 
@@ -491,6 +557,8 @@ function pw_parse_inbound(array $payload): ?array
         // rebuilt from it, which is the only thing that works for a LID-addressed chat.
         'jid'     => $remote,
         'is_lid'  => $isLid,
+        // true only when `from` is a real phone number, not a LID's digits standing in.
+        'mapped'  => $mapped,
         'text'    => trim($text),
         'type'    => $type,
         'wamid'   => (string) ($key['id'] ?? $d['id'] ?? ''),
