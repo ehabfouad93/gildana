@@ -152,6 +152,15 @@ function layout_header(string $title, string $role, string $active, array $opts 
     $appName = brand_name();
     $items   = nav_items($role);
     $badge   = $role === 'admin' ? 'ADMIN' : 'CLIENT';
+
+    /* Where this page sits decides how every link in the chrome must be written.
+       Pages under admin/ or client/ reach the app root with '../' and their siblings by bare
+       filename. A page at the ROOT (help.php) is the other way round — and rendering the same
+       relative links there pointed the whole sidebar at files that do not exist, so every nav
+       item 404'd. Both prefixes are computed once here rather than assumed. */
+    $inSub   = in_array(basename(dirname((string) ($_SERVER['SCRIPT_NAME'] ?? ''))), ['admin', 'client'], true);
+    $root    = $inSub ? '../' : './';                                  // → the app root
+    $navBase = $inSub ? '' : ($role === 'admin' ? 'admin/' : 'client/'); // → this role's pages
     ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -159,7 +168,7 @@ function layout_header(string $title, string $role, string $active, array $opts 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title><?= e($title) ?> — <?= e($appName) ?></title>
-<link rel="stylesheet" href="../assets/dashboard.css?v=<?= @filemtime(__DIR__ . '/../assets/dashboard.css') ?: '7' ?>">
+<link rel="stylesheet" href="<?= $root ?>assets/dashboard.css?v=<?= @filemtime(__DIR__ . '/../assets/dashboard.css') ?: '7' ?>">
 <?php
 /* An uploaded logo's natural proportions vary a lot, so the height is a setting rather than
    a constant. The bar grows with it — a taller logo in a fixed-height bar just overflows. */
@@ -167,7 +176,7 @@ $logoH  = brand_logo_height();
 $barH   = max(58, $logoH + 22);
 ?>
 <style>:root{ --topbar-h: <?= (int) $barH ?>px; }</style>
-<?= pwa_head('../') ?>
+<?= pwa_head($root) ?>
 </head>
 <body>
 <?php $me = current_user_full() ?: []; $unread = topbar_unread($me); ?>
@@ -176,25 +185,25 @@ $barH   = max(58, $logoH + 22);
     <button type="button" class="nav-toggle" id="nav-toggle" aria-label="Menu" aria-expanded="false" aria-controls="sidebar">
       <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 5h14M3 10h14M3 15h14"/></svg>
     </button>
-    <span class="brand-mark"><?= brand_logo('full', $logoH, '../') ?></span>
+    <a class="brand-mark" href="<?= e($navBase) ?>index.php"><?= brand_logo('full', $logoH, $root) ?></a>
     <span class="topbar-sub"><?= e($badge) ?></span>
   </div>
   <nav class="topbar-nav">
     <?php if (!empty($opts['credits_html'])): ?><?= $opts['credits_html'] ?><?php endif; ?>
 
-    <a class="topbar-bell" href="inbox.php" aria-label="<?= $unread ? $unread . ' unread message(s)' : 'Inbox' ?>" title="Inbox">
+    <a class="topbar-bell" href="<?= e($navBase) ?>inbox.php" aria-label="<?= $unread ? $unread . ' unread message(s)' : 'Inbox' ?>" title="Inbox">
       <svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
         <path d="M10 2.5a4.5 4.5 0 00-4.5 4.5c0 3.5-1.5 4.5-1.5 4.5h12s-1.5-1-1.5-4.5A4.5 4.5 0 0010 2.5z"/><path d="M8.6 15a1.6 1.6 0 002.8 0"/>
       </svg>
       <?php if ($unread > 0): ?><span class="bell-dot"><?= $unread > 99 ? '99+' : (int) $unread ?></span><?php endif; ?>
     </a>
 
-    <a class="topbar-user" href="settings.php" title="<?= e((string) ($me['email'] ?? '')) ?>">
-      <?= user_avatar_html($me, 30, '../') ?>
+    <a class="topbar-user" href="<?= e($navBase) ?>settings.php" title="<?= e((string) ($me['email'] ?? '')) ?>">
+      <?= user_avatar_html($me, 30, $root) ?>
       <span class="topbar-user-name"><?= e(user_display_name($me)) ?></span>
     </a>
 
-    <a class="btn-top gold" href="../logout.php">Logout</a>
+    <a class="btn-top gold" href="<?= e($root) ?>logout.php">Logout</a>
   </nav>
 </header>
 
@@ -203,13 +212,13 @@ $barH   = max(58, $logoH + 22);
   <aside class="sidebar" id="sidebar">
     <nav class="sb-nav">
       <?php foreach ($items as $key => $item): ?>
-        <a class="sb-link <?= $key === $active ? 'active' : '' ?>" href="<?= e($item['url']) ?>">
+        <a class="sb-link <?= $key === $active ? 'active' : '' ?>" href="<?= e($navBase . $item['url']) ?>">
           <?= nav_icon($item['icon']) ?> <span><?= e($item['label']) ?></span>
         </a>
       <?php endforeach; ?>
       <span class="sb-sep"></span>
       <span class="sb-who"><?= e(current_user()['email'] ?? '') ?></span>
-      <a class="sb-link" href="../logout.php"><span>Log out</span></a>
+      <a class="sb-link" href="<?= e($root) ?>logout.php"><span>Log out</span></a>
     </nav>
   </aside>
 
@@ -235,10 +244,14 @@ function layout_footer(): void
     $tabRole  = layout_role();
     $tabItems = nav_items($tabRole);
     $tabActive = layout_active();
+    // Same reasoning as layout_header(): a page at the app root needs the role folder in front
+    // of every nav URL, or the tab bar points at files that aren't there.
+    $tabSub  = in_array(basename(dirname((string) ($_SERVER['SCRIPT_NAME'] ?? ''))), ['admin', 'client'], true);
+    $tabBase = $tabSub ? '' : ($tabRole === 'admin' ? 'admin/' : 'client/');
 ?>
 <nav class="tabbar" aria-label="Primary">
   <?php foreach (nav_primary($tabRole) as $key): if (empty($tabItems[$key])) continue; $it = $tabItems[$key]; ?>
-    <a class="tab <?= $key === $tabActive ? 'active' : '' ?>" href="<?= e($it['url']) ?>">
+    <a class="tab <?= $key === $tabActive ? 'active' : '' ?>" href="<?= e($tabBase . $it['url']) ?>">
       <?= nav_icon($it['icon']) ?><span><?= e($it['label']) ?></span>
     </a>
   <?php endforeach; ?>
@@ -252,7 +265,7 @@ function layout_footer(): void
   $helpBase = $inSub ? '../' : './';
   echo help_launcher_html($helpBase);
 ?>
-<?= pwa_script('../') ?>
+<?= pwa_script($tabSub ? '../' : './') ?>
 <script>
 /* ── install prompt ──
    Android/Chrome fires beforeinstallprompt, so we can offer a real Install button.
