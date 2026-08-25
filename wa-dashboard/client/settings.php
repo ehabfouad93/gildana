@@ -4,6 +4,7 @@ require __DIR__ . '/_init.php';
 require __DIR__ . '/../includes/ai.php';
 require_once __DIR__ . '/../includes/channel.php';
 require_once __DIR__ . '/../includes/profile.php';
+require_once __DIR__ . '/../includes/google.php';
 
 $cid = (int) $CLIENT['id'];
 
@@ -45,6 +46,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array(($_POST['action'] ?? ''), 
     }
     $st = pw_status($fresh);
     json_out(['ok' => true, 'state' => $st['state'], 'msisdn' => $st['msisdn'], 'error' => $st['error']]);
+}
+
+/* ── Google: start / stop the connection ── */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'google_connect') {
+    verify_csrf();
+    if (!google_configured()) {
+        $err = 'Google isn\'t set up on this platform yet — contact ' . BRAND_PARENT . '.';
+    } else {
+        // Off to Google's consent screen; google_oauth.php brings them back here.
+        header('Location: ' . google_auth_url($cid, (int) $ME['id'], 'client/settings.php#google'));
+        exit;
+    }
+}
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'google_disconnect') {
+    verify_csrf();
+    google_disconnect($cid);
+    flash('Google account disconnected.');
+    redirect('settings.php#google');
 }
 
 /* ── AJAX: test the AI key ── */
@@ -363,6 +382,46 @@ async function pwResync() {
     Get an alert on this device when a customer replies, so you can jump into the Inbox and take over.
   </p>
   <div id="notif-body"></div>
+</div>
+
+<?php $gClient = db_row("SELECT * FROM clients WHERE id=?", [$cid]) ?: $CLIENT; ?>
+<div class="card" id="google">
+  <h2>Google Sheets</h2>
+  <p class="text-muted" style="font-size:12.5px;margin:-6px 0 14px">
+    Connect your Google account once, then any automation can read leads from a sheet and write
+    results back to one. You pick which spreadsheet — nothing else in your Drive is reachable.
+  </p>
+
+  <?php if (!google_configured()): ?>
+    <div class="alert info" style="font-size:12.5px">
+      Google isn't set up on this platform yet. Contact <?= e(BRAND_PARENT) ?> to enable it.
+    </div>
+  <?php elseif (google_connected($gClient)): ?>
+    <div class="alert success" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <strong>Connected</strong>
+      <span class="text-muted"><?= e((string) ($gClient['google_email'] ?: '')) ?></span>
+      <form method="post" style="margin-left:auto" onsubmit="return confirm('Disconnect Google? Automations that read or write sheets will stop until you reconnect.')">
+        <?= csrf_field() ?><input type="hidden" name="action" value="google_disconnect">
+        <button class="btn btn-ghost btn-sm">Disconnect</button>
+      </form>
+    </div>
+    <p class="text-muted" style="font-size:12.5px;margin:10px 0 0">
+      Choose the spreadsheet inside each automation — that way different automations can use
+      different sheets.
+    </p>
+  <?php else: ?>
+    <form method="post">
+      <?= csrf_field() ?><input type="hidden" name="action" value="google_connect">
+      <button class="btn btn-primary" style="display:inline-flex;align-items:center;gap:9px">
+        <svg width="17" height="17" viewBox="0 0 18 18" aria-hidden="true"><path fill="#fff" d="M17.6 9.2c0-.6-.05-1.2-.16-1.8H9v3.4h4.8a4.1 4.1 0 01-1.8 2.7v2.2h2.9c1.7-1.6 2.7-3.9 2.7-6.5z" opacity=".95"/><path fill="#fff" d="M9 18c2.4 0 4.5-.8 6-2.2l-2.9-2.2c-.8.5-1.8.9-3.1.9-2.4 0-4.4-1.6-5.1-3.8H.9v2.3A9 9 0 009 18z" opacity=".8"/><path fill="#fff" d="M3.9 10.7a5.4 5.4 0 010-3.4V5H.9a9 9 0 000 8l3-2.3z" opacity=".65"/><path fill="#fff" d="M9 3.6c1.3 0 2.5.5 3.4 1.3l2.6-2.6A9 9 0 00.9 5l3 2.3C4.6 5.2 6.6 3.6 9 3.6z" opacity=".9"/></svg>
+        Connect your Google account
+      </button>
+    </form>
+    <p class="text-muted" style="font-size:12px;margin:10px 0 0">
+      You'll sign in with Google and approve access. We only ask for the files you choose —
+      we can't see the rest of your Drive.
+    </p>
+  <?php endif; ?>
 </div>
 
 <?= profile_card_html(db_row("SELECT * FROM users WHERE id=?", [(int) $ME['id']]) ?: $ME, '../') ?>

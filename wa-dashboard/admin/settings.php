@@ -79,6 +79,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
+    if ($action === 'save_google') {
+        setting_set('google_client_id', trim((string) ($_POST['google_client_id'] ?? '')));
+        setting_set('google_api_key',   trim((string) ($_POST['google_api_key'] ?? '')));
+        $sec = trim((string) ($_POST['google_client_secret'] ?? ''));
+        if ($sec !== '') setting_set('google_client_secret', encrypt_secret($sec));   // blank = keep
+        flash('Google settings saved.');
+        redirect('settings.php#google');
+    }
+
     if ($action === 'save_gateway') {
         setting_set('pw_base_url', trim((string) ($_POST['pw_base_url'] ?? '')));
         setting_set('pw_hook_base', trim((string) ($_POST['pw_hook_base'] ?? '')));
@@ -270,6 +279,53 @@ if ($ok):  ?><div class="alert success"><?= e($ok) ?></div><?php endif; ?>
           which many Docker setups drop silently and inbound messages just never arrive.</span></div>
     </div>
     <button type="submit" class="btn btn-primary">Save gateway</button>
+  </form>
+</div>
+
+<?php
+  require_once __DIR__ . '/../includes/google.php';
+  $gCfg  = google_cfg();
+  $gConn = 0;
+  try { $gConn = (int) db_val("SELECT COUNT(*) FROM clients WHERE google_refresh_enc IS NOT NULL"); } catch (Throwable $e) {}
+?>
+<div class="card" id="google">
+  <h2>Google (Sheets)</h2>
+  <p class="text-muted" style="font-size:12.5px;margin:-6px 0 14px">
+    Lets a client press <strong>Connect Google</strong> and pick a spreadsheet — no scripts to
+    paste and no Google project of their own. Register one OAuth client here for the whole
+    platform. <strong><?= $gConn ?></strong> account<?= $gConn === 1 ? '' : 's' ?> connected.
+  </p>
+
+  <div class="alert info" style="font-size:12.5px;margin-bottom:14px">
+    <strong>One-time setup</strong> at <span class="mono">console.cloud.google.com</span>:
+    <ol style="margin:8px 0 0;padding-left:18px;line-height:1.8">
+      <li>Create a project → <strong>APIs &amp; Services</strong> → enable <strong>Google Sheets API</strong> and <strong>Google Picker API</strong></li>
+      <li><strong>OAuth consent screen</strong> → External → add the two scopes offered for
+          <span class="mono">drive.file</span> and <span class="mono">userinfo.email</span></li>
+      <li><strong>Credentials → Create OAuth client ID → Web application</strong>, and add this
+          exact authorised redirect URI:<br>
+          <span class="mono"><?= e(google_redirect_uri()) ?></span></li>
+      <li>Paste the Client ID and Secret below. Optionally add an <strong>API key</strong> —
+          only the sheet picker uses it.</li>
+    </ol>
+    <div style="margin-top:8px">
+      We deliberately ask only for <span class="mono">drive.file</span>, which reaches the files a
+      client picks and nothing else in their Drive. It is not a “sensitive” scope, so Google does
+      not require an app review before your clients can connect.
+    </div>
+  </div>
+
+  <form method="post">
+    <?= csrf_field() ?><input type="hidden" name="action" value="save_google">
+    <div class="grid2">
+      <div class="field"><span class="lbl">Client ID</span>
+        <input type="text" name="google_client_id" value="<?= e($gCfg['client_id']) ?>" placeholder="…apps.googleusercontent.com"></div>
+      <div class="field"><span class="lbl">Client Secret <?= $gCfg['client_secret'] !== '' ? '<span class="pill green" style="margin-left:6px">••• set</span>' : '' ?></span>
+        <input type="text" name="google_client_secret" autocomplete="off" placeholder="<?= $gCfg['client_secret'] !== '' ? 'Leave blank to keep current' : 'Paste the client secret' ?>"></div>
+      <div class="field"><span class="lbl">API key <span class="text-muted">(optional — for the sheet picker)</span></span>
+        <input type="text" name="google_api_key" value="<?= e($gCfg['api_key']) ?>" placeholder="AIza…"></div>
+    </div>
+    <button type="submit" class="btn btn-primary">Save Google settings</button>
   </form>
 </div>
 
