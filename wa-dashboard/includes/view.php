@@ -85,6 +85,7 @@ function nav_items(string $role): array
             'templates' => ['label' => 'Templates', 'url' => 'templates.php', 'icon' => 'doc'],
             'reports'   => ['label' => 'Reports',   'url' => 'reports.php',   'icon' => 'chart'],
             'team'      => ['label' => 'Team',       'url' => 'team.php',      'icon' => 'team'],
+            'help'      => ['label' => 'Help Content', 'url' => 'help_admin.php', 'icon' => 'book'],
             'settings'  => ['label' => 'Settings',  'url' => 'settings.php',  'icon' => 'gear'],
         ];
     }
@@ -243,6 +244,14 @@ function layout_footer(): void
   <?php endforeach; ?>
 </nav>
 <div class="toast" id="toast"></div>
+<?php
+  // Help + intro video, on every signed-in page. The path back to the app root differs
+  // between admin/, client/ and the root itself, so work it out from the running script.
+  require_once __DIR__ . '/help.php';
+  $inSub = in_array(basename(dirname((string) ($_SERVER['SCRIPT_NAME'] ?? ''))), ['admin', 'client'], true);
+  $helpBase = $inSub ? '../' : './';
+  echo help_launcher_html($helpBase);
+?>
 <?= pwa_script('../') ?>
 <script>
 /* ── install prompt ──

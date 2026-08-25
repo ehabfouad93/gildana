@@ -462,3 +462,56 @@ textarea { resize: vertical; min-height: 84px; }
 .brand-img { display: block; width: auto; max-width: 190px; object-fit: contain; }
 .login-brand .brand-img { max-width: 240px; margin: 0 auto; }
 @media (max-width: 900px) { .brand-img { max-width: 132px; } }
+
+
+/* ── Help dock: floating Help + intro video ──
+   Sits above the mobile tab bar rather than on top of it, so it never covers navigation. */
+.help-dock {
+  position: fixed; right: 18px; bottom: 18px; z-index: 300;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.help-fab {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 44px; height: 44px; border-radius: 50%;
+  border: 1px solid var(--line); background: var(--surface); color: var(--muted);
+  box-shadow: 0 6px 18px rgba(13,19,33,.14); cursor: pointer;
+  transition: transform .12s ease, color .12s ease, border-color .12s ease;
+}
+.help-fab:hover { color: var(--brand); border-color: var(--brand); transform: translateY(-1px); }
+.help-fab.help { background: var(--brand); border-color: var(--brand); color: #fff; }
+.help-fab.help:hover { background: var(--brand-soft); color: #fff; }
+
+.video-back {
+  position: fixed; inset: 0; z-index: 400;
+  background: rgba(13,19,33,.72);
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.video-back[hidden] { display: none; }
+.video-box { position: relative; width: min(920px, 100%); }
+.video-frame { aspect-ratio: 16 / 9; background: #000; border-radius: 12px; overflow: hidden; }
+.video-close {
+  position: absolute; top: -14px; right: -10px; z-index: 1;
+  width: 34px; height: 34px; border-radius: 50%;
+  border: 0; background: var(--surface); color: var(--ink);
+  font-size: 15px; cursor: pointer; box-shadow: 0 3px 10px rgba(0,0,0,.25);
+}
+
+/* ── FAQ ── */
+.faq-item { border-bottom: 1px solid var(--line); padding: 12px 0; }
+.faq-item:last-child { border-bottom: 0; }
+.faq-item summary {
+  cursor: pointer; font-weight: 600; font-size: 14px; list-style: none;
+  display: flex; align-items: center; gap: 9px;
+}
+.faq-item summary::-webkit-details-marker { display: none; }
+.faq-item summary::before {
+  content: '+'; color: var(--brand); font-weight: 700; font-size: 16px; line-height: 1; width: 13px;
+}
+.faq-item[open] summary::before { content: '\2212'; }
+.faq-answer { padding: 9px 0 2px 22px; font-size: 13.5px; color: var(--muted); line-height: 1.75; }
+
+@media (max-width: 720px) {
+  /* Clear of the bottom tab bar. */
+  .help-dock { right: 12px; bottom: calc(var(--tabbar-h, 58px) + 12px); }
+  .help-fab { width: 40px; height: 40px; }
+}
