@@ -10,7 +10,7 @@ declare(strict_types=1);
  *   automation_enqueue_lead($client,$flow,$contact)        — from cron/leads.php (Google Sheet)
  *
  * Node types: text | image | template | buttons | ai_branch | question |
- *             ai_score | score | wait | tag | list_add | notify | collect
+ *             ai_score | score | wait | tag | list_add | notify | collect | sheet_export
  *
  * Depends on: db, whatsapp, credits, ai, notify, helpers.
  */
@@ -337,6 +337,11 @@ function automation_run_steps(array $client, array $contact, array $run, array $
         } elseif ($type === 'collect') {
             auto_collect($client, $run, $step, $contact, $ctx, $cfg);
             $run['current_step_id'] = $step['next_step_id'];
+        } elseif ($type === 'sheet_export') {
+            // Write this lead straight into the client's own spreadsheet. A failure here must
+            // not strand the conversation — the row is recoverable from Leads, the chat is not.
+            auto_sheet_export($client, $run, $step, $contact, $ctx, $cfg);
+            $run['current_step_id'] = $step['next_step_id'];
         } else {
             // unknown → skip to next
             $run['current_step_id'] = $step['next_step_id'];
@@ -348,6 +353,54 @@ function automation_run_steps(array $client, array $contact, array $run, array $
     // via the top-of-loop finalize.
     if ($run['status'] === 'active') $run['status'] = 'blocked';
     auto_save_run($run, $ctx);
+}
+
+/**
+ * Append one row to the spreadsheet the client picked for this node.
+ *
+ * Deliberately non-fatal. Google can be slow, a token can lapse, the sheet can be renamed —
+ * none of which is a reason to break a live conversation, and every one of these rows is also
+ * held in flow_collected. Failures are recorded on the run so the Leads page can show them.
+ */
+function auto_sheet_export(array $client, array $run, array $step, array $contact, array &$ctx, array $cfg): void
+{
+    $sheetId = trim((string) ($cfg['sheet_id'] ?? ''));
+    if ($sheetId === '') return;
+
+    require_once __DIR__ . '/google.php';
+    if (!google_connected($client)) { $ctx['sheet_error'] = 'Google account disconnected.'; return; }
+
+    $fields = array_values(array_filter((array) ($cfg['fields'] ?? []), 'is_string'));
+    if (!$fields) $fields = ['date', 'phone', 'name', 'last_reply', 'score', 'grade'];
+
+    $last = '';
+    foreach (array_reverse((array) $ctx['transcript']) as $t) {
+        if (($t['role'] ?? '') === 'user') { $last = (string) ($t['text'] ?? ''); break; }
+    }
+    $available = [
+        'date'       => date('Y-m-d H:i'),
+        'phone'      => (string) $contact['phone_e164'],
+        'name'       => (string) ($contact['name'] ?? ''),
+        'last_reply' => $last,
+        'score'      => (string) (int) $run['score'],
+        'grade'      => (string) ($run['grade'] ?? ''),
+        'tags'       => (string) ($contact['tags'] ?? ''),
+    ];
+    // Anything captured by the AI is exportable too, under its own key.
+    foreach ((array) ($ctx['fields'] ?? []) as $k => $v) {
+        if (is_scalar($v)) $available[strtolower((string) $k)] = (string) $v;
+    }
+
+    $row = [];
+    foreach ($fields as $f) $row[] = $available[strtolower($f)] ?? '';
+
+    $r = google_sheet_append($client, $sheetId, (string) ($cfg['sheet_tab'] ?? ''), $fields, [$row]);
+    if (empty($r['ok'])) {
+        $ctx['sheet_error'] = (string) $r['error'];
+        error_log('sheet_export flow ' . (int) $run['flow_id'] . ': ' . $r['error']);
+    } else {
+        unset($ctx['sheet_error']);
+    }
 }
 
 function auto_add_tag(array $contact, string $tag): void
@@ -874,6 +927,17 @@ function automation_send_outreach(int $maxPerRun = 0, int $onlyFlowId = 0): int
  * - already a CSV/publish-to-web link → left untouched.
  * Works for sheets shared "Anyone with the link → Viewer" (no Publish-to-web needed).
  */
+/** Rows from the Sheets API back into CSV text, so one importer serves both sources. */
+function auto_rows_to_csv(array $rows): string
+{
+    $fh = fopen('php://temp', 'r+');
+    foreach ($rows as $r) fputcsv($fh, array_map(fn($v) => (string) $v, (array) $r));
+    rewind($fh);
+    $csv = (string) stream_get_contents($fh);
+    fclose($fh);
+    return $csv;
+}
+
 function auto_normalize_sheet_url(string $url): string
 {
     $url = trim($url);
@@ -929,8 +993,31 @@ function automation_ingest_flow(array $client, array $flow, int $maxRows = 500):
 {
     $res = ['imported' => 0, 'skipped' => 0, 'invalid' => 0, 'rows' => 0, 'error' => ''];
     $sc  = json_decode((string) $flow['source_config'], true) ?: [];
+
+    // Preferred path: the client connected their Google account and picked this sheet, so we
+    // read it through the API. Nothing has to be published to the web, and a private sheet
+    // works — which the CSV route below can never do.
+    $sheetId = trim((string) ($sc['sheet_id'] ?? ''));
+    if ($sheetId !== '') {
+        require_once __DIR__ . '/google.php';
+        if (!google_connected($client)) {
+            $res['error'] = 'This automation reads a Google Sheet, but the Google account is disconnected. Reconnect it in Settings → Google Sheets.';
+            return $res;
+        }
+        $data = google_sheet_rows($client, $sheetId, (string) ($sc['sheet_tab'] ?? ''), $maxRows + 1);
+        $sc['last_fetched_at'] = date('Y-m-d H:i:s');
+        db_run("UPDATE flows SET source_config=? WHERE id=?", [json_encode($sc, JSON_UNESCAPED_UNICODE), (int) $flow['id']]);
+        if (empty($data['ok'])) { $res['error'] = $data['error'] ?: 'Could not read the sheet.'; return $res; }
+
+        // Reuse the CSV importer wholesale rather than duplicating the phone normalisation,
+        // column mapping and per-flow dedupe that already work.
+        $csv = auto_rows_to_csv(array_merge([$data['header']], $data['rows']));
+        $country = trim((string) ($sc['country'] ?? '')) ?: (string) $client['default_country'];
+        return automation_ingest_rows($client, $flow, $csv, $maxRows, $country);
+    }
+
     $url = trim((string) ($sc['csv_url'] ?? ''));
-    if ($url === '') { $res['error'] = 'No Google Sheet CSV URL set.'; return $res; }
+    if ($url === '') { $res['error'] = 'No sheet chosen. Open the automation and pick one.'; return $res; }
 
     $csv = auto_fetch_url(auto_normalize_sheet_url($url));
     $sc['last_fetched_at'] = date('Y-m-d H:i:s');
@@ -1027,7 +1114,7 @@ function automation_ingest_sheets(int $maxRowsPerFlow = 500): int
     $total = 0;
     foreach ($flows as $flow) {
         $sc = json_decode((string) $flow['source_config'], true) ?: [];
-        if (trim((string) ($sc['csv_url'] ?? '')) === '') continue;
+        if (trim((string) ($sc['csv_url'] ?? '')) === '' && trim((string) ($sc['sheet_id'] ?? '')) === '') continue;
         $interval = max(1, (int) ($sc['fetch_interval_min'] ?? 15));
         if (!empty($sc['last_fetched_at']) && strtotime((string) $sc['last_fetched_at']) > time() - $interval * 60) continue;
         $client = db_row("SELECT * FROM clients WHERE id=?", [(int) $flow['client_id']]);

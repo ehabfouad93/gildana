@@ -103,6 +103,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save'
                 case 'list_add': $cfg = ['list_id' => (int) ($c['list_id'] ?? 0)]; $next = $R($out['next'] ?? null); break;
                 case 'notify':   $cfg = ['message' => (string) ($c['message'] ?? '')]; $next = $R($out['next'] ?? null); break;
                 case 'collect':  $cfg = ['sheet_name' => (string) ($c['sheet_name'] ?? 'Leads'), 'fields' => array_values((array) ($c['fields'] ?? []))]; $next = $R($out['next'] ?? null); break;
+                case 'sheet_export':
+                    $cfg = ['sheet_id' => trim((string) ($c['sheet_id'] ?? '')), 'sheet_name' => (string) ($c['sheet_name'] ?? ''),
+                            'sheet_tab' => (string) ($c['sheet_tab'] ?? ''), 'fields' => array_values((array) ($c['fields'] ?? []))];
+                    $next = $R($out['next'] ?? null); break;
                 case 'buttons':
                     $btns = [];
                     foreach ((array) ($c['buttons'] ?? []) as $bi => $b) {
@@ -123,7 +127,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save'
         }
 
         $firstStep = $R($start['next'] ?? null);
-        $sourceConfig = json_encode(['start' => ['x' => (int) ($start['x'] ?? 60), 'y' => (int) ($start['y'] ?? 220)]], JSON_UNESCAPED_UNICODE);
+        // Keep the canvas position, and the sheet source when this flow is fed by one. Merged
+        // onto what was already stored so last_fetched_at survives a save — losing it would
+        // make the next worker run re-read the whole sheet.
+        $prevSc = json_decode((string) $flow['source_config'], true) ?: [];
+        $sc = array_merge($prevSc, ['start' => ['x' => (int) ($start['x'] ?? 60), 'y' => (int) ($start['y'] ?? 220)]]);
+        if ($trigger === 'google_sheet') {
+            $sc['sheet_id']           = trim((string) ($_POST['src_sheet_id'] ?? ''));
+            $sc['sheet_name']         = trim((string) ($_POST['src_sheet_name'] ?? ''));
+            $sc['sheet_tab']          = trim((string) ($_POST['src_sheet_tab'] ?? ''));
+            $sc['fetch_interval_min'] = max(1, (int) ($_POST['src_interval'] ?? 15));
+            $sc['country']            = preg_replace('/\D+/', '', (string) ($_POST['src_country'] ?? '')) ?? '';
+            $sc['column_map']         = ['phone' => trim((string) ($_POST['src_map_phone'] ?? '')),
+                                         'name'  => trim((string) ($_POST['src_map_name'] ?? ''))];
+            // A newly chosen sheet should be read on the next tick, not held back by the
+            // timestamp from whatever sheet was configured before.
+            if (($prevSc['sheet_id'] ?? '') !== $sc['sheet_id']) unset($sc['last_fetched_at']);
+        }
+        $sourceConfig = json_encode($sc, JSON_UNESCAPED_UNICODE);
 
         db_run("UPDATE flows SET name=?, trigger_type=?, trigger_config=?, source_config=?, hot_min=?, warm_min=?, first_step_id=?, updated_at=NOW() WHERE id=?",
             [$name, $trigger, $tc ? json_encode($tc, JSON_UNESCAPED_UNICODE) : null, $sourceConfig, $hotMin, $warmMin, $firstStep, $id]);
@@ -184,6 +205,7 @@ foreach ($stepsRaw as $k => $s) {
         case 'list_add': $node['config'] = ['list_id' => (int) ($c['list_id'] ?? 0)]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
         case 'notify':   $node['config'] = ['message' => $c['message'] ?? '']; $node['outputs']['next'] = $tid($s['next_step_id']); break;
         case 'collect':  $node['config'] = ['sheet_name' => $c['sheet_name'] ?? 'Leads', 'fields' => $c['fields'] ?? ['phone','name','last_reply','score','tags']]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
+        case 'sheet_export': $node['config'] = ['sheet_id' => $c['sheet_id'] ?? '', 'sheet_name' => $c['sheet_name'] ?? '', 'sheet_tab' => $c['sheet_tab'] ?? '', 'fields' => $c['fields'] ?? ['date','phone','name','last_reply','score','grade']]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
         case 'buttons':
             $node['config'] = ['body' => $c['body'] ?? '', 'buttons' => array_map(fn($b) => ['title' => $b['title'] ?? '', 'points' => (int) ($b['points'] ?? 0)], (array) ($c['buttons'] ?? []))];
             foreach ((array) ($c['buttons'] ?? []) as $bi => $b) $node['outputs']['b' . $bi] = $tid($b['next_step_id'] ?? null);
@@ -226,6 +248,7 @@ client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
           <option value="keyword" <?= $flow['trigger_type'] === 'keyword' ? 'selected' : '' ?>>Keyword reply</option>
           <option value="welcome" <?= $flow['trigger_type'] === 'welcome' ? 'selected' : '' ?>>Welcome (first message)</option>
           <option value="default" <?= $flow['trigger_type'] === 'default' ? 'selected' : '' ?>>Default reply (nothing else matched)</option>
+          <option value="google_sheet" <?= $flow['trigger_type'] === 'google_sheet' ? 'selected' : '' ?>>New row in a Google Sheet</option>
         </select>
       </div>
       <div class="field" id="kw-wrap"><span class="lbl">Keywords</span><input type="text" name="keywords" value="<?= e(implode(', ', (array) ($tc['keywords'] ?? []))) ?>" placeholder="price, info"></div>
@@ -241,6 +264,47 @@ client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
       <div class="field"><span class="lbl">Hot score ≥</span><input type="number" name="hot_min" value="<?= (int) $flow['hot_min'] ?>"></div>
       <div class="field"><span class="lbl">Warm score ≥</span><input type="number" name="warm_min" value="<?= (int) $flow['warm_min'] ?>"></div>
     </div>
+
+    <?php
+      require_once __DIR__ . '/../includes/google.php';
+      $gClient = db_row("SELECT * FROM clients WHERE id=?", [$cid]) ?: $CLIENT;
+      $scNow   = json_decode((string) $flow['source_config'], true) ?: [];
+    ?>
+    <div id="sheet-wrap" style="display:<?= $flow['trigger_type'] === 'google_sheet' ? 'block' : 'none' ?>">
+      <?php if (!google_connected($gClient)): ?>
+        <div class="alert info" style="font-size:12.5px">
+          To read leads from a spreadsheet, connect your Google account first —
+          <a href="settings.php#google">Settings → Google Sheets</a>. It takes one click.
+        </div>
+      <?php else: ?>
+        <div class="grid3">
+          <div class="field"><span class="lbl">Spreadsheet</span>
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+              <input type="text" id="src-name" name="src_sheet_name" value="<?= e((string) ($scNow['sheet_name'] ?? '')) ?>" placeholder="No sheet chosen" readonly style="flex:1;min-width:130px">
+              <button type="button" class="btn btn-ghost btn-sm" onclick="pickSourceSheet()">Choose…</button>
+            </div>
+            <input type="hidden" id="src-id" name="src_sheet_id" value="<?= e((string) ($scNow['sheet_id'] ?? '')) ?>">
+          </div>
+          <div class="field"><span class="lbl">Tab</span>
+            <select id="src-tab" name="src_sheet_tab"><option value="<?= e((string) ($scNow['sheet_tab'] ?? '')) ?>"><?= e((string) ($scNow['sheet_tab'] ?? '— choose a sheet first —')) ?></option></select>
+          </div>
+          <div class="field"><span class="lbl">Check every (min)</span>
+            <input type="number" name="src_interval" min="1" value="<?= (int) ($scNow['fetch_interval_min'] ?? 15) ?>"></div>
+        </div>
+        <div class="grid3">
+          <div class="field"><span class="lbl">Phone column</span>
+            <select id="src-map-phone" name="src_map_phone"><option value="<?= e((string) ($scNow['column_map']['phone'] ?? '')) ?>"><?= e((string) ($scNow['column_map']['phone'] ?? '— pick a sheet —')) ?></option></select></div>
+          <div class="field"><span class="lbl">Name column</span>
+            <select id="src-map-name" name="src_map_name"><option value="<?= e((string) ($scNow['column_map']['name'] ?? '')) ?>"><?= e((string) ($scNow['column_map']['name'] ?? '— optional —')) ?></option></select></div>
+          <div class="field"><span class="lbl">Country <span class="text-muted">(for local numbers)</span></span>
+            <?= function_exists('country_picker_html')
+                  ? country_picker_html('src_country', (string) ($scNow['country'] ?? ''))
+                  : '<input type="text" name="src_country" value="' . e((string) ($scNow['country'] ?? '')) . '" placeholder="20">' ?>
+          </div>
+        </div>
+        <div class="hint" id="src-status">Rows already imported are skipped, so the same sheet can keep growing.</div>
+      <?php endif; ?>
+    </div>
   </div>
 
   <div class="card">
@@ -249,6 +313,7 @@ client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
         <optgroup label="Send">
           <option value="text">Send text</option>
           <option value="image">Send image</option>
+          <option value="sheet_export">Write to Google Sheet</option>
           <option value="template">Send template</option>
           <option value="buttons">Reply buttons</option>
         </optgroup>
@@ -306,7 +371,7 @@ const INIT_NODES = <?= json_encode($nodes) ?>;
 const INIT_START = <?= json_encode($startNode) ?>;
 const esc = s => (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
-const TYPE_LABEL = {start:'Trigger',text:'Send text',image:'Send image',template:'Template',buttons:'Buttons',question:'Ask',ai_chat:'AI conversation',ai_branch:'AI branch',ai_score:'AI score',score:'Add points',wait:'Wait',tag:'Tag',list_add:'Add to list',notify:'Notify',collect:'Collect'};
+const TYPE_LABEL = {start:'Trigger',text:'Send text',image:'Send image',template:'Template',buttons:'Buttons',question:'Ask',ai_chat:'AI conversation',ai_branch:'AI branch',ai_score:'AI score',score:'Add points',wait:'Wait',tag:'Tag',list_add:'Add to list',notify:'Notify',collect:'Collect',sheet_export:'Write to Sheet'};
 
 let nodes = {};        // id -> {id,type,x,y,config,outputs}
 let start = {id:'start', type:'start', x:INIT_START.x, y:INIT_START.y, outputs:{next:INIT_START.next||null}};
@@ -349,6 +414,7 @@ function summary(n){
     case 'list_add': { const l=LISTS.find(x=>x.id==c.list_id); return '📋 add to '+(l?esc(l.name):'list'); }
     case 'notify': return '🔔 notify me';
     case 'collect': return '📥 sheet: '+esc(c.sheet_name||'Leads');
+    case 'sheet_export': return '📊 '+(c.sheet_id?esc(c.sheet_name||'sheet')+(c.sheet_tab?' → '+esc(c.sheet_tab):''):'<span class="muted">choose a sheet</span>');
   }
   return '';
 }
@@ -493,7 +559,7 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeEdgeMenu(); 
 
 /* ── add / delete ── */
 function defaultConfig(type){
-  return {text:{body:''},image:{link:'',caption:''},template:{template_id:0,header_media:'',header_vars:{},header_loc:{},vars:{},buttons:{}},buttons:{body:'',buttons:[{title:'Yes',points:0},{title:'No',points:0}]},question:{body:'',save_as:''},ai_chat:{knowledge:'',intro:'',persona:'',instructions:'',goals:[],captures:[],max_turns:8},ai_branch:{prompt:'',branches:[{label:'Interested',description:'',points:0}]},ai_score:{criterion:'',max_points:10},score:{points:0},wait:{seconds:3600},tag:{tag:''},list_add:{list_id:0},notify:{message:''},collect:{sheet_name:'Leads',fields:['phone','name','last_reply','score','tags']}}[type]||{};
+  return {text:{body:''},image:{link:'',caption:''},template:{template_id:0,header_media:'',header_vars:{},header_loc:{},vars:{},buttons:{}},buttons:{body:'',buttons:[{title:'Yes',points:0},{title:'No',points:0}]},question:{body:'',save_as:''},ai_chat:{knowledge:'',intro:'',persona:'',instructions:'',goals:[],captures:[],max_turns:8},ai_branch:{prompt:'',branches:[{label:'Interested',description:'',points:0}]},ai_score:{criterion:'',max_points:10},score:{points:0},wait:{seconds:3600},tag:{tag:''},list_add:{list_id:0},notify:{message:''},collect:{sheet_name:'Leads',fields:['phone','name','last_reply','score','tags']},sheet_export:{sheet_id:'',sheet_name:'',sheet_tab:'',fields:['date','phone','name','last_reply','score','grade']}}[type]||{};
 }
 function addNode(type,data){
   const w=document.getElementById('cwrap');
@@ -519,7 +585,23 @@ function closeCfg(){ document.getElementById('cfg').classList.remove('open'); do
 function cfgForm(n){ const c=n.config;
   switch(n.type){
     case 'text': return `<label><span class="lbl">Message</span><textarea data-k="body" rows="3">${esc(c.body)}</textarea></label><div class="hint">Use {{name}}, {{phone}} or a saved field.</div>`;
-    case 'image': return `<label><span class="lbl">Image URL</span><input data-k="link" value="${esc(c.link)}"></label><label><span class="lbl">Caption</span><input data-k="caption" value="${esc(c.caption)}"></label>`;
+    case 'image': return `<label><span class="lbl">Image</span>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          <input data-k="link" id="img-url" value="${esc(c.link)}" placeholder="https://… or Upload" style="flex:1;min-width:150px">
+          <input type="file" id="img-file" style="display:none" accept=".jpg,.jpeg,.png,.webp" onchange="uploadNodeImage(this)">
+          <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('img-file').click()">Upload</button>
+        </div><div class="hint" id="img-status"></div></label>
+      <label><span class="lbl">Caption</span><input data-k="caption" value="${esc(c.caption)}"></label>`;
+    case 'sheet_export': { const f=c.fields||[];
+      return `<label><span class="lbl">Spreadsheet</span>
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+            <input id="sx-name" value="${esc(c.sheet_name||'')}" placeholder="No sheet chosen" readonly style="flex:1;min-width:140px">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="pickSheet()">Choose…</button>
+          </div><div class="hint" id="sx-status"></div></label>
+        <label><span class="lbl">Tab</span><select id="sx-tab" data-k="sheet_tab"><option value="${esc(c.sheet_tab||'')}">${esc(c.sheet_tab||'— choose a sheet first —')}</option></select></label>
+        <div class="lbl mt10">Columns to write</div>`
+        + ['date','phone','name','last_reply','score','grade','tags'].map(k=>`<label style="display:flex;gap:6px;font-weight:normal;align-items:center"><input type="checkbox" class="sxf" value="${k}" ${f.includes(k)?'checked':''} style="width:auto">${k}</label>`).join('')
+        + `<div class="hint">Written in this order. The header row is created automatically if the tab is empty.</div>`; }
     case 'template': return `<label><span class="lbl">Template</span><select id="tpl-sel" onchange="onTplChange(this.value)">${'<option value="0">— choose —</option>'+TEMPLATES.map(t=>`<option value="${t.id}" ${t.id==c.template_id?'selected':''}>${esc(t.label)}</option>`).join('')}</select></label><div id="tpl-fields"></div>`;
     case 'question': return `<label><span class="lbl">Question</span><textarea data-k="body" rows="2">${esc(c.body)}</textarea></label><label><span class="lbl">Save answer as</span><input data-k="save_as" value="${esc(c.save_as)}" placeholder="e.g. budget"></label>`;
     case 'ai_score': return `<label><span class="lbl">Scoring criterion</span><textarea data-k="criterion" rows="3">${esc(c.criterion)}</textarea></label><label><span class="lbl">Max points</span><input type="number" data-k="max_points" value="${c.max_points}"></label>`;
@@ -661,6 +743,12 @@ function bindCfg(){
     el.addEventListener('input',()=>{ let v=el.value; if(el.type==='number') v=+v; current.config[el.dataset.k]=v; renderKeepPanel(false); });
   });
   document.querySelectorAll('#cfg-body .cf').forEach(cb=>cb.addEventListener('change',()=>{ current.config.fields=[...document.querySelectorAll('#cfg-body .cf:checked')].map(x=>x.value); }));
+  // Export columns are written in the order shown, so read them in DOM order.
+  document.querySelectorAll('#cfg-body .sxf').forEach(cb=>cb.addEventListener('change',()=>{
+    current.config.fields=[...document.querySelectorAll('#cfg-body .sxf:checked')].map(x=>x.value);
+    renderKeepPanel(false);
+  }));
+  if(current.type==='sheet_export' && current.config.sheet_id) loadSheetTabs(current.config.sheet_id, current.config.sheet_tab);
   // AI conversation: line-based lists → arrays (labels only; keys are derived on save).
   const ag=document.getElementById('ac-goals'), ac=document.getElementById('ac-caps');
   if(ag) ag.addEventListener('input',()=>{ current.config.goals=ag.value.split('\n').map(s=>s.trim()).filter(Boolean); renderKeepPanel(false); });
@@ -723,7 +811,109 @@ wrap.addEventListener('wheel',e=>{
 canvas.addEventListener('click',e=>{ if(e.target.closest('.port'))return; if(e.target.closest('.del'))return; const el=e.target.closest('.node'); if(el&&!e.target.closest('.node-head')) openCfg(el.dataset.id); });
 
 /* ── trigger form ── */
-function onTrig(){ const k=document.getElementById('trigger_type').value==='keyword'; document.getElementById('kw-wrap').style.display=k?'':'none'; document.getElementById('mt-wrap').style.display=k?'':'none'; const s=canvas.querySelector('.node.start .node-body'); if(s)s.innerHTML=summary(start); }
+/* ── source sheet (the trigger) ──
+   Same picker as the export node, but it fills the form fields rather than a node's config,
+   and then offers the sheet's own headers for column mapping instead of asking the client to
+   type column names and hope they match. */
+let srcPicking = false;
+function pickSourceSheet(){
+  srcPicking = true;
+  const w = window.open('google_sheet.php?action=picker','revenect_picker','width=760,height=600');
+  const st = document.getElementById('src-status');
+  if(!w && st) st.textContent = 'Allow pop-ups for this site, then try again.';
+}
+async function loadSourceSheet(id, tab){
+  const sel=document.getElementById('src-tab'), st=document.getElementById('src-status');
+  if(!sel) return;
+  sel.innerHTML='<option>Loading…</option>';
+  const r=await fetch('google_sheet.php?action=tabs&id='+encodeURIComponent(id));
+  const d=await r.json();
+  if(!d.ok){ sel.innerHTML='<option value="">— could not read —</option>'; if(st) st.textContent='✕ '+(d.error||''); return; }
+  sel.innerHTML=(d.tabs||[]).map(t=>`<option value="${t.replace(/"/g,'&quot;')}" ${t===tab?'selected':''}>${t}</option>`).join('');
+  if(st) st.textContent=d.title?('Reading “'+d.title+'”'):'';
+  loadSourceHeader(id, sel.value);
+}
+async function loadSourceHeader(id, tab){
+  const ph=document.getElementById('src-map-phone'), nm=document.getElementById('src-map-name');
+  if(!ph||!nm) return;
+  const curP=ph.value, curN=nm.value;
+  const r=await fetch('google_sheet.php?action=header&id='+encodeURIComponent(id)+'&tab='+encodeURIComponent(tab));
+  const d=await r.json();
+  const cols=(d.header||[]).filter(Boolean);
+  if(!cols.length){ ph.innerHTML='<option value="">— no header row —</option>'; nm.innerHTML='<option value="">— no header row —</option>'; return; }
+  const opts=(cur,blank)=>(blank?`<option value="">— none —</option>`:'')+cols.map(c=>`<option value="${c.replace(/"/g,'&quot;')}" ${c===cur?'selected':''}>${c}</option>`).join('');
+  ph.innerHTML=opts(curP,false);
+  nm.innerHTML=opts(curN,true);
+  // Guess the obvious ones so the common case needs no clicks at all.
+  if(!curP){ const g=cols.find(c=>/phone|mobile|whats|رقم|موبايل/i.test(c)); if(g) ph.value=g; }
+  if(!curN){ const g=cols.find(c=>/name|اسم/i.test(c));                     if(g) nm.value=g; }
+}
+document.addEventListener('DOMContentLoaded',()=>{
+  const t=document.getElementById('src-tab');
+  if(t) t.addEventListener('change',()=>loadSourceHeader(document.getElementById('src-id').value, t.value));
+  const id=document.getElementById('src-id');
+  if(id && id.value) loadSourceSheet(id.value, t ? t.value : '');
+});
+
+/* ── image node: upload straight into the flow ── */
+async function uploadNodeImage(input){
+  if(!input.files || !input.files[0] || !current) return;
+  const st=document.getElementById('img-status'); if(st) st.textContent='Uploading…';
+  const fd=new FormData(); fd.append('csrf_token',CSRF); fd.append('media',input.files[0]);
+  try{
+    const r=await fetch('upload_media.php',{method:'POST',body:fd}); const d=await r.json();
+    if(d.ok){
+      document.getElementById('img-url').value=d.url;
+      current.config.link=d.url;
+      if(st) st.textContent='✓ uploaded';
+      renderKeepPanel(false);
+    } else if(st) st.textContent='✕ '+(d.error||'upload failed');
+  }catch(e){ if(st) st.textContent='✕ network error'; }
+  input.value='';
+}
+
+/* ── sheet_export: pick a spreadsheet through Google's own picker ──
+   Our scope only reaches files the user selects there, so there is no list for us to render;
+   the popup hands back an id we are then allowed to open. */
+function pickSheet(){
+  const st=document.getElementById('sx-status');
+  const w=window.open('google_sheet.php?action=picker','revenect_picker','width=760,height=600');
+  if(!w){ if(st) st.textContent='Allow pop-ups for this site, then try again.'; return; }
+  if(st) st.textContent='Choosing…';
+}
+window.addEventListener('message', ev=>{
+  if(ev.origin!==window.location.origin) return;                 // only our own popup
+  const d=ev.data; if(!d || d.source!=='revenect-picker') return;
+
+  if(srcPicking){                       // the trigger asked, not a node
+    srcPicking=false;
+    document.getElementById('src-id').value=d.id;
+    document.getElementById('src-name').value=d.name||d.id;
+    loadSourceSheet(d.id,'');
+    return;
+  }
+  if(!current || current.type!=='sheet_export') return;
+  current.config.sheet_id=d.id; current.config.sheet_name=d.name||''; current.config.sheet_tab='';
+  const n=document.getElementById('sx-name'); if(n) n.value=d.name||d.id;
+  loadSheetTabs(d.id,'');
+  renderKeepPanel(false);
+});
+async function loadSheetTabs(id, selected){
+  const sel=document.getElementById('sx-tab'), st=document.getElementById('sx-status');
+  if(!sel) return;
+  sel.innerHTML='<option>Loading tabs…</option>';
+  try{
+    const r=await fetch('google_sheet.php?action=tabs&id='+encodeURIComponent(id)); const d=await r.json();
+    if(!d.ok){ sel.innerHTML='<option value="">— could not read —</option>'; if(st) st.textContent='✕ '+(d.error||''); return; }
+    sel.innerHTML=(d.tabs||[]).map(t=>`<option value="${t.replace(/"/g,'&quot;')}" ${t===selected?'selected':''}>${t}</option>`).join('');
+    if(!selected && d.tabs && d.tabs.length){ current.config.sheet_tab=d.tabs[0]; }
+    if(st) st.textContent=d.title?('Connected to “'+d.title+'”'):'';
+    renderKeepPanel(false);
+  }catch(e){ sel.innerHTML='<option value="">— error —</option>'; }
+}
+
+function onTrig(){ const v=document.getElementById('trigger_type').value; const k=v==='keyword'; document.getElementById('kw-wrap').style.display=k?'':'none'; document.getElementById('mt-wrap').style.display=k?'':'none';
+  const sw=document.getElementById('sheet-wrap'); if(sw) sw.style.display=v==='google_sheet'?'block':'none'; const s=canvas.querySelector('.node.start .node-body'); if(s)s.innerHTML=summary(start); }
 
 /* ── serialize ── */
 document.getElementById('flow-form').addEventListener('submit',()=>{
