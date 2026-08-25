@@ -6,6 +6,73 @@ declare(strict_types=1);
  * Call layout_header(...) then echo page body, then layout_footer().
  */
 
+/**
+ * Height of the topbar logo, in px. Uploaded artwork varies wildly in proportion — a wordmark
+ * that reads well at 26px can be unreadable when the next one is square — so this is tunable
+ * from Admin → Branding rather than being a constant someone has to edit code to change.
+ */
+function brand_logo_height(): int
+{
+    static $h = null;
+    if ($h === null) {
+        // Read app_settings directly rather than through setting_get(): that lives in push.php,
+        // which most pages never load, so depending on it silently pinned every logo to the
+        // default no matter what was saved.
+        try { $h = (int) db_val("SELECT v FROM app_settings WHERE k='logo_height'"); }
+        catch (Throwable $e) { $h = 0; }
+    }
+    return $h > 0 ? max(20, min(120, $h)) : 40;
+}
+
+/** Best name to show for a signed-in user; falls back to the local part of their email. */
+function user_display_name(array $user): string
+{
+    $n = trim((string) ($user['name'] ?? ''));
+    if ($n !== '') return $n;
+    $email = (string) ($user['email'] ?? '');
+    $local = trim(explode('@', $email)[0]);
+    return $local !== '' ? $local : 'Account';
+}
+
+/** Two initials for the avatar fallback — works for Arabic names as well as Latin ones. */
+function user_initials(array $user): string
+{
+    $name = user_display_name($user);
+    $parts = preg_split('/[\s._-]+/u', $name, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+    if (count($parts) >= 2) return mb_strtoupper(mb_substr($parts[0], 0, 1) . mb_substr($parts[1], 0, 1));
+    return mb_strtoupper(mb_substr($name, 0, 2));
+}
+
+/** Avatar image when one is uploaded, otherwise initials on a tinted circle. */
+function user_avatar_html(array $user, int $size = 30, string $base = './'): string
+{
+    $av = trim((string) ($user['avatar'] ?? ''));
+    $px = max(16, min(200, $size));
+    if ($av !== '' && is_file(dirname(__DIR__) . '/uploads/avatars/' . $av)) {
+        return '<img class="avatar" src="' . e($base . 'uploads/avatars/' . $av) . '?v=' . (int) @filemtime(dirname(__DIR__) . '/uploads/avatars/' . $av) . '"'
+             . ' width="' . $px . '" height="' . $px . '" alt="">';
+    }
+    return '<span class="avatar avatar-initials" style="width:' . $px . 'px;height:' . $px . 'px;font-size:' . max(9, (int) round($px * 0.38)) . 'px">'
+         . e(user_initials($user)) . '</span>';
+}
+
+/**
+ * Unread inbound messages for the bell. Scoped to the client for a client login; across every
+ * client for an admin, whose Inbox spans all of them.
+ */
+function topbar_unread(array $user): int
+{
+    if (!$user) return 0;
+    try {
+        $sql = "SELECT COUNT(*) FROM messages m JOIN contacts c ON c.id = m.contact_id
+                 WHERE m.direction='in' AND m.created_at > COALESCE(c.inbox_read_at,'2000-01-01')";
+        if (($user['role'] ?? '') !== 'admin' && !empty($user['client_id'])) {
+            return (int) db_val($sql . " AND c.client_id = ?", [(int) $user['client_id']]);
+        }
+        return (int) db_val($sql);
+    } catch (Throwable $e) { return 0; }
+}
+
 function nav_items(string $role): array
 {
     if ($role === 'admin') {
@@ -92,20 +159,40 @@ function layout_header(string $title, string $role, string $active, array $opts 
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title><?= e($title) ?> — <?= e($appName) ?></title>
 <link rel="stylesheet" href="../assets/dashboard.css?v=<?= @filemtime(__DIR__ . '/../assets/dashboard.css') ?: '7' ?>">
+<?php
+/* An uploaded logo's natural proportions vary a lot, so the height is a setting rather than
+   a constant. The bar grows with it — a taller logo in a fixed-height bar just overflows. */
+$logoH  = brand_logo_height();
+$barH   = max(58, $logoH + 22);
+?>
+<style>:root{ --topbar-h: <?= (int) $barH ?>px; }</style>
 <?= pwa_head('../') ?>
 </head>
 <body>
+<?php $me = current_user_full() ?: []; $unread = topbar_unread($me); ?>
 <header class="topbar">
   <div class="topbar-brand">
     <button type="button" class="nav-toggle" id="nav-toggle" aria-label="Menu" aria-expanded="false" aria-controls="sidebar">
       <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 5h14M3 10h14M3 15h14"/></svg>
     </button>
-    <span class="brand-mark"><?= brand_logo('full', 26, '../') ?></span>
+    <span class="brand-mark"><?= brand_logo('full', $logoH, '../') ?></span>
     <span class="topbar-sub"><?= e($badge) ?></span>
   </div>
   <nav class="topbar-nav">
     <?php if (!empty($opts['credits_html'])): ?><?= $opts['credits_html'] ?><?php endif; ?>
-    <span class="topbar-email"><?= e(current_user()['email'] ?? '') ?></span>
+
+    <a class="topbar-bell" href="inbox.php" aria-label="<?= $unread ? $unread . ' unread message(s)' : 'Inbox' ?>" title="Inbox">
+      <svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M10 2.5a4.5 4.5 0 00-4.5 4.5c0 3.5-1.5 4.5-1.5 4.5h12s-1.5-1-1.5-4.5A4.5 4.5 0 0010 2.5z"/><path d="M8.6 15a1.6 1.6 0 002.8 0"/>
+      </svg>
+      <?php if ($unread > 0): ?><span class="bell-dot"><?= $unread > 99 ? '99+' : (int) $unread ?></span><?php endif; ?>
+    </a>
+
+    <a class="topbar-user" href="settings.php" title="<?= e((string) ($me['email'] ?? '')) ?>">
+      <?= user_avatar_html($me, 30, '../') ?>
+      <span class="topbar-user-name"><?= e(user_display_name($me)) ?></span>
+    </a>
+
     <a class="btn-top gold" href="../logout.php">Logout</a>
   </nav>
 </header>

@@ -3,6 +3,7 @@ declare(strict_types=1);
 require __DIR__ . '/_init.php';
 require __DIR__ . '/../includes/ai.php';
 require_once __DIR__ . '/../includes/channel.php';
+require_once __DIR__ . '/../includes/profile.php';
 
 $cid = (int) $CLIENT['id'];
 
@@ -90,6 +91,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
         [$provider, $model, $keyEnc, $cid]);
     flash('AI settings saved.');
     redirect('settings.php#ai');
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array(($_POST['action'] ?? ''), ['save_profile', 'clear_avatar'], true)) {
+    verify_csrf();
+    if (($_POST['action'] ?? '') === 'clear_avatar') { profile_clear_avatar((int) $ME['id']); flash('Picture removed.'); redirect('settings.php#profile'); }
+    $r = profile_save((int) $ME['id'], $_POST, $_FILES);
+    if (!$r['ok']) $err = $r['error'];
+    else { flash('Profile saved.'); redirect('settings.php#profile'); }
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'change_password') {
@@ -355,6 +364,8 @@ async function pwResync() {
   </p>
   <div id="notif-body"></div>
 </div>
+
+<?= profile_card_html(db_row("SELECT * FROM users WHERE id=?", [(int) $ME['id']]) ?: $ME, '../') ?>
 
 <div class="card">
   <h2>Change Password</h2>

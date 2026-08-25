@@ -74,6 +74,36 @@ small { font-size: 12px; }
 .topbar-sub { color: var(--muted); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; }
 .topbar-nav { display: flex; align-items: center; gap: 12px; }
 .topbar-email { color: var(--muted); font-size: 12px; }
+
+/* ── signed-in user + notification bell ── */
+.topbar-user {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 3px 10px 3px 3px; border-radius: 999px;
+  color: var(--ink); text-decoration: none; border: 1px solid transparent;
+}
+.topbar-user:hover { border-color: var(--line); background: var(--paper); }
+.topbar-user-name { font-size: 13px; font-weight: 600; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.avatar { border-radius: 50%; object-fit: cover; display: block; flex: none; }
+.avatar-initials {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--brand-tint); color: var(--brand);
+  font-weight: 700; letter-spacing: .02em; line-height: 1;
+}
+.topbar-bell {
+  position: relative; display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; border-radius: 9px;
+  color: var(--muted); border: 1px solid transparent;
+}
+.topbar-bell:hover { color: var(--brand); border-color: var(--line); background: var(--paper); }
+/* The count sits on the bell rather than beside it so the bar keeps its width as it changes. */
+.bell-dot {
+  position: absolute; top: 1px; right: 0;
+  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px;
+  background: var(--danger, #c0392b); color: #fff;
+  font-size: 10px; font-weight: 700; line-height: 16px; text-align: center;
+}
+/* A taller logo must not squash the bar's contents. */
+.topbar-brand .brand-img, .brand-mark img { max-height: calc(var(--topbar-h) - 18px); width: auto; }
 .credits-chip {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 4px 11px; border-radius: 999px;
@@ -351,6 +381,8 @@ textarea { resize: vertical; min-height: 84px; }
   .topbar-sub { display: none; }
   .brand-mark { font-size: 16px; letter-spacing: .16em; }
   .topbar-email { display: none; }
+  .topbar-user-name { display: none; }
+  .topbar-user { padding: 3px; }
   .topbar-nav { gap: 8px; }
 
   /* Sidebar → off-canvas drawer. */

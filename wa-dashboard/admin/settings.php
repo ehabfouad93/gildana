@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/_init.php';
+require_once __DIR__ . '/../includes/profile.php';
 require_once __DIR__ . '/../includes/push.php';
 require_once __DIR__ . '/../assets/icons/generate.php';   // icons_build()
 
@@ -88,6 +89,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         redirect('settings.php#gateway');
     }
 
+    if ($action === 'save_profile' || $action === 'clear_avatar') {
+        if ($action === 'clear_avatar') { profile_clear_avatar((int) $me['id']); flash('Picture removed.'); redirect('settings.php#profile'); }
+        $r = profile_save((int) $me['id'], $_POST, $_FILES);
+        if (!$r['ok']) $err = $r['error'];
+        else { flash('Profile saved.'); redirect('settings.php#profile'); }
+    }
+
+    if ($action === 'save_logo_height') {
+        setting_set('logo_height', (string) max(20, min(120, (int) ($_POST['logo_height'] ?? 40))));
+        flash('Logo size updated.');
+        redirect('settings.php#branding');
+    }
+
     if ($action === 'update_email') {
         $email = strtolower(trim((string) ($_POST['email'] ?? '')));
         if (!filter_var($email, FILTER_VALIDATE_EMAIL)) $err = 'Enter a valid email.';
@@ -115,8 +129,10 @@ page_head('My Settings');
 if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif;
 if ($ok):  ?><div class="alert success"><?= e($ok) ?></div><?php endif; ?>
 
+<?= profile_card_html($user, '../') ?>
+
 <div class="card">
-  <h2>Profile</h2>
+  <h2>Sign-in Email</h2>
   <form method="post" style="max-width:420px">
     <?= csrf_field() ?><input type="hidden" name="action" value="update_email">
     <div class="field"><span class="lbl">Admin Email</span><input type="email" name="email" value="<?= e((string) $user['email']) ?>" required></div>
@@ -131,6 +147,19 @@ if ($ok):  ?><div class="alert success"><?= e($ok) ?></div><?php endif; ?>
     <span class="mono">wa-dashboard/assets/brand/</span> over FTP — both work the same way.
     Leave these empty to keep the built-in Revenect artwork.
   </p>
+
+  <form method="post" style="margin-bottom:18px">
+    <?= csrf_field() ?><input type="hidden" name="action" value="save_logo_height">
+    <div class="field" style="max-width:320px"><span class="lbl">Logo height in the top bar</span>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input type="number" name="logo_height" min="20" max="120" value="<?= (int) brand_logo_height() ?>" style="max-width:110px">
+        <span class="text-muted" style="font-size:12px">px</span>
+        <button class="btn btn-ghost btn-sm">Apply</button>
+      </div>
+      <span class="text-muted" style="font-size:11.5px">The bar grows to fit, so a tall logo won't be cropped.
+        A wide wordmark reads well around 30–40; a square or stacked mark usually needs 60–80.</span>
+    </div>
+  </form>
   <?php
     $slots = [
       'logo'       => ['Logo', 'Shown in the top bar and on the sign-in screen. Wide artwork works best (about 4:1). SVG or transparent PNG.', 'logo'],
