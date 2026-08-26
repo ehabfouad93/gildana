@@ -5,6 +5,12 @@ Newest first. Every entry is written from what actually shipped, including the f
 Version numbers are ours: a **minor** bump (1.3 → 1.4) is a release with new capability, a
 **patch** (1.4.0 → 1.4.1) is corrections only.
 
+**Scope.** This covers the **WhatsApp dashboard**. The same repository also holds two other
+products that these releases do not touch — the **Gildana marketing site** and **AI Studio**, a
+standalone creative orchestrator (pick ChatGPT, Claude, GPT Image, Stable Diffusion or Kling
+per step, then publish to Facebook and Instagram). Both arrived with the import below and have
+their own history.
+
 ---
 
 ## 1.4.0 — 25 August 2026 · *latest*
@@ -170,29 +176,73 @@ The dashboard becomes a phone app, and the product gets its own identity.
 
 ### Upgrading
 
-Run migration (`010`). Generate push keys once in Admin → Settings.
+Run migration `010`, then generate push keys once in Admin → Settings.
 
 ---
 
 ## 1.0.0 — 11 August 2026
 
-First release: the WhatsApp campaign and automation platform.
+The platform enters version control, and the send path gets three real fixes.
 
-- **Campaigns** to opted-in contact lists, with full template support — header media,
-  variables and dynamic buttons.
-- **Automations**: a visual flow canvas with keyword, welcome and default triggers.
-- **Lead Qualifier**: import leads from a Google Sheet, message them, and let an AI qualify and
-  score the conversation.
-- **Inbox** with live human takeover.
-- Multi-tenant: clients, credits, roles and reports.
+Everything listed under *Before version control* below arrived on this day as a single import.
+What was **built** on the day is the fixes.
 
-### Fixed in this release
+### Fixed
 
-- Bulk sends of image templates failed for most recipients. The image is now uploaded once and
-  reused, instead of being re-fetched for every message.
-- Campaigns sent incomplete template payloads, so any template with a media header failed.
-- Failed sends were retried even when Meta had dropped them deliberately (frequency caps,
-  policy) — those are now explained on the report rather than retried into the same wall.
+- **Bulk sends of image templates failed for most recipients.** The image was being re-fetched
+  by Meta for every single message, which throttles under load. It is uploaded once now and
+  reused for the whole campaign — this is what made large image sends reliable.
+- **Any template with a media header failed outright.** Campaigns were sending incomplete
+  template payloads, omitting the header, so Meta rejected them.
+- **Failed sends were retried even when Meta had dropped them on purpose** — frequency caps,
+  policy blocks. Resending hits the same wall, so those are now explained on the report
+  instead.
+
+### Also
+
+- The AI conversation node, live human takeover, and a default-reply catch-all so a message
+  matching nothing still gets an answer.
+
+---
+
+## Before version control
+
+The platform arrived on 11 August already built, as one import — there is no commit history
+for this period. What follows is reconstructed from the database migrations it came with,
+which record the order it was built in.
+
+### The campaign platform · migrations 001–004
+
+- Multi-tenant core: **clients, users, roles and credits**, with per-client billing.
+- **Contacts and lists**, with opt-in status tracked per contact.
+- **Templates** synced from the client's WhatsApp Business account.
+- **Campaigns** with per-message delivery state, and a worker that sends them in throttled
+  parallel batches.
+- Inbound **webhook** handling and delivery-status tracking.
+- Clients could be onboarded **before** their WhatsApp number existed, and repeated failed
+  logins were locked out.
+
+### The automation engine · migrations 005–007
+
+- **Flows, steps and runs** — the bot engine, with each conversation tracked as a run.
+- A **visual canvas** for building flows, with node positions stored per flow.
+- **Lead Qualifier**: leads imported from a Google Sheet, messaged, then qualified and
+  **scored by an AI** against criteria the client writes.
+- **AI Chat Agents** and lead **grading** — hot, warm, cold.
+- **Collected data** per run, for reporting on what the conversation produced.
+
+### The inbox · migration 008
+
+- One **unified message log** across every module, so campaigns, automations and manual
+  replies all appear in a single conversation thread per contact.
+
+### Alongside it
+
+- **AI Studio** — a standalone creative orchestrator: build a campaign, choose which AI does
+  each step (ChatGPT or Claude for copy, GPT Image, Stable Diffusion or Claude for design,
+  Kling for video), then download the assets or publish straight to Facebook and Instagram.
+  Its own login, its own database, independent of the dashboard.
+- The **Gildana marketing site**.
 
 ---
 
