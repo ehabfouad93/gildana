@@ -316,6 +316,9 @@ try {
 
                 if ($r['ok']) {
                     db_run("UPDATE campaign_messages SET status='sent', wa_message_id=?, sent_at=NOW(), updated_at=NOW(), error_code=NULL, error_title=NULL, claimed_by=NULL WHERE id=?", [$r['wamid'], (int) $mid]);
+                    // Keep the live progress moving without re-scanning the whole campaign;
+                    // campaign_refresh_counts() reconciles at the end of the run.
+                    campaign_bump_counts($it['campId'], 'sent_count');
                     $sentTotal++;
                 } elseif (wa_error_is_transient($code, $ttl) && $attemptNo[$mid] < SEND_MAX_ATTEMPTS) {
                     /* Transient: schedule a later attempt instead of burning the message.

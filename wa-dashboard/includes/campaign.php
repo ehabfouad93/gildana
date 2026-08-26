@@ -74,7 +74,22 @@ function campaign_components(array $varMap, array $tplComponents, array $contact
     );
 }
 
-/** Recompute a campaign's status counters from its messages. */
+/**
+ * Nudge a campaign's counters as individual messages change state.
+ *
+ * The full recount below re-scans every message of the campaign, which is fine at the end
+ * of a run but costly to call repeatedly on a large campaign. This applies the delta
+ * directly; campaign_refresh_counts() still runs afterwards and reconciles, so a missed or
+ * doubled nudge self-corrects rather than drifting.
+ */
+function campaign_bump_counts(int $campaignId, string $field, int $delta = 1): void
+{
+    $allowed = ['sent_count', 'delivered_count', 'read_count', 'failed_count'];
+    if (!in_array($field, $allowed, true) || $delta === 0) return;
+    db_run("UPDATE campaigns SET {$field} = GREATEST(0, {$field} + ?) WHERE id = ?", [$delta, $campaignId]);
+}
+
+/** Recompute a campaign's status counters from its messages. Authoritative. */
 function campaign_refresh_counts(int $campaignId): void
 {
     $row = db_row(
