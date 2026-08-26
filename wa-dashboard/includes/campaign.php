@@ -83,7 +83,10 @@ function campaign_refresh_counts(int $campaignId): void
             SUM(status IN ('sent','delivered','read'))       AS sent,
             SUM(status IN ('delivered','read'))              AS delivered,
             SUM(status = 'read')                             AS `read`,
-            SUM(status = 'failed')                           AS failed,
+            -- 'dead' (transient error, retries exhausted) and 'review' (sent once, outcome
+            -- never confirmed) are both terminal for the campaign and both need a human, so
+            -- they count as failed here and are listed on the Needs attention page.
+            SUM(status IN ('failed','dead','review'))        AS failed,
             SUM(status IN ('queued','sending'))              AS pending
          FROM campaign_messages WHERE campaign_id = ?",
         [$campaignId]
