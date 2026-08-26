@@ -714,16 +714,24 @@ function automation_sweep_no_answer(int $hours = 24): int
 /* ── Lead entry (sheet/upload): QUEUE the outreach; the background worker sends it in
       throttled parallel batches (see automation_send_outreach). Never sends synchronously
       here — that made bulk imports hang and hit WhatsApp rate limits. ── */
-function automation_enqueue_lead(array $client, array $flow, array $contact): void
+function automation_enqueue_lead(array $client, array $flow, array $contact): bool
 {
     $ctx = ['fields' => [], 'transcript' => []];
-    db_insert(
-        "INSERT INTO flow_runs (flow_id,client_id,contact_id,current_step_id,status,score,context,created_at)
-         VALUES (?,?,?,?, 'queued', 0, ?, NOW())",
+
+    /* enrol_key makes "one lead enters this qualifier once" a database rule rather than a
+       hope, so two imports running at the same time can't both enrol the same person.
+       It is set ONLY here: a chatbot contact legitimately re-enters a keyword flow every
+       time they message, and auto_start() leaves the column NULL so those never collide. */
+    $key = (int) $flow['id'] . ':' . (int) $contact['id'];
+    $inserted = db_run(
+        "INSERT IGNORE INTO flow_runs (flow_id,client_id,contact_id,current_step_id,status,score,context,enrol_key,created_at)
+         VALUES (?,?,?,?, 'queued', 0, ?, ?, NOW())",
         [(int) $flow['id'], (int) $client['id'], (int) $contact['id'], $flow['first_step_id'],
-         json_encode($ctx, JSON_UNESCAPED_UNICODE)]
+         json_encode($ctx, JSON_UNESCAPED_UNICODE), $key]
     );
+    if ($inserted === 0) return false;   // already enrolled — a concurrent import won
     db_run("UPDATE flows SET runs_count=runs_count+1 WHERE id=?", [(int) $flow['id']]);
+    return true;
 }
 
 /** Resolve one template variable spec ({source:name|static, value, fallback}) to a text value. */
@@ -1045,9 +1053,16 @@ function automation_ingest_rows(array $client, array $flow, string $csv, int $ma
     $res = ['imported' => 0, 'skipped' => 0, 'invalid' => 0, 'rows' => 0, 'error' => ''];
     $sc  = json_decode((string) $flow['source_config'], true) ?: [];
 
-    $lines = preg_split('/\r\n|\r|\n/', trim($csv));
-    if (!$lines || count($lines) < 2) { $res['error'] = 'The file has no data rows.'; return $res; }
-    $header = str_getcsv((string) array_shift($lines));
+    /* Parse as a real CSV stream. Splitting on newlines first silently destroyed any row
+       with a quoted field containing a line break — an address or a multi-line note — because
+       the fragments were then fed to str_getcsv separately. fgetcsv tracks quoting across
+       lines, the same way client/contacts.php already imports contacts. */
+    $fh = fopen('php://temp', 'r+');
+    fwrite($fh, $csv);
+    rewind($fh);
+
+    $header = fgetcsv($fh);
+    if (!$header) { fclose($fh); $res['error'] = 'The file has no data rows.'; return $res; }
     $cols   = array_map(fn($h) => strtolower(trim((string) $h)), $header);
     $map    = (array) ($sc['column_map'] ?? []);
     $phoneIdx = auto_col_index($cols, $map, 'phone', ['phone', 'number', 'mobile', 'msisdn', 'whatsapp', 'tel']);
@@ -1056,11 +1071,11 @@ function automation_ingest_rows(array $client, array $flow, string $csv, int $ma
     if ($country === '') $country = (string) $client['default_country'];
     $cid = (int) $client['id'];
 
-    foreach ($lines as $line) {
-        if (trim((string) $line) === '') continue;
+    while (($row = fgetcsv($fh)) !== false) {
+        // fgetcsv yields [null] for a blank line.
+        if ($row === [null] || (count($row) === 1 && trim((string) $row[0]) === '')) continue;
         if ($res['imported'] >= $maxRows) break;
         $res['rows']++;
-        $row   = str_getcsv((string) $line);
         $phone = normalize_phone((string) ($row[$phoneIdx] ?? ''), $country);
         if ($phone === '') { $res['invalid']++; continue; }
         $name  = $nameIdx !== null ? trim((string) ($row[$nameIdx] ?? '')) : '';
@@ -1074,13 +1089,18 @@ function automation_ingest_rows(array $client, array $flow, string $csv, int $ma
         }
         if (!$contact) { $res['invalid']++; continue; }
 
-        // Per-flow dedupe: already a lead in THIS qualifier → skip.
+        // Per-flow dedupe. The check-then-insert below is backed by a unique index on
+        // flow_runs.enrol_key, so two imports racing each other cannot both win.
         if (db_row("SELECT id FROM flow_runs WHERE flow_id=? AND contact_id=?", [(int) $flow['id'], (int) $contact['id']])) {
             $res['skipped']++; continue;
         }
-        automation_enqueue_lead($client, $flow, $contact);
-        $res['imported']++;
+        if (automation_enqueue_lead($client, $flow, $contact)) {
+            $res['imported']++;
+        } else {
+            $res['skipped']++;   // lost the race to a concurrent import
+        }
     }
+    fclose($fh);
     return $res;
 }
 

@@ -15,9 +15,15 @@ function crypto_key(): string
         $raw = (string) config('encryption_key');
         $decoded = base64_decode($raw, true);
         if ($decoded === false || strlen($decoded) !== 32) {
-            // Fall back to a hash so the app still runs, but warn in logs.
-            error_log('crypto: encryption_key is not valid base64 32 bytes; deriving via hash.');
-            $decoded = hash('sha256', $raw, true);
+            /* Refuse to run rather than deriving a key by hashing whatever was there.
+               That fallback meant an install left on the sample value encrypted every
+               tenant's WhatsApp token with a key anyone could compute from a public
+               string — and it did so silently, with only a line in the error log. */
+            error_log('crypto: encryption_key is not 32 bytes of base64 — refusing to start.');
+            throw new RuntimeException(
+                'encryption_key in config.php must be 32 random bytes, base64-encoded. '
+              . 'Generate one with: php -r "echo base64_encode(random_bytes(32)), PHP_EOL;"'
+            );
         }
         $key = $decoded;
     }

@@ -12,8 +12,21 @@ try {
     exit('Database setup failed. Check the server error log and your database settings in config.php.');
 }
 
-// If an admin already exists, setup is done.
+/* Setup is done once an admin exists — or once the lock file says so.
+   The lock matters because admin_exists() alone re-opens this page if the users table is
+   ever emptied (a restore, a bad cleanup), and this page creates an administrator for
+   whoever loads it first. */
+const SETUP_LOCK = __DIR__ . '/.setup_complete';
+
+if (is_file(SETUP_LOCK)) {
+    if (!admin_exists()) {
+        http_response_code(403);
+        exit('Setup is closed. To create an administrator, delete .setup_complete on the server first.');
+    }
+    redirect('index.php');
+}
 if (admin_exists()) {
+    @file_put_contents(SETUP_LOCK, gmdate('c') . " setup completed\n");
     redirect('index.php');
 }
 
@@ -36,6 +49,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
              VALUES (NULL, ?, ?, 'admin', 'active', NOW())",
             [$email, password_hash($pass, PASSWORD_DEFAULT)]
         );
+        // Close the door behind the first admin.
+        @file_put_contents(SETUP_LOCK, gmdate('c') . " first admin created\n");
         flash('Admin account created. Please sign in.');
         redirect('index.php');
     }

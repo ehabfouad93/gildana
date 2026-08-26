@@ -371,18 +371,10 @@ function wa_local_path_for_url(string $url): ?string
 /** Simple GET returning the body, or null. */
 function wa_http_get(string $url): ?string
 {
-    $ch = curl_init($url);
-    curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_FOLLOWLOCATION => true,
-        CURLOPT_TIMEOUT        => 60,
-        CURLOPT_CONNECTTIMEOUT => 10,
-        CURLOPT_USERAGENT      => 'RevenectWA/1.0',
-    ]);
-    $r    = curl_exec($ch);
-    $http = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-    return ($r !== false && $http >= 200 && $http < 300) ? (string) $r : null;
+    /* The URL here comes from a tenant's campaign settings, so it is untrusted input.
+       safe_http_get() enforces HTTPS, re-checks every redirect hop, refuses private and
+       link-local addresses, and caps the response size — see includes/helpers.php. */
+    return safe_http_get($url, (int) config('media_max_bytes', 33554432));
 }
 
 /**

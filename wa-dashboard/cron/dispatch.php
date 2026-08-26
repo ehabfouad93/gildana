@@ -6,7 +6,8 @@ declare(strict_types=1);
  *
  *   * * * * * php /path/wa-dashboard/cron/dispatch.php
  *
- * Or over HTTP: https://app.example.com/wa-dashboard/cron/dispatch.php?token=<webhook_verify_token>
+ * Or over HTTP, with the token in a header (not the URL — access logs keep those):
+ *   curl -H "X-Cron-Token: <webhook_verify_token>" https://app.example.com/cron/dispatch.php
  *
  * Does three things under a single-runner MySQL lock:
  *   1. Sends campaign messages IN PARALLEL (fast bulk).
@@ -29,9 +30,18 @@ require __DIR__ . '/../includes/automation.php';
 require_once __DIR__ . '/../includes/push.php';
 
 if (PHP_SAPI !== 'cli') {
-    if (!hash_equals((string) config('webhook_verify_token'), (string) ($_GET['token'] ?? ''))) {
+    /* Prefer the header. The ?token= form still works for one release so an existing cron
+       entry keeps running, but it leaks into access logs, proxy logs and Referer headers —
+       and anyone holding it can start the worker. */
+    $expected = (string) config('webhook_verify_token');
+    $header   = (string) ($_SERVER['HTTP_X_CRON_TOKEN'] ?? '');
+    $query    = (string) ($_GET['token'] ?? '');
+    if ($header !== '' ? !hash_equals($expected, $header) : !hash_equals($expected, $query)) {
         http_response_code(403);
         exit('Forbidden');
+    }
+    if ($header === '' && $query !== '') {
+        error_log('dispatch: token passed in the URL is deprecated — send it as the X-Cron-Token header instead.');
     }
     header('Content-Type: text/plain; charset=UTF-8');
     // Keep running even if the triggering (fire-and-forget) request disconnects,

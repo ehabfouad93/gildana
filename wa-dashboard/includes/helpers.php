@@ -300,6 +300,93 @@ function respond_and_continue(string $body = 'ok', string $contentType = 'text/p
     @flush();
 }
 
+/**
+ * Fetch a URL supplied by a client, safely.
+ *
+ * Campaign header media is a URL the tenant types in, and the server fetches it. Without
+ * these guards that turns the server into a proxy for anything it can reach: cloud metadata
+ * endpoints (169.254.169.254), the gateway on the internal Docker network, a database admin
+ * port on localhost. A redirect is enough to reach them even if the typed URL looks public,
+ * which is why redirects are followed manually with a fresh check at every hop.
+ *
+ * Returns the body, or null if the URL is not safe to fetch or the fetch failed.
+ */
+function safe_http_get(string $url, int $maxBytes = 33554432, int $maxRedirects = 3): ?string
+{
+    for ($hop = 0; $hop <= $maxRedirects; $hop++) {
+        if (!safe_http_url_ok($url)) return null;
+
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => false,   // every hop is re-checked above, never blindly followed
+            CURLOPT_PROTOCOLS      => CURLPROTO_HTTPS,
+            CURLOPT_TIMEOUT        => 60,
+            CURLOPT_CONNECTTIMEOUT => 10,
+            CURLOPT_USERAGENT      => 'RevenectWA/1.0',
+            // Stop the transfer as soon as it exceeds the cap, rather than buffering a
+            // multi-gigabyte body into memory first.
+            CURLOPT_NOPROGRESS     => false,
+            CURLOPT_PROGRESSFUNCTION => function ($ch, $dlTotal, $dlNow) use ($maxBytes) {
+                return ($dlTotal > $maxBytes || $dlNow > $maxBytes) ? 1 : 0;
+            },
+        ]);
+        $body = curl_exec($ch);
+        $http = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $type = (string) curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
+        $loc  = (string) curl_getinfo($ch, CURLINFO_REDIRECT_URL);
+        curl_close($ch);
+
+        if ($http >= 300 && $http < 400 && $loc !== '') { $url = $loc; continue; }
+        if ($body === false || $http < 200 || $http >= 300) return null;
+        if (strlen((string) $body) > $maxBytes) return null;
+
+        // Media only. An HTML error page is not something we should be uploading to Meta.
+        $mime = strtolower(trim(explode(';', $type)[0] ?? ''));
+        if ($mime !== '' && !preg_match('~^(image|video|audio|application/pdf)~', $mime)) return null;
+
+        return (string) $body;
+    }
+    return null;   // too many redirects
+}
+
+/** True when a URL is a public HTTPS address we are willing to fetch. */
+function safe_http_url_ok(string $url): bool
+{
+    $p = parse_url($url);
+    if (!$p || strtolower((string) ($p['scheme'] ?? '')) !== 'https') return false;
+
+    $host = (string) ($p['host'] ?? '');
+    if ($host === '') return false;
+
+    // Resolve first: a public-looking hostname can still point at 127.0.0.1.
+    $ips = [];
+    if (filter_var($host, FILTER_VALIDATE_IP)) {
+        $ips = [$host];
+    } else {
+        foreach ([DNS_A, DNS_AAAA] as $t) {
+            foreach (@dns_get_record($host, $t) ?: [] as $rec) {
+                $ips[] = (string) ($rec['ip'] ?? $rec['ipv6'] ?? '');
+            }
+        }
+        // Fall back to the resolver gethostbyname uses if dns_get_record found nothing.
+        if (!$ips) { $r = gethostbyname($host); if ($r !== $host) $ips = [$r]; }
+    }
+    if (!$ips) return false;
+
+    foreach ($ips as $ip) {
+        if ($ip === '') continue;
+        // NO_PRIV_RANGE covers 10/8, 172.16/12, 192.168/16, fc00::/7;
+        // NO_RES_RANGE covers loopback, link-local (incl. 169.254.169.254) and 0.0.0.0/8.
+        if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+            return false;
+        }
+        // Carrier-grade NAT, which the filter above does not treat as private.
+        if (preg_match('~^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.~', $ip)) return false;
+    }
+    return true;
+}
+
 function app_base_url(): string
 {
     $base = rtrim((string) config('base_url', ''), '/');
@@ -318,15 +405,27 @@ function app_base_url(): string
 
 function trigger_worker(): void
 {
-    $url = app_base_url() . '/cron/dispatch.php?token=' . urlencode((string) config('webhook_verify_token'));
+    /* Must use the CONFIGURED base url, never one derived from the request.
+       app_base_url() falls back to the Host header when base_url is unset, and this call
+       carries the cron token — so a forged Host would post the token straight to an
+       attacker's server. Skip the kick rather than take that risk; the cron still runs the
+       work a minute later. */
+    $base = rtrim((string) config('base_url', ''), '/');
+    if ($base === '') {
+        error_log('trigger_worker: base_url is not set in config.php — skipping the instant send kick.');
+        return;
+    }
 
     try {
-        $ch = curl_init($url);
+        $ch = curl_init($base . '/cron/dispatch.php');
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER    => true,
             CURLOPT_NOSIGNAL          => true,
             CURLOPT_TIMEOUT_MS        => 400,   // fire and forget
             CURLOPT_CONNECTTIMEOUT_MS => 400,
+            // In a header rather than the query string: URLs end up in access logs, proxy
+            // logs and Referer headers, and this token starts the worker for everyone.
+            CURLOPT_HTTPHEADER        => ['X-Cron-Token: ' . (string) config('webhook_verify_token')],
         ]);
         @curl_exec($ch);
         @curl_close($ch);

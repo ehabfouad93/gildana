@@ -89,7 +89,7 @@ function nav_items(string $role): array
             'settings'  => ['label' => 'Settings',  'url' => 'settings.php',  'icon' => 'gear'],
         ];
     }
-    return [
+    $nav = [
         'dashboard' => ['label' => 'Dashboard', 'url' => 'index.php',     'icon' => 'grid'],
         'inbox'     => ['label' => 'Inbox',     'url' => 'inbox.php',     'icon' => 'chat'],
         'contacts'  => ['label' => 'Contacts',  'url' => 'contacts.php',  'icon' => 'users'],
@@ -102,6 +102,33 @@ function nav_items(string $role): array
         'reports'     => ['label' => 'Reports',        'url' => 'reports.php',      'icon' => 'chart'],
         'settings'  => ['label' => 'Settings',  'url' => 'settings.php',  'icon' => 'gear'],
     ];
+
+    // Only appears when something is actually waiting — a permanent zero is just noise.
+    if (($n = nav_attention_count()) > 0) {
+        $item = ['label' => 'Needs attention', 'url' => 'failed.php', 'icon' => 'alert', 'badge' => $n];
+        $nav = array_slice($nav, 0, 6, true) + ['attention' => $item] + array_slice($nav, 6, null, true);
+    }
+    return $nav;
+}
+
+/**
+ * How many messages are waiting on a human decision — gave up after repeated errors, or
+ * were sent without WhatsApp confirming, so we stopped instead of risking a duplicate.
+ * Only shown when there is something to show; a permanent zero in the nav is just noise.
+ */
+function nav_attention_count(): int
+{
+    static $n = null;
+    if ($n !== null) return $n;
+    $n = 0;
+    $u = current_user();
+    $cid = (int) ($u['client_id'] ?? 0);
+    if ($cid > 0 && function_exists('db_val')) {
+        try {
+            $n = (int) db_val("SELECT COUNT(*) FROM campaign_messages WHERE client_id=? AND status IN ('dead','review')", [$cid]);
+        } catch (Throwable $e) { $n = 0; }   // before migration 018 the statuses don't exist
+    }
+    return $n;
 }
 
 /**
