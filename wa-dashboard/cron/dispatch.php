@@ -390,6 +390,24 @@ try {
     // at the end, so campaigns + qualifier + automation share a single slot.
     foreach (db_all("SELECT * FROM clients WHERE channel='personal'") as $pc) slot_close($pc);
 
+    /* ══ RETENTION ══
+       Raw callback payloads and the inbound decision log both hold customers' message text
+       and phone numbers, and nothing ever deleted them. Keep a bounded window instead. */
+    $retentionDays = (int) (db_val("SELECT v FROM app_settings WHERE k='retention_days'") ?: 30);
+    if ($retentionDays > 0) {
+        // Chunked so a first run over a long-neglected table can't lock it for minutes.
+        $pruned = 0;
+        do {
+            $n = db_run("DELETE FROM webhook_events WHERE received_at < (NOW() - INTERVAL ? DAY) LIMIT 5000", [$retentionDays]);
+            $pruned += $n;
+        } while ($n === 5000);
+        do {
+            $n = db_run("DELETE FROM inbound_log WHERE created_at < (NOW() - INTERVAL ? DAY) LIMIT 5000", [$retentionDays]);
+            $pruned += $n;
+        } while ($n === 5000);
+        if ($pruned) out("Retention: pruned {$pruned} row(s) older than {$retentionDays} day(s).");
+    }
+
     // Heartbeat — lets the Health Check page confirm the cron is actually running.
     @touch(__DIR__ . '/.heartbeat');
 } finally {

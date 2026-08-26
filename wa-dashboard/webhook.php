@@ -41,30 +41,90 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
+/**
+ * Which tenant is this callback for?
+ *
+ * Meta addresses every entry by the phone number it was sent to, and each tenant owns a
+ * different number — so metadata.phone_number_id is the routing key. Used only to pick the
+ * right signing secret; the payload is not trusted for anything else until it is verified.
+ */
+function webhook_client_for(array $data): ?array
+{
+    foreach ((array) ($data['entry'] ?? []) as $entry) {
+        foreach ((array) ($entry['changes'] ?? []) as $change) {
+            $pnid = (string) ($change['value']['metadata']['phone_number_id'] ?? '');
+            if ($pnid === '') continue;
+            $row = db_row("SELECT * FROM clients WHERE phone_number_id = ?", [$pnid]);
+            if ($row) return $row;
+        }
+    }
+    return null;
+}
+
 $raw = file_get_contents('php://input') ?: '';
 
-/* ── Signature verification (if app secret configured) ── */
-$appSecret = (string) config('app_secret', '');
+$data = json_decode($raw, true);
+if (!is_array($data)) { http_response_code(200); echo 'ok'; exit; }
+
+/* ── Signature verification ──
+   Each tenant brings their own Meta app (their own app_id, phone number and token), and
+   Meta signs every callback with THAT app's secret. So the secret to check against depends
+   on which tenant the payload is for — a single platform-wide value could only ever
+   validate one of them. The per-client secret has been collected in Admin → client →
+   Credentials all along; this is where it finally gets used.
+
+   Parsing the JSON first is safe: it only tells us which client to look up, and nothing is
+   written or acted on until the signature checks out. */
+$sigClient = webhook_client_for($data);
+$appSecret = '';
+if ($sigClient && !empty($sigClient['app_secret_enc'])) {
+    $appSecret = decrypt_secret((string) $sigClient['app_secret_enc']);
+}
+// Fall back to a platform-wide secret, for a deployment where every tenant shares one app.
+if ($appSecret === '') $appSecret = (string) config('app_secret', '');
+
 if ($appSecret !== '') {
     $sig = (string) ($_SERVER['HTTP_X_HUB_SIGNATURE_256'] ?? '');
     $expected = 'sha256=' . hash_hmac('sha256', $raw, $appSecret);
     if (!$sig || !hash_equals($expected, $sig)) {
+        error_log('webhook: bad signature for client ' . (int) ($sigClient['id'] ?? 0));
         http_response_code(403);
         exit('Bad signature');
     }
+} else {
+    /* No secret to check against. Unsigned callbacks let anyone who finds this URL forge
+       delivery states, create contacts and trigger automations, so this is loud rather
+       than silent — and the client's Health Check shows it in red until it is fixed.
+       Rejecting outright is opt-in per client so that turning it on can be verified for
+       one tenant before it applies to the rest. */
+    $who = (int) ($sigClient['id'] ?? 0);
+    error_log('webhook: UNSIGNED callback accepted for client ' . $who
+            . ' — set that client\'s App Secret in Admin → client → Credentials.');
+    if ($sigClient && !empty($sigClient['require_signed_webhook'])) {
+        http_response_code(403);
+        exit('Signature required');
+    }
 }
 
-// Always ack fast so Meta doesn't retry; process inline (payloads are small).
-http_response_code(200);
-
-$data = json_decode($raw, true);
-if (!is_array($data)) { echo 'ok'; exit; }
-
-// Best-effort raw log for debugging (ignore dup key collisions).
+/* Record the event and use it to drop repeats. Meta re-delivers a callback it thinks we
+   failed to ack, and re-running a delivery would fire the automation and the AI reply a
+   second time — so the insert doubles as the dedupe key: if it changed no rows, we have
+   handled this payload already. */
+$duplicate = false;
 try {
     $key = substr(hash('sha256', $raw), 0, 60);
-    db_run("INSERT IGNORE INTO webhook_events (event_key, payload, received_at) VALUES (?,?,NOW())", [$key, $raw]);
-} catch (Throwable $e) { /* non-fatal */ }
+    $duplicate = db_run("INSERT IGNORE INTO webhook_events (event_key, payload, received_at) VALUES (?,?,NOW())", [$key, $raw]) === 0;
+} catch (Throwable $e) { /* non-fatal — better to process twice than not at all */ }
+
+/* Ack Meta NOW, then keep working with the connection closed.
+   Setting a 200 status was never enough: PHP holds the response until the script ends,
+   so Meta sat waiting through the whole automation and AI run. On a busy account that
+   blocks a PHP worker per inbound message and pushes Meta into timeout-retries — which
+   is exactly what produces duplicate automation runs. */
+http_response_code(200);
+respond_and_continue('ok');
+
+if ($duplicate) exit;   // already handled on the first delivery
 
 /** WhatsApp status → our progression rank (forward-only, never downgrade). */
 function status_rank(string $s): int
@@ -203,5 +263,4 @@ foreach (array_keys($touchedCampaigns) as $campId) {
 
 // Fire-and-forget: makes the push land in seconds instead of waiting for the 5-min cron.
 if ($pushQueued) trigger_worker();
-
-echo 'ok';
+// The response was already sent by respond_and_continue() above.

@@ -34,6 +34,24 @@ $add = function (string $state, string $title, string $detail, string $fix = '')
     $checks[] = compact('state', 'title', 'detail', 'fix');
 };
 
+/* 0. Webhook signing. Only meaningful on the Cloud API — a personal number's inbound
+      comes through the gateway, which has its own secret. */
+if (!channel_is_personal($CLIENT)) {
+    if (empty($CLIENT['app_secret_enc'])) {
+        $add('fail', 'Incoming messages are not verified',
+            'Without your App Secret we cannot prove a callback really came from WhatsApp, '
+          . 'so anyone who finds your webhook address could forge delivery reports or trigger your automations.',
+            'Ask your administrator to add your Meta App Secret (Meta app → Settings → Basic) to your account.');
+    } elseif (empty($CLIENT['require_signed_webhook'])) {
+        $add('warn', 'Message verification is not enforced yet',
+            'Your App Secret is saved and every callback is being checked against it, but unsigned ones are still accepted.',
+            'Ask your administrator to switch on "Reject callbacks that aren\'t correctly signed".');
+    } else {
+        $add('ok', 'Incoming messages are verified',
+            'Every callback is checked against your Meta App Secret, and unsigned ones are rejected.', '');
+    }
+}
+
 // 1. WhatsApp connection — depends on which channel this account sends through.
 if (channel_is_personal($CLIENT)) {
     $st = (string) ($CLIENT['personal_status'] ?? 'disconnected');

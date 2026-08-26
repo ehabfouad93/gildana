@@ -85,12 +85,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         try {
             $pnid = trim((string) ($_POST['phone_number_id'] ?? ''));
             db_run(
-                "UPDATE clients SET app_id=?, phone_number_id=?, waba_id=?, access_token_enc=?, app_secret_enc=?, token_updated_at=NOW() WHERE id=?",
+                "UPDATE clients SET app_id=?, phone_number_id=?, waba_id=?, access_token_enc=?, app_secret_enc=?,
+                        require_signed_webhook=?, token_updated_at=NOW() WHERE id=?",
                 [
                     trim((string) ($_POST['app_id'] ?? '')),
                     $pnid !== '' ? $pnid : null,   // NULL when empty so the unique index allows many
                     trim((string) ($_POST['waba_id'] ?? '')),
-                    $tokenEnc, $secretEnc, $id,
+                    $tokenEnc, $secretEnc,
+                    // Can only be enforced once there is a secret to check against.
+                    ($secretEnc !== '' && $secretEnc !== null && !empty($_POST['require_signed_webhook'])) ? 1 : 0,
+                    $id,
                 ]
             );
             flash('WhatsApp credentials saved. Use “Test connection” to verify.');
@@ -285,7 +289,22 @@ function chToggle(){ document.getElementById('ch-personal').style.display =
       <div class="field"><span class="lbl">Phone Number ID</span><input type="text" name="phone_number_id" value="<?= e((string) $client['phone_number_id']) ?>"></div>
       <div class="field"><span class="lbl">WhatsApp Business Account ID</span><input type="text" name="waba_id" value="<?= e((string) $client['waba_id']) ?>"></div>
       <div class="field"><span class="lbl">Access Token <?= $client['access_token_enc'] ? '<span class="pill green" style="margin-left:6px">••• set</span>' : '' ?></span><input type="text" name="access_token" placeholder="<?= $client['access_token_enc'] ? 'Leave blank to keep current' : 'Permanent / system-user token' ?>" autocomplete="off"></div>
-      <div class="field"><span class="lbl">App Secret <span class="text-muted">(optional)</span> <?= $client['app_secret_enc'] ? '<span class="pill green" style="margin-left:6px">••• set</span>' : '' ?></span><input type="text" name="app_secret" placeholder="<?= $client['app_secret_enc'] ? 'Leave blank to keep current' : 'For webhook verification' ?>" autocomplete="off"></div>
+      <div class="field"><span class="lbl">App Secret <?= $client['app_secret_enc'] ? '<span class="pill green" style="margin-left:6px">••• set</span>' : '<span class="pill red" style="margin-left:6px">not set</span>' ?></span><input type="text" name="app_secret" placeholder="<?= $client['app_secret_enc'] ? 'Leave blank to keep current' : 'From this client\'s Meta app → Settings → Basic' ?>" autocomplete="off"></div>
+    </div>
+    <?php /* Each client has their own Meta app, so each callback is signed with THAT app's
+             secret — there is no single platform-wide value that could verify them all. */ ?>
+    <div class="note mt10" style="font-size:13px">
+      <?php if (!$client['app_secret_enc']): ?>
+        <strong>Webhook callbacks from this client are not verified.</strong>
+        Without their App Secret, anyone who finds the webhook URL can forge delivery reports,
+        create contacts and trigger this client's automations. Paste the App Secret from
+        <em>their</em> Meta app (Settings → Basic) above.
+      <?php else: ?>
+        <label class="row" style="gap:8px;align-items:center">
+          <input type="checkbox" name="require_signed_webhook" value="1" <?= $client['require_signed_webhook'] ? 'checked' : '' ?>>
+          <span>Reject callbacks that aren't correctly signed by this client's Meta app.</span>
+        </label>
+      <?php endif; ?>
     </div>
     <div class="row-between mt10">
       <button type="button" class="btn btn-ghost" id="btn-test">Test connection</button>
