@@ -90,7 +90,14 @@ try {
     $personal = db_all("SELECT id, name, personal_hook_secret FROM clients WHERE channel='personal' AND status='active'");
     $noHook = array_values(array_filter($personal, fn($c) => empty($c['personal_hook_secret'])));
     if ($personal && !$noHook) {
-        $add('ok', 'Personal-channel clients have a webhook secret', count($personal) . ' connected.');
+        $never = (int) db_val("SELECT COUNT(*) FROM clients WHERE channel='personal' AND status='active' AND personal_hook_rotated_at IS NULL");
+        if ($never > 0) {
+            $add('warn', "{$never} personal client(s) have never had their webhook secret rotated",
+                'If a secret was ever exposed — a screenshot, a log, a support thread — it is still live.',
+                'php deploy/rotate-hook-secrets.php — clients are not interrupted and nothing is rescanned.');
+        } else {
+            $add('ok', 'Personal-channel webhook secrets have been rotated', count($personal) . ' connected.');
+        }
     } elseif ($noHook) {
         $add('warn', count($noHook) . ' personal client(s) have no webhook secret',
             'Their inbound messages will not arrive until they reconnect.',
@@ -98,18 +105,27 @@ try {
     }
 } catch (Throwable $e) { /* column may not exist on an old schema */ }
 
-/* ── 6. Retention ── */
+/* ── 6. Retention — state the guarantee, then show the growth ── */
 try {
-    $days = (int) (db_val("SELECT v FROM app_settings WHERE k='retention_days'") ?: 0);
-    if ($days <= 0) {
-        $add('warn', 'Message retention is on the default 30 days',
-            'Raw callbacks hold customers\' message text and phone numbers. The worker prunes them, '
-          . 'but nobody has chosen the window deliberately.',
-            "Set it explicitly: INSERT INTO app_settings (k,v,updated_at) VALUES ('retention_days','30',NOW()) "
-          . "ON DUPLICATE KEY UPDATE v=VALUES(v);");
-    } else {
-        $add('ok', 'Message retention is set', "Payloads older than {$days} days are pruned by the worker.");
+    $days = (int) (db_val("SELECT v FROM app_settings WHERE k='retention_days'") ?: 90);
+    $window = $days > 0 ? "{$days} days" : 'kept indefinitely';
+
+    // Size of the only two tables the sweep can reach, so growth is visible early.
+    $sizes = [];
+    foreach (['webhook_events' => 'received_at', 'inbound_log' => 'created_at'] as $t => $_) {
+        try {
+            $rows = (int) db_val("SELECT COUNT(*) FROM `{$t}`");
+            $mb   = (float) db_val(
+                "SELECT ROUND((data_length + index_length)/1048576, 1) FROM information_schema.TABLES
+                  WHERE table_schema = DATABASE() AND table_name = ?", [$t]);
+            $sizes[] = "{$t}: " . number_format($rows) . " rows, {$mb} MB";
+        } catch (Throwable $e) { /* table may not exist yet */ }
     }
+
+    $add('ok', 'Client data is never deleted',
+        'Messages, campaigns, contacts, flows, credits and payments are kept permanently and no '
+      . 'setting can prune them. Only two raw debug logs are swept (' . $window . '), and both '
+      . 'duplicate data that is kept forever. ' . ($sizes ? implode(' · ', $sizes) : ''));
 } catch (Throwable $e) { /* app_settings may be missing on a fresh install */ }
 
 /* ── 7. Migrations ── */

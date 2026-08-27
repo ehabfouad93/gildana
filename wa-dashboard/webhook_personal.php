@@ -43,10 +43,21 @@ if ($secret === '' || strlen($secret) < 16) {
     http_response_code(403);
     exit('bad key');
 }
-$client = db_row("SELECT * FROM clients WHERE personal_hook_secret = ?", [$secret]);
+/* Either the current secret or the one it just replaced. During a rotation the gateway may
+   still be posting under the old URL for a moment, and rejecting those would silently drop
+   real customer messages. */
+$client = db_row(
+    "SELECT * FROM clients WHERE personal_hook_secret = ? OR personal_hook_secret_prev = ?",
+    [$secret, $secret]);
 if (!$client || ($client['status'] ?? '') !== 'active') {
     http_response_code(403);
     exit('unknown instance');
+}
+
+/* A request on the CURRENT secret proves the gateway has moved over, so the previous one is
+   no longer needed — retire it at the first real proof rather than on a timer. */
+if (!empty($client['personal_hook_secret_prev']) && hash_equals((string) $client['personal_hook_secret'], $secret)) {
+    db_run("UPDATE clients SET personal_hook_secret_prev=NULL WHERE id=?", [(int) $client['id']]);
 }
 
 // Ack immediately: gateways retry on a slow response, and a retry would double-handle.

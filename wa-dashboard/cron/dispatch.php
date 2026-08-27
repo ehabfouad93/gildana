@@ -58,6 +58,15 @@ function out(string $msg): void { echo '[' . date('H:i:s') . '] ' . $msg . "\n";
 const SEND_MAX_ATTEMPTS   = 4;
 const SEND_BACKOFF_BASE_SEC = 60;
 
+/* The ONLY tables the retention sweep may ever delete from, mapped to their timestamp
+   column. Both are raw debug logs duplicating data that is kept permanently elsewhere.
+   Everything a client would call "their data" — messages, campaigns, contacts, flows,
+   credits and payments — is absent here by design and unreachable by the sweep. */
+const RETENTION_TABLES = [
+    'webhook_events' => 'received_at',
+    'inbound_log'    => 'created_at',
+];
+
 $pdo = db();
 
 /* This worker's identity. Rows are claimed under it so a worker only ever sends the
@@ -404,21 +413,37 @@ try {
     foreach (db_all("SELECT * FROM clients WHERE channel='personal'") as $pc) slot_close($pc);
 
     /* ══ RETENTION ══
-       Raw callback payloads and the inbound decision log both hold customers' message text
-       and phone numbers, and nothing ever deleted them. Keep a bounded window instead. */
-    $retentionDays = (int) (db_val("SELECT v FROM app_settings WHERE k='retention_days'") ?: 30);
+       CLIENT DATA IS NEVER DELETED. Not their conversations (messages), not their campaigns
+       or the per-message send history, not their contacts or lists, not their flows, and not
+       their payments and balances (credit_transactions). No setting can reach any of those —
+       the sweep can only touch the tables named in RETENTION_TABLES below, so widening it is
+       a deliberate, reviewable edit rather than a one-word change to a query.
+
+       The two tables it does sweep are raw duplicates of data that IS kept forever:
+         webhook_events — the untouched JSON of a callback whose content became a `messages`
+                          row. Its event_key is also what webhook.php uses to ignore a
+                          re-delivered callback; 90 days is far beyond any window in which
+                          Meta re-delivers, so that protection is unaffected.
+         inbound_log    — why the bot answered a given message. The message itself is kept.
+
+       Set retention_days to 0 to keep even these two indefinitely. */
+    /* Distinguish "not configured" from an explicit 0. db_val() returns false when there is
+       no row, and `?:` would treat the string "0" as unset — either mistake silently flips
+       the behaviour, in opposite directions. */
+    $retentionRaw  = db_val("SELECT v FROM app_settings WHERE k='retention_days'");
+    $unset         = $retentionRaw === false || $retentionRaw === null || $retentionRaw === '';
+    $retentionDays = $unset ? 90 : (int) $retentionRaw;
     if ($retentionDays > 0) {
-        // Chunked so a first run over a long-neglected table can't lock it for minutes.
         $pruned = 0;
-        do {
-            $n = db_run("DELETE FROM webhook_events WHERE received_at < (NOW() - INTERVAL ? DAY) LIMIT 5000", [$retentionDays]);
-            $pruned += $n;
-        } while ($n === 5000);
-        do {
-            $n = db_run("DELETE FROM inbound_log WHERE created_at < (NOW() - INTERVAL ? DAY) LIMIT 5000", [$retentionDays]);
-            $pruned += $n;
-        } while ($n === 5000);
-        if ($pruned) out("Retention: pruned {$pruned} row(s) older than {$retentionDays} day(s).");
+        foreach (RETENTION_TABLES as $table => $tsColumn) {
+            // Chunked so a first run over a long-neglected table can't lock it for minutes.
+            do {
+                $n = db_run("DELETE FROM `{$table}` WHERE `{$tsColumn}` < (NOW() - INTERVAL ? DAY) LIMIT 5000",
+                    [$retentionDays]);
+                $pruned += $n;
+            } while ($n === 5000);
+        }
+        if ($pruned) out("Retention: pruned {$pruned} debug-log row(s) older than {$retentionDays} day(s). Client data untouched.");
     }
 
     // Heartbeat — lets the Health Check page confirm the cron is actually running.

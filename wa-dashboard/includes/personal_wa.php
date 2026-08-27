@@ -188,12 +188,58 @@ function pw_set_webhook(array $client): array
     return ['ok' => $res['error'] === '', 'error' => $res['error']];
 }
 
+/**
+ * Give this client a brand-new inbound webhook secret, without disturbing them.
+ *
+ * Rotating the secret only changes where the gateway POSTs inbound messages — it does NOT
+ * touch the linked WhatsApp session. A connected number keeps sending and receiving right
+ * through it: no disconnect, no QR to rescan, no interruption. That is what makes rotating
+ * across many clients practical; nobody has to be asked to do anything.
+ *
+ * The order matters. We store first (moving the old secret to _prev in the same statement,
+ * so a crash can't leave the row half-rotated), then tell the gateway. If the gateway call
+ * fails we put the old secret back, because a client whose gateway still posts to the old
+ * URL while we only recognise the new one would silently lose every incoming message.
+ *
+ * The old secret stays accepted until a request proves the gateway has moved over — that
+ * closes the window where a message in flight would otherwise be rejected.
+ */
+function pw_rotate_hook_secret(array $client): array
+{
+    $cid = (int) ($client['id'] ?? 0);
+    if ($cid <= 0) return ['ok' => false, 'error' => 'Unknown client.'];
+
+    $old = trim((string) ($client['personal_hook_secret'] ?? ''));
+    $new = bin2hex(random_bytes(16));
+
+    db_run("UPDATE clients SET personal_hook_secret=?, personal_hook_secret_prev=? WHERE id=?",
+        [$new, ($old !== '' ? $old : null), $cid]);
+
+    $res = pw_set_webhook([
+        'id' => $cid,
+        'personal_instance'    => pw_instance($client),
+        'personal_hook_secret' => $new,
+    ]);
+
+    if (empty($res['ok'])) {
+        // Put it back exactly as it was — better the old secret than no working inbound.
+        db_run("UPDATE clients SET personal_hook_secret=?, personal_hook_secret_prev=NULL WHERE id=?",
+            [($old !== '' ? $old : null), $cid]);
+        return ['ok' => false, 'error' => $res['error'] ?: 'The gateway did not accept the new webhook.'];
+    }
+
+    db_run("UPDATE clients SET personal_hook_rotated_at=NOW() WHERE id=?", [$cid]);
+    return ['ok' => true, 'error' => ''];
+}
+
 /** Create this client's gateway instance and persist its name + webhook secret. */
 function pw_instance_create(array $client): array
 {
     $inst = pw_instance($client);
-    $secret = trim((string) ($client['personal_hook_secret'] ?? ''));
-    if ($secret === '') $secret = bin2hex(random_bytes(16));
+    // A fresh secret on EVERY connect, not just the first. Reusing the stored one meant a
+    // secret could only ever be replaced by hand, which does not scale past a client or two.
+    $secret = bin2hex(random_bytes(16));
+    $prev   = trim((string) ($client['personal_hook_secret'] ?? ''));
 
     $hook = pw_hook_url($secret);
 
@@ -214,8 +260,11 @@ function pw_instance_create(array $client): array
         return ['ok' => false, 'error' => $res['error']];
     }
 
-    db_run("UPDATE clients SET personal_instance=?, personal_hook_secret=? WHERE id=?",
-        [$inst, $secret, (int) $client['id']]);
+    // Keep the outgoing secret valid for a moment so anything the gateway sends mid-swap
+    // still lands; webhook_personal.php drops it once the new one is proven working.
+    db_run("UPDATE clients SET personal_instance=?, personal_hook_secret=?, personal_hook_secret_prev=?,
+                   personal_hook_rotated_at=NOW() WHERE id=?",
+        [$inst, $secret, ($prev !== '' ? $prev : null), (int) $client['id']]);
 
     // The create call's own webhook block is only honoured for a BRAND NEW instance — for
     // an existing one (the $exists branch above) the gateway ignored it entirely. Registering

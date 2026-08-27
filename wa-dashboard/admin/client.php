@@ -29,6 +29,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'pw_re
     json_out(['ok' => $r['ok'], 'error' => $r['error']]);
 }
 
+/* Replace this client's inbound webhook secret. Their WhatsApp session is untouched — they
+   stay connected and keep sending and receiving throughout, so this is safe to do whenever a
+   secret has been exposed, without asking them to do anything. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'pw_rotate') {
+    verify_csrf();
+    if (!channel_is_personal($client)) json_out(['ok' => false, 'error' => 'This account sends through the WhatsApp Cloud API.']);
+    $r = pw_rotate_hook_secret($client);
+    json_out(['ok' => $r['ok'], 'error' => $r['error']]);
+}
+
 /* ── AJAX: enable/disable ── */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'toggle_status') {
     verify_csrf();
@@ -258,6 +268,7 @@ layout_header('Client · ' . $client['name'], 'admin', 'clients');
           <span class="pill <?= $pill ?>"><?= $lbl ?></span>
           <?php if ($pwSt === 'connected'): ?>
             <button type="button" class="btn-link" onclick="pwAdminResync()">Resync webhook</button>
+            <button type="button" class="btn-link" onclick="pwAdminRotate()">Rotate webhook secret</button>
             <span id="pw-admin-resync-msg" class="text-muted" style="font-size:11.5px"></span>
           <?php endif; ?>
         </div>
@@ -265,6 +276,14 @@ layout_header('Client · ' . $client['name'], 'admin', 'clients');
           <strong>Settings → My WhatsApp Number</strong>. You never handle their number.
           If they report replies not showing up in the Inbox although they're linked, use
           <strong>Resync webhook</strong> — it repairs the gateway's callback without disconnecting them.</span>
+        <span class="text-muted" style="font-size:11.5px;display:block;margin-top:6px">
+          <strong>Rotate webhook secret</strong> issues a new inbound address if the old one was
+          exposed — in a screenshot, a log, a support thread. The client is not interrupted:
+          they stay connected, nothing is rescanned, and no message is lost.
+          <?php $rot = $client['personal_hook_rotated_at'] ?? null; ?>
+          Last rotated: <?= $rot ? e(date('j M Y, H:i', strtotime((string) $rot))) : 'never' ?>.
+          To do this for every client at once, run
+          <code>php deploy/rotate-hook-secrets.php</code> on the server.</span>
       </div>
     </div>
     <button type="submit" class="btn btn-primary mt10">Save channel</button>
@@ -454,6 +473,18 @@ async function pwAdminResync(){
   try{
     const r = await fetch('', {method:'POST', body:fd}); const d = await r.json();
     m.textContent = d.ok ? 'Done — the gateway webhook was re-registered.' : 'Failed: '+(d.error||'unknown error');
+  }catch(e){ m.textContent = 'Network error.'; }
+}
+async function pwAdminRotate(){
+  const m = document.getElementById('pw-admin-resync-msg'); if(!m) return;
+  if(!confirm('Issue a new webhook secret for this client?\n\nThey stay connected and will not notice — nothing is rescanned and no message is lost.')) return;
+  m.textContent = 'Rotating…';
+  const fd = new FormData(); fd.append('action','pw_rotate'); fd.append('csrf_token',CSRF);
+  try{
+    const r = await fetch('', {method:'POST', body:fd}); const d = await r.json();
+    m.textContent = d.ok ? 'Done — new secret in use, the client was not interrupted.'
+                         : 'Failed: '+(d.error||'unknown error')+' (the old secret still works).';
+    if(d.ok) setTimeout(()=>location.reload(), 1200);
   }catch(e){ m.textContent = 'Network error.'; }
 }
 document.getElementById('btn-test').addEventListener('click', async function(){
