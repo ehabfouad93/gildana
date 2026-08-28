@@ -85,6 +85,8 @@ function nav_items(string $role): array
             'templates' => ['label' => 'Templates', 'url' => 'templates.php', 'icon' => 'doc'],
             'reports'   => ['label' => 'Reports',   'url' => 'reports.php',   'icon' => 'chart'],
             'team'      => ['label' => 'Team',       'url' => 'team.php',      'icon' => 'team'],
+            'plans'     => ['label' => 'Plans',      'url' => 'plans.php',     'icon' => 'chart'],
+            'rates'     => ['label' => 'Rates',      'url' => 'rates.php',     'icon' => 'doc'],
             'help'      => ['label' => 'Help Content', 'url' => 'help_admin.php', 'icon' => 'book'],
             'settings'  => ['label' => 'Settings',  'url' => 'settings.php',  'icon' => 'gear'],
         ];
@@ -100,6 +102,7 @@ function nav_items(string $role): array
         'qualifier'   => ['label' => 'Lead Qualifier', 'url' => 'qualifiers.php',  'icon' => 'target'],
         'agents'      => ['label' => 'AI Chat Agent',  'url' => 'agents.php',       'icon' => 'bot'],
         'reports'     => ['label' => 'Reports',        'url' => 'reports.php',      'icon' => 'chart'],
+        'billing'     => ['label' => 'Billing',        'url' => 'billing.php',      'icon' => 'doc'],
         'settings'  => ['label' => 'Settings',  'url' => 'settings.php',  'icon' => 'gear'],
     ];
 

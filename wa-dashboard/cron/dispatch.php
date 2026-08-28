@@ -23,6 +23,7 @@ require __DIR__ . '/../includes/crypto.php';
 require __DIR__ . '/../includes/db.php';
 require __DIR__ . '/../includes/whatsapp.php';
 require __DIR__ . '/../includes/credits.php';
+require __DIR__ . '/../includes/billing.php';
 require __DIR__ . '/../includes/campaign.php';
 require __DIR__ . '/../includes/notify.php';
 require __DIR__ . '/../includes/ai.php';
@@ -189,8 +190,25 @@ try {
             }
         }
 
+        /* What each message in this batch costs.
+           A client on their own WhatsApp account pays a flat 1 credit — Meta already billed
+           them directly, so there is no cost for us to price. A client on OUR account is
+           priced from the rate table by destination country and message category, because
+           that message is a real bill we have to cover. */
+        $msgCredits = [];
+        $catCache   = [];
+        foreach ($messages as $m) {
+            $campId = (int) $m['campaign_id'];
+            if (!array_key_exists($campId, $catCache)) {
+                $catCache[$campId] = strtolower((string) (db_val(
+                    "SELECT t.category FROM campaigns c LEFT JOIN templates t ON t.id=c.template_id WHERE c.id=?",
+                    [$campId]) ?: 'utility'));
+            }
+            $msgCredits[(int) $m['id']] = billing_message_credits($client, (string) $m['phone_e164'], $catCache[$campId]);
+        }
+
         /* One reservation for the whole batch instead of a transaction per message. */
-        $reserve = credits_reserve($cid, count($messages), null);
+        $reserve = credits_reserve($cid, array_sum($msgCredits), null);
         $creditsLeft = (int) $reserve['granted'];
         $reserveTxn  = $reserve['txn_id'];
         if ($creditsLeft === 0) {
@@ -243,11 +261,12 @@ try {
                 $failedTotal++; continue;
             }
             // Draw from the batch reservation rather than opening a transaction per message.
-            if ($creditsLeft <= 0) {
+            $costCredits = $msgCredits[(int) $m['id']] ?? 1;
+            if ($creditsLeft < $costCredits) {
                 db_run("UPDATE campaign_messages SET status='queued', claimed_by=NULL, claimed_at=NULL, updated_at=NOW() WHERE id=?", [(int) $m['id']]);
                 $noCreditClients[$cid] = (string) $client['name']; continue;
             }
-            $creditsLeft--;
+            $creditsLeft -= $costCredits;
             if (!empty($tpl['has_media'])) $anyMedia = true;
             $comps = json_decode((string) $m['rendered_components'], true) ?: [];
             if (!isset($comps['text'])) {
@@ -261,6 +280,8 @@ try {
                 'image' => (string) ($comps['image'] ?? ''),
                 'components' => isset($comps['text']) ? [] : $comps,
                 'campId' => $campId, 'contact' => (int) $m['contact_id'],
+                // Meta prices by category, so the charge record needs it.
+                'category' => $catCache[$campId] ?? 'utility',
                 // Used only by the personal channel, which renders the template to text.
                 'tpl' => $tpl,
                 'cfg' => campaign_config(json_decode((string) $tpl['variable_map'], true) ?: []),
@@ -328,6 +349,10 @@ try {
                     // Keep the live progress moving without re-scanning the whole campaign;
                     // campaign_refresh_counts() reconciles at the end of the run.
                     campaign_bump_counts($it['campId'], 'sent_count');
+                    // What this message cost us and what we charged for it.
+                    billing_record_messages($client, (string) $it['to'], (string) ($it['category'] ?? 'utility'), 1,
+                        billing_message_cost($client, (string) $it['to'], (string) ($it['category'] ?? 'utility')),
+                        $msgCredits[(int) $mid] ?? 1);
                     $sentTotal++;
                 } elseif (wa_error_is_transient($code, $ttl) && $attemptNo[$mid] < SEND_MAX_ATTEMPTS) {
                     /* Transient: schedule a later attempt instead of burning the message.
@@ -343,11 +368,11 @@ try {
                         [$delay, substr($code, 0, 32), substr($ttl, 0, 255), (int) $mid]);
                     /* Refund now. The retry re-enters the queue and will reserve its own
                        credit when it is claimed again — keeping this one would bill twice. */
-                    credits_adjust($cid, 1, 'refund_retry', $it['campId']);
+                    credits_adjust($cid, $msgCredits[(int) $mid] ?? 1, 'refund_retry', $it['campId']);
                 } else {
                     /* Permanent, or out of attempts. */
                     $dead = $attemptNo[$mid] >= SEND_MAX_ATTEMPTS && wa_error_is_transient($code, $ttl);
-                    credits_adjust($cid, 1, 'refund_failed', $it['campId']);
+                    credits_adjust($cid, $msgCredits[(int) $mid] ?? 1, 'refund_failed', $it['campId']);
                     db_run("UPDATE campaign_messages SET status=?, error_code=?, error_title=?, claimed_by=NULL, updated_at=NOW() WHERE id=?",
                         [$dead ? 'dead' : 'failed', substr($code, 0, 32), substr($ttl, 0, 255), (int) $mid]);
                     $failedTotal++;
@@ -414,6 +439,14 @@ try {
     // Start the cooldown for every personal client that sent anything this run. Done once,
     // at the end, so campaigns + qualifier + automation share a single slot.
     foreach (db_all("SELECT * FROM clients WHERE channel='personal'") as $pc) slot_close($pc);
+
+    /* ══ PLANS ══ Grant this month's included credits to anyone whose renewal is due. */
+    $renewed = 0;
+    foreach (db_all("SELECT * FROM clients WHERE status='active' AND plan_id IS NOT NULL
+                       AND (plan_renews_at IS NULL OR plan_renews_at <= NOW())") as $pc) {
+        if (billing_renew($pc)) $renewed++;
+    }
+    if ($renewed) out("Plans: renewed {$renewed} subscription(s).");
 
     /* ══ RETENTION ══
        CLIENT DATA IS NEVER DELETED. Not their conversations (messages), not their campaigns

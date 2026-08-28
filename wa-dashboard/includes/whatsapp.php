@@ -14,10 +14,41 @@ function wa_graph_base(): string
     return $host . '/' . (string) config('graph_version', 'v21.0');
 }
 
-/** Decrypt and return a client's access token. */
+/**
+ * The access token to send this client's messages with.
+ *
+ * A client on their own WhatsApp Business Account uses their own token, exactly as before.
+ * A client onboarded under OUR account has no token of their own and sends on the platform's
+ * — that is the whole difference between the two modes at the send layer.
+ */
 function wa_token(array $client): string
 {
-    return decrypt_secret((string) ($client['access_token_enc'] ?? ''));
+    $own = decrypt_secret((string) ($client['access_token_enc'] ?? ''));
+    if ($own !== '') return $own;
+    if (($client['waba_mode'] ?? 'byo') === 'platform') return wa_platform_token();
+    return '';
+}
+
+/** The platform's own WhatsApp token, for clients sending under our account. */
+function wa_platform_token(): string
+{
+    static $tok = null;
+    if ($tok === null) {
+        $enc = (string) (db_val("SELECT v FROM app_settings WHERE k='wa_platform_token'") ?: '');
+        $tok = $enc !== '' ? decrypt_secret($enc) : '';
+    }
+    return $tok;
+}
+
+/** The phone number id to send from — the client's, or the platform's in platform mode. */
+function wa_phone_id(array $client): string
+{
+    $own = trim((string) ($client['phone_number_id'] ?? ''));
+    if ($own !== '') return $own;
+    if (($client['waba_mode'] ?? 'byo') === 'platform') {
+        return (string) (db_val("SELECT v FROM app_settings WHERE k='wa_platform_phone_id'") ?: '');
+    }
+    return '';
 }
 
 /**
@@ -65,7 +96,7 @@ function wa_request(string $method, string $url, string $token, ?array $body = n
 function wa_send_template(array $client, string $to, string $templateName, string $lang, array $components = []): array
 {
     $token = wa_token($client);
-    $pnid  = (string) ($client['phone_number_id'] ?? '');
+    $pnid  = wa_phone_id($client);
     if ($token === '' || $pnid === '') {
         return ['ok' => false, 'wamid' => null, 'error_code' => 'no_credentials',
                 'error_title' => 'Missing access token or phone number ID', 'http' => 0];
@@ -229,7 +260,7 @@ function wa_template_spec(array $components): array
 function wa_upload_media(array $client, string $filePath, string $mime = ''): array
 {
     $token = wa_token($client);
-    $pnid  = (string) ($client['phone_number_id'] ?? '');
+    $pnid  = wa_phone_id($client);
     if ($token === '' || $pnid === '') {
         return ['ok' => false, 'id' => '', 'error' => 'Missing access token or phone number ID'];
     }
@@ -535,7 +566,7 @@ function wa_build_components(array $tplComponents, array $cfg, array $contact, a
 function wa_send_template_batch(array $client, array $items): array
 {
     $token = wa_token($client);
-    $pnid  = (string) ($client['phone_number_id'] ?? '');
+    $pnid  = wa_phone_id($client);
     $results = [];
     if ($token === '' || $pnid === '' || !$items) {
         foreach ($items as $k => $_) {
@@ -595,7 +626,7 @@ function wa_send_template_batch(array $client, array $items): array
 function wa_send_message(array $client, string $to, array $payload): array
 {
     $token = wa_token($client);
-    $pnid  = (string) ($client['phone_number_id'] ?? '');
+    $pnid  = wa_phone_id($client);
     if ($token === '' || $pnid === '') {
         return ['ok' => false, 'wamid' => null, 'error_code' => 'no_credentials',
                 'error_title' => 'Missing access token or phone number ID', 'http' => 0];

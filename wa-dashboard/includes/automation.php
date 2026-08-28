@@ -17,6 +17,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/inbox.php';    // unified message log (msg_log)
 require_once __DIR__ . '/channel.php';  // cloud vs personal-number dispatch
+require_once __DIR__ . '/billing.php'; // per-message pricing (BYO vs platform WABA)
 
 const AUTO_MAX_STEPS = 60; // safety cap per run invocation
 
@@ -155,8 +156,14 @@ function auto_send(array $client, array &$run, array $step, array $contact, stri
         return false;
     }
 
-    // Reserve 1 credit.
-    $bal = credits_adjust((int) $client['id'], -1, 'automation', null);
+    /* Price the message. A client on their own WhatsApp account pays a flat credit; one on
+       ours is priced from the rate table. A reply inside the 24-hour window is a service
+       message, which Meta does not charge for at all. */
+    $category = auto_in_window($contact, $client) && $kind !== 'template' ? 'service' : 'utility';
+    $cost = function_exists('billing_message_credits')
+          ? billing_message_credits($client, (string) $contact['phone_e164'], $category) : 1;
+
+    $bal = credits_adjust((int) $client['id'], -$cost, 'automation', null);
     if ($bal === null) {
         $run['status'] = 'blocked';
         return false;
@@ -164,7 +171,12 @@ function auto_send(array $client, array &$run, array $step, array $contact, stri
     $res = $sender();  // ['ok','wamid','error_title']
     slot_consume($client, 1);
     $status = $res['ok'] ? 'sent' : 'failed';
-    if (!$res['ok']) credits_adjust((int) $client['id'], 1, 'automation_refund', null);
+    if (!$res['ok']) {
+        credits_adjust((int) $client['id'], $cost, 'automation_refund', null);
+    } elseif (function_exists('billing_record_messages')) {
+        billing_record_messages($client, (string) $contact['phone_e164'], $category, 1,
+            billing_message_cost($client, (string) $contact['phone_e164'], $category), $cost);
+    }
     db_run(
         "INSERT INTO flow_messages (flow_id,step_id,run_id,client_id,contact_id,wa_message_id,status,error_title,created_at)
          VALUES (?,?,?,?,?,?,?,?,NOW())",

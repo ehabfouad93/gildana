@@ -139,10 +139,18 @@ function inbox_send(array $client, int $contactId, string $body): array
     if (!inbox_window_open($contact, $client)) {
         return ['ok' => false, 'error' => 'Outside the 24-hour window — you can only reach this contact with an approved template (use Campaigns).'];
     }
-    $bal = credits_adjust((int) $client['id'], -1, 'inbox', null);
+    /* Only reachable inside the 24-hour window (checked just above), so this is always a
+       service message — the category Meta does not charge for. */
+    $cost = function_exists('billing_message_credits')
+          ? billing_message_credits($client, (string) $contact['phone_e164'], 'service') : 1;
+    $bal = credits_adjust((int) $client['id'], -$cost, 'inbox', null);
     if ($bal === null) return ['ok' => false, 'error' => 'No credits left.'];
     $res = channel_send_text($client, (string) $contact['phone_e164'], $body);
-    if (empty($res['ok'])) credits_adjust((int) $client['id'], 1, 'inbox_refund', null);
+    if (empty($res['ok'])) {
+        credits_adjust((int) $client['id'], $cost, 'inbox_refund', null);
+    } elseif (function_exists('billing_record_messages')) {
+        billing_record_messages($client, (string) $contact['phone_e164'], 'service', 1, 0.0, $cost);
+    }
     $id = msg_log((int) $client['id'], $contactId, 'out', $body, [
         'source' => 'manual', 'status' => !empty($res['ok']) ? 'sent' : 'failed',
         'wamid' => $res['wamid'] ?? null, 'error' => $res['error_title'] ?? null,

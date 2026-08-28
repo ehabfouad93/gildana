@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/_init.php';
+require_once __DIR__ . '/../includes/billing.php';
 require_once __DIR__ . '/../includes/channel.php';
 
 $id = (int) ($_GET['id'] ?? 0);
@@ -85,6 +86,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ? 'Switched to the client\'s own WhatsApp number. They now link it from their Settings.'
             : 'Switched to the WhatsApp Cloud API.');
         redirect('client.php?id=' . $id . '#channel');
+    }
+
+    if ($action === 'save_billing') {
+        $planId = (int) ($_POST['plan_id'] ?? 0) ?: null;
+        if ($planId !== null && !db_row("SELECT id FROM plans WHERE id=?", [$planId])) $planId = null;
+        $mode = ($_POST['waba_mode'] ?? 'byo') === 'platform' ? 'platform' : 'byo';
+        db_run("UPDATE clients SET plan_id=?, waba_mode=?, overage_allowed=?,
+                       plan_started_at=COALESCE(plan_started_at, IF(? IS NULL, NULL, NOW()))
+                 WHERE id=?",
+            [$planId, $mode, !empty($_POST['overage_allowed']) ? 1 : 0, $planId, $id]);
+        // A brand-new subscription gets its first month's credits straight away.
+        $fresh = db_row("SELECT * FROM clients WHERE id=?", [$id]);
+        if ($planId !== null && empty($fresh['plan_renews_at'])) billing_renew($fresh);
+        flash('Billing updated.');
+        redirect('client.php?id=' . $id);
     }
 
     if ($action === 'save_credentials') {
@@ -220,6 +236,68 @@ layout_header('Client · ' . $client['name'], 'admin', 'clients');
   <div class="stat-tile"><span class="lbl">Contacts</span><span class="val"><?= number_format($contactCount) ?></span><span class="sub"><?= $tmplCount ?> templates</span></div>
   <div class="stat-tile"><span class="lbl">Last Login</span><span class="val" style="font-size:15px;padding-top:8px"><?= $lastLogin ? e(date('d M, H:i', strtotime((string) $lastLogin))) : 'Never' ?></span></div>
   <div class="stat-tile"><span class="lbl">Last Campaign</span><span class="val" style="font-size:14px;padding-top:8px"><?= $lastCampaign ? e($lastCampaign['name']) : '—' ?></span><span class="sub"><?= $lastCampaign ? e(date('d M Y', strtotime((string) $lastCampaign['created_at']))) : '' ?></span></div>
+</div>
+
+<!-- ── Plan & WhatsApp account ── -->
+<?php
+$allPlans = db_all("SELECT * FROM plans WHERE is_active=1 ORDER BY sort, price_month");
+$onPlat   = ($client['waba_mode'] ?? 'byo') === 'platform';
+$period   = billing_period_start();
+$use      = db_row("SELECT * FROM usage_periods WHERE client_id=? AND period_start=?", [$id, $period]);
+?>
+<div class="card" id="billing">
+  <h2>Plan &amp; WhatsApp account</h2>
+  <form method="post">
+    <?= csrf_field() ?><input type="hidden" name="action" value="save_billing">
+    <div class="grid3">
+      <div class="field"><span class="lbl">Plan</span>
+        <select name="plan_id">
+          <option value="0">— no plan —</option>
+          <?php foreach ($allPlans as $pl): ?>
+            <option value="<?= (int) $pl['id'] ?>" <?= (int) ($client['plan_id'] ?? 0) === (int) $pl['id'] ? 'selected' : '' ?>>
+              <?= e((string) $pl['name']) ?> — <?= number_format((float) $pl['price_month'], 2) ?>/mo,
+              <?= number_format((int) $pl['included_credits']) ?> credits
+            </option>
+          <?php endforeach; ?>
+        </select>
+        <?php if (!$allPlans): ?>
+          <span class="text-muted" style="font-size:11.5px"><a href="plans.php">Create a plan first →</a></span>
+        <?php endif; ?>
+      </div>
+      <div class="field"><span class="lbl">WhatsApp account</span>
+        <select name="waba_mode">
+          <option value="byo"      <?= $onPlat ? '' : 'selected' ?>>Their own — Meta bills them</option>
+          <option value="platform" <?= $onPlat ? 'selected' : '' ?>>Yours — you pay Meta and rebill</option>
+        </select>
+      </div>
+      <div class="field"><label style="display:flex;gap:8px;align-items:center;font-weight:normal;margin-top:22px">
+        <input type="checkbox" name="overage_allowed" value="1" <?= !empty($client['overage_allowed']) ? 'checked' : '' ?> style="width:auto">
+        Let them keep sending past their included credits</label></div>
+    </div>
+
+    <div class="note" style="font-size:12.5px">
+      <?php if ($onPlat): ?>
+        This client sends on <strong>your</strong> WhatsApp account, so every message is a cost you
+        carry. They are charged from the <a href="rates.php">rate table</a> by destination country
+        and message type, plus your markup. Replies within 24 hours are free from Meta and are
+        charged as a single platform credit.
+      <?php else: ?>
+        This client uses <strong>their own</strong> WhatsApp Business Account, so Meta invoices them
+        directly and you carry no message cost. Their credits are simply your platform fee —
+        one per message, whatever it costs them.
+      <?php endif; ?>
+    </div>
+
+    <?php if ($use): ?>
+      <div class="text-muted" style="font-size:12.5px;margin-top:10px">
+        This month: <?= number_format((int) $use['messages_sent']) ?> messages ·
+        <?= number_format((int) $use['credits_used']) ?> credits<?php if ((float) $use['platform_cost'] > 0): ?> ·
+        costing you <?= number_format((float) $use['platform_cost'], 4) ?><?php endif; ?>
+      </div>
+    <?php endif; ?>
+
+    <button type="submit" class="btn btn-primary mt10">Save plan</button>
+  </form>
 </div>
 
 <!-- ── Sending channel ── -->

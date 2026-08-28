@@ -545,3 +545,8 @@ textarea { resize: vertical; min-height: 84px; }
 .pv-msg.them { align-self: flex-end;   background: #DCF8C6; }
 .pv-stop { font-size: 12.5px; color: var(--ink-soft, #5B6478); padding: 8px 2px 0; }
 @media (max-width: 720px) { .pv-panel { width: 100%; } }
+
+/* Usage meter — how much of an included allowance has been spent. */
+.meter { height: 7px; border-radius: 4px; background: var(--line, #E4E7EE); overflow: hidden; margin-top: 10px; }
+.meter > span { display: block; height: 100%; background: var(--brand); border-radius: 4px; transition: width .3s; }
+.meter.over > span { background: #D14343; }
