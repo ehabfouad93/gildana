@@ -1033,6 +1033,121 @@ function automation_install_template(array $client, string $code, string $name =
     }
 }
 
+/**
+ * Copy a flow — automation, qualifier or agent — into a fresh draft owned by the same client.
+ *
+ * The copy is a real second flow, not a reference: its own steps, its own runs, its own
+ * history. Nothing is shared with the original, so editing or deleting one cannot affect
+ * the other.
+ *
+ * Three things are deliberately NOT copied:
+ *   - status  — the copy always lands as a draft. Duplicating a live automation and having
+ *               the copy start messaging people the same second would be indefensible.
+ *   - runs, leads, chats and sends — they belong to the original's history, not the copy's.
+ *   - runs_count — for the same reason; the copy starts at zero.
+ *
+ * Step ids are the hard part. A step points at the next one through `next_step_id`, and
+ * branching steps hold further ids *inside* their JSON config (a button's target, an AI
+ * branch's target, a condition's yes/no, an A/B path, an HTTP failure route). Every one of
+ * those has to be rewritten to the copy's ids, or the duplicate would quietly wire itself
+ * back into the original's steps. `jump.flow_id` is left alone on purpose — it points at
+ * another flow, which the copy should still hand over to.
+ *
+ * Returns the new flow id, or 0 if the source is missing or does not belong to the client.
+ */
+function flow_duplicate(int $flowId, int $clientId, string $kind = ''): int
+{
+    $sql = "SELECT * FROM flows WHERE id=? AND client_id=?";
+    $args = [$flowId, $clientId];
+    if ($kind !== '') { $sql .= " AND kind=?"; $args[] = $kind; }
+    $flow = db_row($sql, $args);
+    if (!$flow) return 0;
+
+    $steps = db_all("SELECT * FROM flow_steps WHERE flow_id=? ORDER BY id", [$flowId]);
+
+    $pdo = db();
+    $pdo->beginTransaction();
+    try {
+        $newId = db_insert(
+            "INSERT INTO flows (client_id,name,kind,status,trigger_type,trigger_config,source_config,
+                                hot_min,warm_min,runs_count,created_at)
+             VALUES (?,?,?, 'draft', ?,?,?,?,?, 0, NOW())",
+            [$clientId, flow_copy_name((string) $flow['name'], $clientId, (string) $flow['kind']),
+             (string) $flow['kind'], (string) $flow['trigger_type'],
+             $flow['trigger_config'], $flow['source_config'],
+             (int) $flow['hot_min'], (int) $flow['warm_min']]
+        );
+
+        // Insert every step first, so each old id has a new one to be rewritten to.
+        $map = [];
+        foreach ($steps as $st) {
+            $map[(int) $st['id']] = db_insert(
+                "INSERT INTO flow_steps (flow_id,client_id,sort,pos_x,pos_y,type,config,created_at)
+                 VALUES (?,?,?,?,?,?,?,NOW())",
+                [$newId, $clientId, (int) $st['sort'], (int) $st['pos_x'], (int) $st['pos_y'],
+                 (string) $st['type'], (string) $st['config']]
+            );
+        }
+        // Now rewrite every link — the column and the ones buried in the config.
+        foreach ($steps as $st) {
+            $cfg = json_decode((string) $st['config'], true);
+            $cfg = is_array($cfg) ? flow_remap_step_config($cfg, $map) : [];
+            db_run("UPDATE flow_steps SET next_step_id=?, config=? WHERE id=?", [
+                $map[(int) $st['next_step_id']] ?? null,
+                json_encode($cfg, JSON_UNESCAPED_UNICODE),
+                $map[(int) $st['id']],
+            ]);
+        }
+        db_run("UPDATE flows SET first_step_id=? WHERE id=?",
+            [$map[(int) $flow['first_step_id']] ?? null, $newId]);
+
+        $pdo->commit();
+        return $newId;
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        error_log('flow duplicate failed: ' . $e->getMessage());
+        return 0;
+    }
+}
+
+/** Rewrite every step id a config holds. Unknown ids become null rather than pointing out. */
+function flow_remap_step_config(array $cfg, array $map): array
+{
+    $to = fn($old) => $old ? ($map[(int) $old] ?? null) : null;
+
+    foreach (['yes_next', 'no_next', 'fail_next', 'fallback_next'] as $k) {
+        if (array_key_exists($k, $cfg)) $cfg[$k] = $to($cfg[$k]);
+    }
+    foreach (['buttons', 'branches', 'paths'] as $list) {
+        if (!isset($cfg[$list]) || !is_array($cfg[$list])) continue;
+        foreach ($cfg[$list] as $i => $row) {
+            if (is_array($row) && array_key_exists('next_step_id', $row)) {
+                $cfg[$list][$i]['next_step_id'] = $to($row['next_step_id']);
+            }
+        }
+    }
+    return $cfg;
+}
+
+/**
+ * "Welcome bot" → "Welcome bot (copy)", then "(copy 2)" and so on. Duplicating three times
+ * should give three tellable-apart names, not three identical ones.
+ */
+function flow_copy_name(string $name, int $clientId, string $kind): string
+{
+    $base = preg_replace('/\s*\(copy(?:\s+\d+)?\)$/u', '', trim($name));
+    if ($base === '') $base = 'Untitled';
+    $taken = array_column(
+        db_all("SELECT name FROM flows WHERE client_id=? AND kind=?", [$clientId, $kind]), 'name');
+
+    // 190 is the column width; leave room for the suffix rather than have MySQL truncate it.
+    $fit = fn(string $suffix) => mb_substr($base, 0, 190 - mb_strlen($suffix)) . $suffix;
+
+    $try = $fit(' (copy)');
+    for ($n = 2; in_array($try, $taken, true) && $n < 200; $n++) $try = $fit(" (copy {$n})");
+    return $try;
+}
+
 /** The ready-made automations on offer. */
 function automation_templates(): array
 {

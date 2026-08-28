@@ -22,6 +22,34 @@ $lists     = db_all("SELECT l.*, (SELECT COUNT(*) FROM contact_list_members m WH
 $flows     = db_all("SELECT id, name, kind FROM flows WHERE client_id=? AND status <> 'archived' ORDER BY name", [$cid]);
 $err = '';
 
+/* ── Duplicate: open this form already filled in from an existing campaign ──
+   Deliberately not a one-click clone. Creating a campaign queues a message per contact and
+   spends a credit each, so a copy goes through exactly the same read-it-and-confirm as a new
+   one. Everything about the message is carried over; the audience and timing are the two
+   things worth looking at again, so the schedule is never inherited — a copy of a campaign
+   that was set for last Tuesday would be rejected as a past date anyway. */
+$copy = [];
+if (($copyId = (int) ($_GET['copy'] ?? 0)) > 0) {
+    $src = db_row("SELECT * FROM campaigns WHERE id=? AND client_id=?", [$copyId, $cid]);
+    if ($src) {
+        $vm = campaign_config(json_decode((string) $src['variable_map'], true) ?: []);
+        $copy = [
+            'name'        => campaign_copy_name((string) $src['name'], $cid),
+            'template_id' => (int) $src['template_id'],
+            'list_id'     => (int) $src['list_id'],
+            'body_text'   => (string) $src['body_text'],
+            'body_media'  => (string) ($vm['header_media'] ?? ''),
+            'fields'      => $vm,
+            'follow_flow' => (int) $src['follow_flow_id'],
+            'follow_trig' => (string) $src['follow_trigger'],
+            'follow_del'  => (int) $src['follow_delay_minutes'],
+            'follow_aud'  => (string) $src['follow_audience'],
+        ];
+    } else {
+        $err = 'That campaign could not be found, so there was nothing to copy.';
+    }
+}
+
 /* ── Create campaign ── */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'create') {
     verify_csrf();
@@ -171,8 +199,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
     }
 }
 
-client_header('New Campaign', 'campaigns', $CLIENT);
-page_head('New Campaign');
+$isCopy = $copy !== [];
+client_header($isCopy ? 'Duplicate Campaign' : 'New Campaign', 'campaigns', $CLIENT);
+page_head($isCopy ? 'Duplicate Campaign' : 'New Campaign');
+if ($isCopy): ?>
+  <div class="alert info">Copied from <strong><?= e((string) $src['name']) ?></strong> — the message and
+    its settings are filled in below. <strong>Check the audience and timing</strong>, then create it.
+    Nothing is sent until you do.</div>
+<?php endif;
 
 if (!client_ready($CLIENT)): ?>
   <div class="alert error"><?= channel_is_personal($CLIENT)
@@ -200,14 +234,14 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 
   <div class="card">
     <h2>1 · Campaign &amp; Message</h2>
-    <div class="field"><span class="lbl">Campaign Name</span><input type="text" name="name" value="<?= old('name') ?>" placeholder="e.g. July Promo" required></div>
+    <div class="field"><span class="lbl">Campaign Name</span><input type="text" name="name" value="<?= old('name', (string) ($copy['name'] ?? '')) ?>" placeholder="e.g. July Promo" required></div>
 
     <?php if ($PERSONAL): ?>
       <!-- Personal number: no approved templates exist, so the message is written here. -->
       <div class="field">
         <span class="lbl">Message</span>
         <textarea name="body_text" id="body_text" rows="6" required
-                  placeholder="أهلاً {{name}} 👋&#10;عرض خاص النهاردة…"><?= old('body_text') ?></textarea>
+                  placeholder="أهلاً {{name}} 👋&#10;عرض خاص النهاردة…"><?= old('body_text', (string) ($copy['body_text'] ?? '')) ?></textarea>
         <span class="text-muted" style="font-size:12px">
           Personalise with <code>{{name}}</code>, <code>{{phone}}</code>, or any contact attribute
           (e.g. <code>{{city}}</code>). Blank if the contact has no value.
@@ -216,7 +250,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
       <div class="field">
         <span class="lbl">Image <span class="text-muted">(optional)</span></span>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-          <input type="text" id="pm-url" name="body_media" value="<?= old('body_media') ?>" placeholder="https://… or click Upload" style="flex:1;min-width:220px">
+          <input type="text" id="pm-url" name="body_media" value="<?= old('body_media', (string) ($copy['body_media'] ?? '')) ?>" placeholder="https://… or click Upload" style="flex:1;min-width:220px">
           <input type="file" id="pm-file" style="display:none" accept=".jpg,.jpeg,.png,.webp">
           <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('pm-file').click()">Upload</button>
           <span id="pm-status" class="text-muted" style="font-size:12px"></span>
@@ -234,7 +268,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
         <select name="template_id" id="template_id" required onchange="onTemplate()">
           <option value="">— choose an approved template —</option>
           <?php foreach ($templates as $t): ?>
-            <option value="<?= (int) $t['id'] ?>"
+            <option value="<?= (int) $t['id'] ?>" <?= (int) ($copy['template_id'] ?? 0) === (int) $t['id'] ? 'selected' : '' ?>
                     data-body="<?= e((string) $t['body_text']) ?>" data-lang="<?= e((string) $t['language']) ?>">
               <?= e((string) $t['wa_name']) ?> (<?= e((string) $t['language']) ?>)
             </option>
@@ -263,7 +297,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
       <select name="list_id" id="list_id" required onchange="onList()">
         <option value="">— choose a list —</option>
         <?php foreach ($lists as $l): ?>
-          <option value="<?= (int) $l['id'] ?>"><?= e((string) $l['name']) ?> (<?= (int) $l['members'] ?> members)</option>
+          <option value="<?= (int) $l['id'] ?>" <?= (int) ($copy['list_id'] ?? 0) === (int) $l['id'] ? 'selected' : '' ?>><?= e((string) $l['name']) ?> (<?= (int) $l['members'] ?> members)</option>
         <?php endforeach; ?>
       </select>
       <div class="hint" id="reach-hint"></div>
@@ -285,11 +319,12 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
         conversation stopping here.
         <a href="automations.php">Create an automation →</a></p>
     <?php else: ?>
+      <?php $hasFollow = (int) ($copy['follow_flow'] ?? 0) > 0; ?>
       <label style="display:flex;gap:8px;align-items:center;font-weight:normal;margin-bottom:6px">
-        <input type="radio" name="has_follow" value="0" checked onchange="onFollow()" style="width:auto"> Do nothing
+        <input type="radio" name="has_follow" value="0" <?= $hasFollow ? '' : 'checked' ?> onchange="onFollow()" style="width:auto"> Do nothing
       </label>
       <label style="display:flex;gap:8px;align-items:center;font-weight:normal">
-        <input type="radio" name="has_follow" value="1" onchange="onFollow()" style="width:auto"> Continue into an automation
+        <input type="radio" name="has_follow" value="1" <?= $hasFollow ? 'checked' : '' ?> onchange="onFollow()" style="width:auto"> Continue into an automation
       </label>
 
       <div id="follow-box" style="display:none;margin-top:12px">
@@ -298,33 +333,35 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
             <span class="lbl">Automation</span>
             <select name="follow_flow_id" id="follow_flow_id">
               <?php foreach ($flows as $f): ?>
-                <option value="<?= (int) $f['id'] ?>"><?= e((string) $f['name']) ?></option>
+                <option value="<?= (int) $f['id'] ?>" <?= (int) ($copy['follow_flow'] ?? 0) === (int) $f['id'] ? 'selected' : '' ?>><?= e((string) $f['name']) ?></option>
               <?php endforeach; ?>
             </select>
           </div>
           <div class="field">
             <span class="lbl">Start it</span>
+            <?php $ft = (string) ($copy['follow_trig'] ?? 'replied'); $fsel = fn(string $v) => $ft === $v ? 'selected' : ''; ?>
             <select name="follow_trigger" id="follow_trigger" onchange="onFollow()">
-              <option value="replied" selected>When they reply</option>
-              <option value="delivered">After the message is delivered</option>
-              <option value="read">After they read it</option>
-              <option value="sent">As soon as it's sent</option>
-              <option value="no_reply">When they haven't replied</option>
+              <option value="replied" <?= $fsel('replied') ?>>When they reply</option>
+              <option value="delivered" <?= $fsel('delivered') ?>>After the message is delivered</option>
+              <option value="read" <?= $fsel('read') ?>>After they read it</option>
+              <option value="sent" <?= $fsel('sent') ?>>As soon as it's sent</option>
+              <option value="no_reply" <?= $fsel('no_reply') ?>>When they haven't replied</option>
             </select>
           </div>
           <div class="field">
             <span class="lbl" id="delay-label">Wait first (minutes)</span>
-            <input type="number" name="follow_delay_minutes" id="follow_delay" min="0" max="43200" value="0">
+            <input type="number" name="follow_delay_minutes" id="follow_delay" min="0" max="43200" value="<?= (int) ($copy['follow_del'] ?? 0) ?>">
             <span class="text-muted" style="font-size:11.5px">60 = an hour · 1440 = a day</span>
           </div>
         </div>
         <div class="field">
           <span class="lbl">Who goes in</span>
+          <?php $fa = (string) ($copy['follow_aud'] ?? 'all'); $asel = fn(string $v) => $fa === $v ? 'selected' : ''; ?>
           <select name="follow_audience" id="follow_audience">
-            <option value="all" selected>Everyone who got the message</option>
-            <option value="delivered">Only those it reached</option>
-            <option value="replied">Only those who replied</option>
-            <option value="not_replied">Only those who didn't reply</option>
+            <option value="all" <?= $asel('all') ?>>Everyone who got the message</option>
+            <option value="delivered" <?= $asel('delivered') ?>>Only those it reached</option>
+            <option value="replied" <?= $asel('replied') ?>>Only those who replied</option>
+            <option value="not_replied" <?= $asel('not_replied') ?>>Only those who didn't reply</option>
           </select>
           <span class="text-muted" style="font-size:11.5px">Messages that failed are never followed up.</span>
         </div>
@@ -536,6 +573,37 @@ function updateCost(){
   document.getElementById('cost').textContent = reach ? (reach+' credits') : '—';
   document.getElementById('cost-warn').style.display = (reach>BALANCE)?'block':'none';
 }
+/* ── Duplicating: put the copied template fields back ───────────────────────────────
+   The header, variable and button inputs don't exist until a template is picked — they are
+   built by onTemplate() from the template's own spec. So the copy has to build them first
+   and then fill them, rather than rendering values into markup that isn't there yet. */
+const PREFILL = <?= json_encode($copy['fields'] ?? null, JSON_UNESCAPED_UNICODE) ?>;
+(function applyCopy(){
+  if(!PREFILL) return;
+  onTemplate();                                  // Cloud only; returns immediately on a personal number
+  const put = (sel, v) => { const el = document.querySelector(sel); if(el && v != null && v !== '') el.value = v; };
+
+  // Body and header variables: the source drives which inputs are visible, so set it first.
+  const vars = (prefix, rows) => Object.entries(rows || {}).forEach(([i, v]) => {
+    const sel = document.querySelector(`select[name="${prefix}_source[${i}]"]`);
+    if(sel){ sel.value = v.source || 'static'; toggleVar(sel, prefix, i); }
+    put(`input[name="${prefix}_value[${i}]"]`, v.value);
+    put(`input[name="${prefix}_fallback[${i}]"]`, v.fallback);
+  });
+  vars('var',  PREFILL.vars);
+  vars('hvar', PREFILL.header_vars);
+
+  put('#hm-url', PREFILL.header_media);
+  const loc = PREFILL.header_loc || {};
+  put('input[name="header_lat"]', loc.lat);
+  put('input[name="header_lng"]', loc.lng);
+  put('input[name="header_loc_name"]', loc.name);
+  put('input[name="header_address"]', loc.address);
+  Object.entries(PREFILL.buttons || {}).forEach(([i, v]) => put(`input[name="btn_value[${i}]"]`, v));
+
+  onList();                                      // show the audience size straight away
+})();
+
 // Set the follow-up controls to their correct initial state — in particular the flow select
 // starts disabled, so a campaign saved without choosing one posts no id at all.
 onFollow();

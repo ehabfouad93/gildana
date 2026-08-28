@@ -147,3 +147,24 @@ function campaign_render_text(string $body, array $contact): string
         return $map[strtolower($m[1])] ?? '';
     }, $body);
 }
+
+/**
+ * "July Promo" → "July Promo (copy)", then "(copy 2)" and so on.
+ *
+ * The same rule as flow_copy_name(), kept separate because campaigns and flows are
+ * different tables with different owners; sharing one function would mean passing the
+ * table name in, which is worse than eleven lines repeated.
+ */
+function campaign_copy_name(string $name, int $clientId): string
+{
+    $base = preg_replace('/\s*\(copy(?:\s+\d+)?\)$/u', '', trim($name));
+    if ($base === '') $base = 'Untitled';
+    $taken = array_column(db_all("SELECT name FROM campaigns WHERE client_id=?", [$clientId]), 'name');
+
+    // 190 is the column width; leave room for the suffix rather than have MySQL truncate it.
+    $fit = fn(string $suffix) => mb_substr($base, 0, 190 - mb_strlen($suffix)) . $suffix;
+
+    $try = $fit(' (copy)');
+    for ($n = 2; in_array($try, $taken, true) && $n < 200; $n++) $try = $fit(" (copy {$n})");
+    return $try;
+}

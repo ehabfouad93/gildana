@@ -49,6 +49,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'insta
     }
     $err = 'That template could not be added.';
 }
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'duplicate') {
+    verify_csrf();
+    $newId = flow_duplicate((int) ($_POST['id'] ?? 0), $cid, 'bot');
+    if ($newId > 0) {
+        flash('Copied. This one is a draft — switch it on when you are happy with it.');
+        redirect('automation_edit.php?id=' . $newId);
+    }
+    $err = 'That automation could not be copied.';
+}
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delete') {
     verify_csrf();
     db_run("DELETE FROM flows WHERE id=? AND client_id=?", [(int) ($_POST['id'] ?? 0), $cid]);
@@ -126,6 +135,10 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
           <td style="text-align:right;white-space:nowrap">
             <a class="btn btn-ghost btn-sm" href="automation_edit.php?id=<?= (int) $f['id'] ?>">Edit</a>
             <a class="btn btn-ghost btn-sm" href="automation_report.php?id=<?= (int) $f['id'] ?>">Report</a>
+            <form method="post" style="display:inline">
+              <?= csrf_field() ?><input type="hidden" name="action" value="duplicate"><input type="hidden" name="id" value="<?= (int) $f['id'] ?>">
+              <button class="btn btn-ghost btn-sm" title="Make a copy of this automation">Duplicate</button>
+            </form>
             <form method="post" style="display:inline" onsubmit="return confirm('Delete this automation and its runs?')">
               <?= csrf_field() ?><input type="hidden" name="action" value="delete"><input type="hidden" name="id" value="<?= (int) $f['id'] ?>">
               <button class="icon-btn" title="Delete">&#x2715;</button>

@@ -37,6 +37,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
         redirect('qualifier_edit.php?id=' . $newId);
     }
 }
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'duplicate') {
+    verify_csrf();
+    $newId = flow_duplicate((int) ($_POST['id'] ?? 0), $cid, 'qualifier');
+    if ($newId > 0) {
+        flash('Copied. This one is a draft — check the sheet and questions, then switch it on.');
+        redirect('qualifier_edit.php?id=' . $newId);
+    }
+    $err = 'That qualifier could not be copied.';
+}
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delete') {
     verify_csrf();
     db_run("DELETE FROM flows WHERE id=? AND client_id=? AND kind='qualifier'", [(int) ($_POST['id'] ?? 0), $cid]);
@@ -93,6 +102,10 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
             </form>
             <a class="btn btn-ghost btn-sm" href="qualifier_edit.php?id=<?= (int) $f['id'] ?>">Edit</a>
             <a class="btn btn-ghost btn-sm" href="leads.php?flow=<?= (int) $f['id'] ?>">Leads</a>
+            <form method="post" style="display:inline">
+              <?= csrf_field() ?><input type="hidden" name="action" value="duplicate"><input type="hidden" name="id" value="<?= (int) $f['id'] ?>">
+              <button class="btn btn-ghost btn-sm" title="Make a copy of this qualifier">Duplicate</button>
+            </form>
             <form method="post" style="display:inline" onsubmit="return confirm('Delete this qualifier and its leads?')">
               <?= csrf_field() ?><input type="hidden" name="action" value="delete"><input type="hidden" name="id" value="<?= (int) $f['id'] ?>">
               <button class="icon-btn" title="Delete">&#x2715;</button>
