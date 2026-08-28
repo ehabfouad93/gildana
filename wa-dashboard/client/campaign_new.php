@@ -18,6 +18,8 @@ if (isset($_GET['count'])) {
 
 $templates = db_all("SELECT * FROM templates WHERE client_id=? AND status='APPROVED' ORDER BY wa_name", [$cid]);
 $lists     = db_all("SELECT l.*, (SELECT COUNT(*) FROM contact_list_members m WHERE m.list_id=l.id) AS members FROM contact_lists l WHERE l.client_id=? ORDER BY l.name", [$cid]);
+// Flows this campaign can hand its recipients to once the message has landed.
+$flows     = db_all("SELECT id, name, kind FROM flows WHERE client_id=? AND status <> 'archived' ORDER BY name", [$cid]);
 $err = '';
 
 /* ── Create campaign ── */
@@ -35,6 +37,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
 
     $template = db_row("SELECT * FROM templates WHERE id=? AND client_id=? AND status='APPROVED'", [$templateId, $cid]);
     $list     = db_row("SELECT * FROM contact_lists WHERE id=? AND client_id=?", [$listId, $cid]);
+
+    /* ── Follow-up automation (optional) ──
+       Only accept a flow this client owns and that is not archived, so a posted id can't
+       enrol their contacts into somebody else's flow. */
+    $followFlowId = (int) ($_POST['follow_flow_id'] ?? 0) ?: null;
+    if ($followFlowId !== null) {
+        $ff = db_row("SELECT id FROM flows WHERE id=? AND client_id=? AND status <> 'archived'", [$followFlowId, $cid]);
+        if (!$ff) $followFlowId = null;
+    }
+    $followTrigger  = in_array(($_POST['follow_trigger'] ?? ''), ['sent','delivered','read','replied','no_reply'], true)
+                    ? (string) $_POST['follow_trigger'] : 'replied';
+    $followAudience = in_array(($_POST['follow_audience'] ?? ''), ['all','delivered','replied','not_replied'], true)
+                    ? (string) $_POST['follow_audience'] : 'all';
+    $followDelay    = max(0, min(43200, (int) ($_POST['follow_delay_minutes'] ?? 0)));   // cap at 30 days
+    // "After N minutes with no reply" is meaningless with no wait — default it to a day.
+    if ($followTrigger === 'no_reply' && $followDelay === 0) $followDelay = 1440;
 
     $scheduledAt = null;
     if ($when === 'later') {
@@ -110,11 +128,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
             try {
                 $status = $scheduledAt ? 'scheduled' : 'sending';
                 $campaignId = db_insert(
-                    "INSERT INTO campaigns (client_id,name,template_id,body_text,list_id,variable_map,status,scheduled_at,total_count,created_at,started_at)
-                     VALUES (?,?,?,?,?,?,?,?,?,NOW(),?)",
+                    "INSERT INTO campaigns (client_id,name,template_id,body_text,list_id,variable_map,status,scheduled_at,
+                                            follow_flow_id,follow_trigger,follow_delay_minutes,follow_audience,
+                                            total_count,created_at,started_at)
+                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),?)",
                     [$cid, $name, $isPersonal ? null : $templateId, $isPersonal ? $bodyText : null,
                      $listId, json_encode($varMap, JSON_UNESCAPED_UNICODE),
-                     $status, $scheduledAt, count($recipients), $scheduledAt ? null : date('Y-m-d H:i:s')]
+                     $status, $scheduledAt,
+                     $followFlowId, $followTrigger, $followDelay, $followAudience,
+                     count($recipients), $scheduledAt ? null : date('Y-m-d H:i:s')]
                 );
 
                 $ins = $pdo->prepare(
@@ -252,6 +274,67 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
       <label style="display:flex;gap:8px;align-items:center;font-weight:normal"><input type="radio" name="when" value="later" onchange="onWhen()" style="width:auto"> Schedule for later</label>
       <input type="datetime-local" name="scheduled_at" id="sched" style="display:none;margin-top:8px;max-width:280px">
     </div>
+  </div>
+
+  <?php /* ── After sending: hand the recipients to an automation ── */ ?>
+  <div class="card">
+    <h2 style="margin-top:0">After sending</h2>
+    <?php if (!$flows): ?>
+      <p class="text-muted">Once you build an automation, you'll be able to continue this
+        campaign into it — so people who reply keep talking to your bot instead of the
+        conversation stopping here.
+        <a href="automations.php">Create an automation →</a></p>
+    <?php else: ?>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:normal;margin-bottom:6px">
+        <input type="radio" name="has_follow" value="0" checked onchange="onFollow()" style="width:auto"> Do nothing
+      </label>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:normal">
+        <input type="radio" name="has_follow" value="1" onchange="onFollow()" style="width:auto"> Continue into an automation
+      </label>
+
+      <div id="follow-box" style="display:none;margin-top:12px">
+        <div class="grid3">
+          <div class="field">
+            <span class="lbl">Automation</span>
+            <select name="follow_flow_id" id="follow_flow_id">
+              <?php foreach ($flows as $f): ?>
+                <option value="<?= (int) $f['id'] ?>"><?= e((string) $f['name']) ?></option>
+              <?php endforeach; ?>
+            </select>
+          </div>
+          <div class="field">
+            <span class="lbl">Start it</span>
+            <select name="follow_trigger" id="follow_trigger" onchange="onFollow()">
+              <option value="replied" selected>When they reply</option>
+              <option value="delivered">After the message is delivered</option>
+              <option value="read">After they read it</option>
+              <option value="sent">As soon as it's sent</option>
+              <option value="no_reply">When they haven't replied</option>
+            </select>
+          </div>
+          <div class="field">
+            <span class="lbl" id="delay-label">Wait first (minutes)</span>
+            <input type="number" name="follow_delay_minutes" id="follow_delay" min="0" max="43200" value="0">
+            <span class="text-muted" style="font-size:11.5px">60 = an hour · 1440 = a day</span>
+          </div>
+        </div>
+        <div class="field">
+          <span class="lbl">Who goes in</span>
+          <select name="follow_audience" id="follow_audience">
+            <option value="all" selected>Everyone who got the message</option>
+            <option value="delivered">Only those it reached</option>
+            <option value="replied">Only those who replied</option>
+            <option value="not_replied">Only those who didn't reply</option>
+          </select>
+          <span class="text-muted" style="font-size:11.5px">Messages that failed are never followed up.</span>
+        </div>
+        <div class="alert warn" id="follow-window-warn" style="display:none">
+          Starting before they reply means WhatsApp's 24-hour rule still applies, so only
+          <strong>template</strong> steps will go out until they answer. Plain text, images and
+          buttons will be held. Starting <em>when they reply</em> avoids this entirely.
+        </div>
+      </div>
+    <?php endif; ?>
   </div>
 
   <div class="card">
@@ -418,6 +501,32 @@ async function onList(){
   document.getElementById('reach-hint').textContent = reach+' opted-in contact(s) will receive this.';
   updateCost();
 }
+/* A personal number has no 24-hour window, so the warning below only concerns Cloud API
+   accounts. Sent from PHP so the two never disagree about which channel this client is on. */
+const ON_CLOUD = <?= $PERSONAL ? 'false' : 'true' ?>;
+
+function onFollow(){
+  const box = document.getElementById('follow-box');
+  if(!box) return;
+  const on = (document.querySelector('input[name=has_follow]:checked')||{}).value === '1';
+  box.style.display = on ? 'block' : 'none';
+  // Not chosen → send no id at all, so the campaign saves with no follow-up.
+  document.getElementById('follow_flow_id').disabled = !on;
+
+  const trig = document.getElementById('follow_trigger').value;
+  const delay = document.getElementById('follow_delay');
+
+  // For "haven't replied" the wait IS the rule, so it must not be zero.
+  const isNoReply = trig === 'no_reply';
+  document.getElementById('delay-label').textContent = isNoReply ? 'Wait this long for a reply (minutes)' : 'Wait first (minutes)';
+  if (isNoReply && Number(delay.value) === 0) delay.value = 1440;
+  delay.min = isNoReply ? 1 : 0;
+
+  // Only "when they reply" opens the 24-hour window; everything else starts before it.
+  const beforeReply = on && ON_CLOUD && trig !== 'replied';
+  document.getElementById('follow-window-warn').style.display = beforeReply ? 'block' : 'none';
+}
+
 function onWhen(){
   const later = document.querySelector('input[name=when]:checked').value==='later';
   const s=document.getElementById('sched'); s.style.display = later?'block':'none'; if(later) s.required=true; else s.required=false;
@@ -427,6 +536,9 @@ function updateCost(){
   document.getElementById('cost').textContent = reach ? (reach+' credits') : '—';
   document.getElementById('cost-warn').style.display = (reach>BALANCE)?'block':'none';
 }
+// Set the follow-up controls to their correct initial state — in particular the flow select
+// starts disabled, so a campaign saved without choosing one posts no id at all.
+onFollow();
 </script>
 
 <?php layout_footer(); ?>

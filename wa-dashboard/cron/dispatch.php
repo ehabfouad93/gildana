@@ -398,11 +398,14 @@ try {
         try {
             $resumed  = automation_tick();
             $leads    = automation_ingest_sheets();
+            // Hand campaign recipients to their follow-up flow BEFORE the outreach sender
+            // runs, so anyone who became due this minute goes out in this same pass.
+            $followed = automation_campaign_followups();
             $outreach = automation_send_outreach();
             $noAns    = automation_sweep_no_answer((int) config('no_answer_hours', 24));
             // One push per client with pending inbound, however many messages arrived.
             $pushes   = push_dispatch();
-            out("Automation: resumed={$resumed} sheet_leads={$leads} outreach_sent={$outreach} no_answer={$noAns} pushes={$pushes}.");
+            out("Automation: resumed={$resumed} sheet_leads={$leads} campaign_followups={$followed} outreach_sent={$outreach} no_answer={$noAns} pushes={$pushes}.");
         } finally {
             $pdo->query("SELECT RELEASE_LOCK('wa_automation')");
         }

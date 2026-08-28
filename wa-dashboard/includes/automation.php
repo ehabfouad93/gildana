@@ -714,15 +714,19 @@ function automation_sweep_no_answer(int $hours = 24): int
 /* ── Lead entry (sheet/upload): QUEUE the outreach; the background worker sends it in
       throttled parallel batches (see automation_send_outreach). Never sends synchronously
       here — that made bulk imports hang and hit WhatsApp rate limits. ── */
-function automation_enqueue_lead(array $client, array $flow, array $contact): bool
+function automation_enqueue_lead(array $client, array $flow, array $contact, string $enrolKey = ''): bool
 {
     $ctx = ['fields' => [], 'transcript' => []];
 
-    /* enrol_key makes "one lead enters this qualifier once" a database rule rather than a
-       hope, so two imports running at the same time can't both enrol the same person.
-       It is set ONLY here: a chatbot contact legitimately re-enters a keyword flow every
-       time they message, and auto_start() leaves the column NULL so those never collide. */
-    $key = (int) $flow['id'] . ':' . (int) $contact['id'];
+    /* enrol_key makes "this person enters once" a database rule rather than a hope, so two
+       imports running at the same time can't both enrol them.
+       It is set ONLY on this path: a chatbot contact legitimately re-enters a keyword flow
+       every time they message, and auto_start() leaves the column NULL so those never collide.
+
+       Sheet/CSV imports key on flow+contact — one lead, one run, ever.
+       Campaign follow-ups pass their own key scoped to the campaign, because the same
+       contact may legitimately be followed up into the same flow by a later campaign. */
+    $key = $enrolKey !== '' ? $enrolKey : ((int) $flow['id'] . ':' . (int) $contact['id']);
     $inserted = db_run(
         "INSERT IGNORE INTO flow_runs (flow_id,client_id,contact_id,current_step_id,status,score,context,enrol_key,created_at)
          VALUES (?,?,?,?, 'queued', 0, ?, ?, NOW())",
@@ -732,6 +736,89 @@ function automation_enqueue_lead(array $client, array $flow, array $contact): bo
     if ($inserted === 0) return false;   // already enrolled — a concurrent import won
     db_run("UPDATE flows SET runs_count=runs_count+1 WHERE id=?", [(int) $flow['id']]);
     return true;
+}
+
+/**
+ * Hand campaign recipients to a follow-up automation once their message has landed.
+ *
+ * Runs from the worker. For every campaign that names a follow-up flow, finds the recipients
+ * whose trigger condition is now met and enrols them. Enrolment is QUEUED rather than run
+ * inline, so the existing outreach sender paces it — a 5,000-recipient campaign must not try
+ * to start 5,000 conversations inside one worker pass, and on a personal number it has to
+ * respect the slot budget like everything else.
+ *
+ * Returns how many contacts were enrolled.
+ */
+function automation_campaign_followups(int $cap = 500): int
+{
+    $campaigns = db_all(
+        "SELECT c.*, cl.name AS client_name FROM campaigns c
+           JOIN clients cl ON cl.id = c.client_id AND cl.status='active'
+           JOIN flows f    ON f.id = c.follow_flow_id AND f.status NOT IN ('archived','paused')
+          WHERE c.follow_flow_id IS NOT NULL
+            AND c.status IN ('sending','completed')"
+    );
+    if (!$campaigns) return 0;
+
+    $total = 0;
+    foreach ($campaigns as $camp) {
+        if ($total >= $cap) break;
+        $client = db_row("SELECT * FROM clients WHERE id=?", [(int) $camp['client_id']]);
+        $flow   = db_row("SELECT * FROM flows WHERE id=?", [(int) $camp['follow_flow_id']]);
+        if (!$client || !$flow) continue;
+
+        $delay = max(0, (int) $camp['follow_delay_minutes']);
+
+        /* WHEN does a recipient become due?
+           Each trigger hangs off a timestamp the send path already records, so "has it
+           happened yet" is simply "is that column set, and has the delay elapsed". */
+        $replied = "EXISTS (SELECT 1 FROM messages m
+                             WHERE m.client_id = cm.client_id AND m.contact_id = cm.contact_id
+                               AND m.direction = 'in' AND m.created_at > cm.sent_at)";
+        $due = match ((string) $camp['follow_trigger']) {
+            'delivered' => "cm.delivered_at IS NOT NULL AND cm.delivered_at <= (NOW() - INTERVAL {$delay} MINUTE)",
+            'read'      => "cm.read_at IS NOT NULL AND cm.read_at <= (NOW() - INTERVAL {$delay} MINUTE)",
+            'replied'   => "{$replied} AND cm.sent_at <= (NOW() - INTERVAL {$delay} MINUTE)",
+            // The delay is the point of this one: wait, then take everyone still silent.
+            'no_reply'  => "cm.sent_at <= (NOW() - INTERVAL {$delay} MINUTE) AND NOT {$replied}",
+            default     => "cm.sent_at IS NOT NULL AND cm.sent_at <= (NOW() - INTERVAL {$delay} MINUTE)",
+        };
+
+        /* WHO is eligible, independently of when. */
+        $audience = match ((string) $camp['follow_audience']) {
+            'delivered'   => "cm.delivered_at IS NOT NULL",
+            'replied'     => $replied,
+            'not_replied' => "NOT {$replied}",
+            default       => "1",
+        };
+
+        /* A message that never reached the customer must never trigger a follow-up — there
+           is nothing to follow up on. Same for anything still in flight or parked for review. */
+        $rows = db_all(
+            "SELECT cm.* FROM campaign_messages cm
+              WHERE cm.campaign_id = ? AND cm.follow_enrolled_at IS NULL
+                AND cm.contact_id IS NOT NULL
+                AND cm.status IN ('sent','delivered','read')
+                AND {$due} AND {$audience}
+              ORDER BY cm.id ASC LIMIT " . (int) min(200, $cap - $total),
+            [(int) $camp['id']]
+        );
+
+        foreach ($rows as $cm) {
+            $contact = db_row("SELECT * FROM contacts WHERE id=?", [(int) $cm['contact_id']]);
+            // Always stamp, even when we skip: otherwise a contact who can't be enrolled is
+            // re-examined by every worker run forever.
+            db_run("UPDATE campaign_messages SET follow_enrolled_at=NOW() WHERE id=?", [(int) $cm['id']]);
+            if (!$contact || ($contact['opt_in_status'] ?? 'in') === 'out') continue;
+
+            // Scoped to the campaign, not just the flow: the same contact may legitimately be
+            // followed up into the same flow by a later campaign. Unique, so a re-run enrols
+            // nobody twice.
+            $key = 'camp:' . (int) $camp['id'] . ':' . (int) $contact['id'];
+            if (automation_enqueue_lead($client, $flow, $contact, $key)) $total++;
+        }
+    }
+    return $total;
 }
 
 /** Resolve one template variable spec ({source:name|static, value, fallback}) to a text value. */
