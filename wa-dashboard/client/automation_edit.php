@@ -241,11 +241,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save'
         db_run("UPDATE flows SET name=?, trigger_type=?, trigger_config=?, source_config=?, hot_min=?, warm_min=?, first_step_id=?, updated_at=NOW() WHERE id=?",
             [$name, $trigger, $tc ? json_encode($tc, JSON_UNESCAPED_UNICODE) : null, $sourceConfig, $hotMin, $warmMin, $firstStep, $id]);
         $pdo->commit();
+
+        /* The auto-save posts the same form with ajax=1 and stays on the page. Saving rewrites
+           every step, so the new ids go back with the response — otherwise the next save would
+           insert everything a second time. */
+        if (!empty($_POST['ajax'])) {
+            $g = automation_graph_for_editor($id);
+            json_out(['ok' => true, 'nodes' => $g['nodes'], 'start' => $g['start']]);
+        }
         flash('Automation saved.');
         redirect('automation_edit.php?id=' . $id);
     } catch (Throwable $ex) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         error_log('flow save: ' . $ex->getMessage());
+        if (!empty($_POST['ajax'])) json_out(['ok' => false, 'error' => 'Could not save.']);
         $err = 'Could not save the automation. Please try again.';
     }
     $flow = db_row("SELECT * FROM flows WHERE id=? AND client_id=?", [$id, $cid]);
@@ -257,104 +266,130 @@ $lists     = db_all("SELECT id, name FROM contact_lists WHERE client_id=? ORDER 
 $tc        = json_decode((string) $flow['trigger_config'], true) ?: [];
 $scfg      = json_decode((string) $flow['source_config'], true) ?: [];
 
-$stepsRaw = db_all("SELECT * FROM flow_steps WHERE flow_id=? ORDER BY sort, id", [$id]);
-// How each step has actually performed, and anything currently going wrong in this flow.
-$stepStats = automation_step_stats($id);
-$problems  = automation_problems($id);
-$tid = fn($sid) => ($sid !== null) ? ('s' . (int) $sid) : null;
-$nodes = [];
-foreach ($stepsRaw as $k => $s) {
-    $c = json_decode((string) $s['config'], true) ?: [];
-    $x = (int) $s['pos_x'] ?: (80 + ($k % 4) * 250);
-    $y = (int) $s['pos_y'] ?: (120 + intdiv($k, 4) * 170);
-    $node = ['id' => 's' . (int) $s['id'], 'type' => $s['type'], 'x' => $x, 'y' => $y, 'config' => [], 'outputs' => []];
-    switch ($s['type']) {
-        case 'text':     $node['config'] = ['body' => $c['body'] ?? '']; $node['outputs']['next'] = $tid($s['next_step_id']); break;
-        case 'image':    $node['config'] = ['link' => $c['link'] ?? '', 'caption' => $c['caption'] ?? '']; $node['outputs']['next'] = $tid($s['next_step_id']); break;
-        case 'template': $node['config'] = [
-                'template_id'  => (int) ($c['template_id'] ?? 0),
-                'header_media' => (string) ($c['header_media'] ?? ''),
-                'header_vars'  => (object) ((array) ($c['header_vars'] ?? [])),
-                'header_loc'   => (object) ((array) ($c['header_loc'] ?? [])),
-                'vars'         => (object) ((array) ($c['vars'] ?? [])),
-                'buttons'      => (object) ((array) ($c['buttons'] ?? [])),
-            ]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
-        case 'question': $node['config'] = ['body' => $c['body'] ?? '', 'save_as' => $c['save_as'] ?? '']; $node['outputs']['next'] = $tid($s['next_step_id']); break;
-        case 'ai_chat': $node['config'] = [
-                'knowledge'    => (string) ($c['knowledge'] ?? ''),
-                'intro'        => (string) ($c['intro'] ?? ''),
-                'persona'      => (string) ($c['persona'] ?? ''),
-                'instructions' => (string) ($c['instructions'] ?? ''),
-                'goals'        => array_values((array) ($c['goals'] ?? [])),
-                // Panel edits labels; keys are re-derived on save.
-                'captures'     => array_values(array_map(
-                    fn($x) => ['label' => (string) (is_array($x) ? ($x['label'] ?? '') : $x)],
-                    (array) ($c['captures'] ?? [])
-                )),
-                'max_turns'    => (int) ($c['max_turns'] ?? 8),
-            ]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
-        case 'ai_score': $node['config'] = ['criterion' => $c['criterion'] ?? '', 'max_points' => (int) ($c['max_points'] ?? 10)]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
-        case 'score':    $node['config'] = ['points' => (int) ($c['points'] ?? 0)]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
-        case 'wait':     $node['config'] = ['seconds' => (int) ($c['seconds'] ?? 3600)]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
-        case 'tag':      $node['config'] = ['tag' => $c['tag'] ?? '']; $node['outputs']['next'] = $tid($s['next_step_id']); break;
-        case 'list_add': $node['config'] = ['list_id' => (int) ($c['list_id'] ?? 0)]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
-        case 'condition':
-            $node['config'] = ['field' => $c['field'] ?? '', 'op' => $c['op'] ?? 'eq', 'value' => $c['value'] ?? ''];
-            $node['outputs']['yes'] = $tid($c['yes_next'] ?? null);
-            $node['outputs']['no']  = $tid($c['no_next'] ?? $s['next_step_id']);
-            break;
-        case 'set_field':
-            $node['config'] = ['field' => $c['field'] ?? '', 'value' => $c['value'] ?? '', 'persist' => !empty($c['persist'])];
-            $node['outputs']['next'] = $tid($s['next_step_id']);
-            break;
-        case 'split':
-            $paths = (array) ($c['paths'] ?? []);
-            if (!$paths) $paths = [['label' => 'A', 'weight' => 1], ['label' => 'B', 'weight' => 1]];
-            $node['config'] = ['paths' => array_map(fn($p) => [
-                'label' => $p['label'] ?? '', 'weight' => (int) ($p['weight'] ?? 1)], $paths)];
-            foreach ($paths as $pi => $p) $node['outputs']['p' . $pi] = $tid($p['next_step_id'] ?? null);
-            break;
-        case 'jump':
-            $node['config'] = ['flow_id' => (int) ($c['flow_id'] ?? 0)];
-            break;
-        case 'wait_until':
-            $node['config'] = ['time' => $c['time'] ?? '09:00',
-                               'weekday' => $c['weekday'] === null ? '' : (string) ($c['weekday'] ?? '')];
-            $node['outputs']['next'] = $tid($s['next_step_id']);
-            break;
-        case 'http':
-            $node['config'] = ['method' => $c['method'] ?? 'GET', 'url' => $c['url'] ?? '',
-                               'body' => $c['body'] ?? '', 'save_as' => $c['save_as'] ?? '', 'pick' => $c['pick'] ?? ''];
-            $node['outputs']['next'] = $tid($s['next_step_id']);
-            $node['outputs']['fail'] = $tid($c['fail_next'] ?? null);
-            break;
-        case 'list_msg':
-            $node['config'] = ['body' => $c['body'] ?? '', 'button' => $c['button'] ?? 'Choose',
-                               'header' => $c['header'] ?? '', 'options' => (array) ($c['options'] ?? [])];
-            $node['outputs']['next'] = $tid($s['next_step_id']);
-            break;
-        case 'notify':   $node['config'] = ['message' => $c['message'] ?? '']; $node['outputs']['next'] = $tid($s['next_step_id']); break;
-        case 'collect':  $node['config'] = ['sheet_name' => $c['sheet_name'] ?? 'Leads', 'fields' => $c['fields'] ?? ['phone','name','last_reply','score','tags']]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
-        case 'sheet_export': $node['config'] = ['sheet_id' => $c['sheet_id'] ?? '', 'sheet_name' => $c['sheet_name'] ?? '', 'sheet_tab' => $c['sheet_tab'] ?? '', 'fields' => $c['fields'] ?? ['date','phone','name','last_reply','score','grade']]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
-        case 'buttons':
-            $node['config'] = ['body' => $c['body'] ?? '', 'buttons' => array_map(fn($b) => ['title' => $b['title'] ?? '', 'points' => (int) ($b['points'] ?? 0)], (array) ($c['buttons'] ?? []))];
-            foreach ((array) ($c['buttons'] ?? []) as $bi => $b) $node['outputs']['b' . $bi] = $tid($b['next_step_id'] ?? null);
-            break;
-        case 'ai_branch':
-            $node['config'] = ['prompt' => $c['prompt'] ?? '', 'branches' => array_map(fn($b) => ['label' => $b['label'] ?? '', 'description' => $b['description'] ?? '', 'points' => (int) ($b['points'] ?? 0)], (array) ($c['branches'] ?? []))];
-            foreach ((array) ($c['branches'] ?? []) as $ri => $b) $node['outputs']['r' . $ri] = $tid($b['next_step_id'] ?? null);
-            $node['outputs']['fallback'] = $tid($c['fallback_next'] ?? null);
-            break;
+// Built by the same function the auto-save answers with, so the two never disagree.
+$graphNow  = automation_graph_for_editor($id);
+$nodes     = $graphNow['nodes'];
+$startNode = $graphNow['start'] ?? ['x' => 60, 'y' => 220, 'next' => null];
+$stepsRaw  = $graphNow['steps'] ?? [];
+$problems  = $graphNow['problems'] ?? [];
+
+/**
+ * The flow as the canvas needs it: every step as a node with its position, config and wires.
+ *
+ * Used both to render the page and to answer an auto-save — saving rewrites every step, so the
+ * browser has to adopt the new ids or its next save would insert everything a second time.
+ * One builder for both means those two views can never drift apart.
+ */
+function automation_graph_for_editor(int $id): array
+{
+    $cid  = (int) $GLOBALS['CLIENT']['id'];
+    $flow = db_row("SELECT * FROM flows WHERE id=? AND client_id=?", [$id, $cid]);
+    if (!$flow) return ['nodes' => [], 'start' => null];
+    $scfg = json_decode((string) ($flow['canvas'] ?? ''), true) ?: [];
+
+    $stepsRaw = db_all("SELECT * FROM flow_steps WHERE flow_id=? ORDER BY sort, id", [$id]);
+    // How each step has actually performed, and anything currently going wrong in this flow.
+    $stepStats = automation_step_stats($id);
+    $problems  = automation_problems($id);
+    $tid = fn($sid) => ($sid !== null) ? ('s' . (int) $sid) : null;
+    $nodes = [];
+    foreach ($stepsRaw as $k => $s) {
+        $c = json_decode((string) $s['config'], true) ?: [];
+        $x = (int) $s['pos_x'] ?: (80 + ($k % 4) * 250);
+        $y = (int) $s['pos_y'] ?: (120 + intdiv($k, 4) * 170);
+        $node = ['id' => 's' . (int) $s['id'], 'type' => $s['type'], 'x' => $x, 'y' => $y, 'config' => [], 'outputs' => []];
+        switch ($s['type']) {
+            case 'text':     $node['config'] = ['body' => $c['body'] ?? '']; $node['outputs']['next'] = $tid($s['next_step_id']); break;
+            case 'image':    $node['config'] = ['link' => $c['link'] ?? '', 'caption' => $c['caption'] ?? '']; $node['outputs']['next'] = $tid($s['next_step_id']); break;
+            case 'template': $node['config'] = [
+                    'template_id'  => (int) ($c['template_id'] ?? 0),
+                    'header_media' => (string) ($c['header_media'] ?? ''),
+                    'header_vars'  => (object) ((array) ($c['header_vars'] ?? [])),
+                    'header_loc'   => (object) ((array) ($c['header_loc'] ?? [])),
+                    'vars'         => (object) ((array) ($c['vars'] ?? [])),
+                    'buttons'      => (object) ((array) ($c['buttons'] ?? [])),
+                ]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
+            case 'question': $node['config'] = ['body' => $c['body'] ?? '', 'save_as' => $c['save_as'] ?? '']; $node['outputs']['next'] = $tid($s['next_step_id']); break;
+            case 'ai_chat': $node['config'] = [
+                    'knowledge'    => (string) ($c['knowledge'] ?? ''),
+                    'intro'        => (string) ($c['intro'] ?? ''),
+                    'persona'      => (string) ($c['persona'] ?? ''),
+                    'instructions' => (string) ($c['instructions'] ?? ''),
+                    'goals'        => array_values((array) ($c['goals'] ?? [])),
+                    // Panel edits labels; keys are re-derived on save.
+                    'captures'     => array_values(array_map(
+                        fn($x) => ['label' => (string) (is_array($x) ? ($x['label'] ?? '') : $x)],
+                        (array) ($c['captures'] ?? [])
+                    )),
+                    'max_turns'    => (int) ($c['max_turns'] ?? 8),
+                ]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
+            case 'ai_score': $node['config'] = ['criterion' => $c['criterion'] ?? '', 'max_points' => (int) ($c['max_points'] ?? 10)]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
+            case 'score':    $node['config'] = ['points' => (int) ($c['points'] ?? 0)]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
+            case 'wait':     $node['config'] = ['seconds' => (int) ($c['seconds'] ?? 3600)]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
+            case 'tag':      $node['config'] = ['tag' => $c['tag'] ?? '']; $node['outputs']['next'] = $tid($s['next_step_id']); break;
+            case 'list_add': $node['config'] = ['list_id' => (int) ($c['list_id'] ?? 0)]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
+            case 'condition':
+                $node['config'] = ['field' => $c['field'] ?? '', 'op' => $c['op'] ?? 'eq', 'value' => $c['value'] ?? ''];
+                $node['outputs']['yes'] = $tid($c['yes_next'] ?? null);
+                $node['outputs']['no']  = $tid($c['no_next'] ?? $s['next_step_id']);
+                break;
+            case 'set_field':
+                $node['config'] = ['field' => $c['field'] ?? '', 'value' => $c['value'] ?? '', 'persist' => !empty($c['persist'])];
+                $node['outputs']['next'] = $tid($s['next_step_id']);
+                break;
+            case 'split':
+                $paths = (array) ($c['paths'] ?? []);
+                if (!$paths) $paths = [['label' => 'A', 'weight' => 1], ['label' => 'B', 'weight' => 1]];
+                $node['config'] = ['paths' => array_map(fn($p) => [
+                    'label' => $p['label'] ?? '', 'weight' => (int) ($p['weight'] ?? 1)], $paths)];
+                foreach ($paths as $pi => $p) $node['outputs']['p' . $pi] = $tid($p['next_step_id'] ?? null);
+                break;
+            case 'jump':
+                $node['config'] = ['flow_id' => (int) ($c['flow_id'] ?? 0)];
+                break;
+            case 'wait_until':
+                $node['config'] = ['time' => $c['time'] ?? '09:00',
+                                   'weekday' => $c['weekday'] === null ? '' : (string) ($c['weekday'] ?? '')];
+                $node['outputs']['next'] = $tid($s['next_step_id']);
+                break;
+            case 'http':
+                $node['config'] = ['method' => $c['method'] ?? 'GET', 'url' => $c['url'] ?? '',
+                                   'body' => $c['body'] ?? '', 'save_as' => $c['save_as'] ?? '', 'pick' => $c['pick'] ?? ''];
+                $node['outputs']['next'] = $tid($s['next_step_id']);
+                $node['outputs']['fail'] = $tid($c['fail_next'] ?? null);
+                break;
+            case 'list_msg':
+                $node['config'] = ['body' => $c['body'] ?? '', 'button' => $c['button'] ?? 'Choose',
+                                   'header' => $c['header'] ?? '', 'options' => (array) ($c['options'] ?? [])];
+                $node['outputs']['next'] = $tid($s['next_step_id']);
+                break;
+            case 'notify':   $node['config'] = ['message' => $c['message'] ?? '']; $node['outputs']['next'] = $tid($s['next_step_id']); break;
+            case 'collect':  $node['config'] = ['sheet_name' => $c['sheet_name'] ?? 'Leads', 'fields' => $c['fields'] ?? ['phone','name','last_reply','score','tags']]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
+            case 'sheet_export': $node['config'] = ['sheet_id' => $c['sheet_id'] ?? '', 'sheet_name' => $c['sheet_name'] ?? '', 'sheet_tab' => $c['sheet_tab'] ?? '', 'fields' => $c['fields'] ?? ['date','phone','name','last_reply','score','grade']]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
+            case 'buttons':
+                $node['config'] = ['body' => $c['body'] ?? '', 'buttons' => array_map(fn($b) => ['title' => $b['title'] ?? '', 'points' => (int) ($b['points'] ?? 0)], (array) ($c['buttons'] ?? []))];
+                foreach ((array) ($c['buttons'] ?? []) as $bi => $b) $node['outputs']['b' . $bi] = $tid($b['next_step_id'] ?? null);
+                break;
+            case 'ai_branch':
+                $node['config'] = ['prompt' => $c['prompt'] ?? '', 'branches' => array_map(fn($b) => ['label' => $b['label'] ?? '', 'description' => $b['description'] ?? '', 'points' => (int) ($b['points'] ?? 0)], (array) ($c['branches'] ?? []))];
+                foreach ((array) ($c['branches'] ?? []) as $ri => $b) $node['outputs']['r' . $ri] = $tid($b['next_step_id'] ?? null);
+                $node['outputs']['fallback'] = $tid($c['fallback_next'] ?? null);
+                break;
+        }
+        // Real numbers for this step, so the canvas shows where people actually drop out.
+        $node['stats'] = $stepStats[(int) $s['id']] ?? null;
+        $nodes[] = $node;
     }
-    // Real numbers for this step, so the canvas shows where people actually drop out.
-    $node['stats'] = $stepStats[(int) $s['id']] ?? null;
-    $nodes[] = $node;
+    $startNode = [
+        'x'    => (int) ($scfg['start']['x'] ?? 60),
+        'y'    => (int) ($scfg['start']['y'] ?? 220),
+        'next' => $tid($flow['first_step_id']),
+    ];
+
+    // $steps and $problems come back too: the page lists current problems and offers the
+    // fields captured elsewhere in this flow as suggestions.
+    return ['nodes' => $nodes, 'start' => $startNode, 'steps' => $stepsRaw, 'problems' => $problems];
 }
-$startNode = [
-    'x'    => (int) ($scfg['start']['x'] ?? 60),
-    'y'    => (int) ($scfg['start']['y'] ?? 220),
-    'next' => $tid($flow['first_step_id']),
-];
 
 client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
 ?>
@@ -490,8 +525,16 @@ client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
     </div>
   </div>
 
-  <div class="card">
+  <div class="card canvas-card">
     <div class="canvas-toolbar">
+      <span class="save-state" id="save-state" title="Changes are saved automatically">Saved</span>
+      <span class="sel-count" id="sel-count"></span>
+      <span class="pill <?= $flow['status'] === 'active' ? 'green' : '' ?>" id="live-pill"><?= $flow['status'] === 'active' ? 'Live' : 'Draft' ?></span>
+      <button type="button" class="btn btn-ghost btn-sm" id="btn-undo" onclick="undo()" title="Undo (Ctrl+Z)" disabled>↶</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="btn-redo" onclick="redo()" title="Redo (Ctrl+Shift+Z)" disabled>↷</button>
+      <button type="button" class="btn btn-ghost btn-sm canvas-only" onclick="autoLayout()" title="Tidy the layout">Tidy up</button>
+      <button type="button" class="btn btn-ghost btn-sm canvas-only" onclick="toggleFocus()" id="btn-focus" title="Full screen (Esc to leave)">⤢ Full screen</button>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="toggleOutline()" id="btn-outline" title="See the flow as an ordered list">List view</button>
       <select id="add-type">
         <optgroup label="Send">
           <option value="text">Send text</option>
@@ -525,9 +568,16 @@ client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
         </optgroup>
       </select>
       <button type="button" class="btn btn-ghost btn-sm" onclick="addNode(document.getElementById('add-type').value)">+ Add node</button>
-      <span class="canvas-hint">Drag node headers to move · drag a right-side port onto another node to connect · click a node to edit · <strong>right-click a connection to delete it</strong> · Ctrl/⌘+scroll or the +/− buttons to zoom · middle-drag or space-drag to pan.</span>
+      <span class="canvas-hint canvas-hint-desk">Drag node headers to move · drag a right-side port onto another node to connect · click a node to edit · <strong>right-click a connection to delete it</strong> · Ctrl/⌘+scroll or the +/− buttons to zoom · middle-drag or space-drag to pan · shift-click to select several, then Ctrl/⌘+C and V to copy them.</span>
     </div>
-    <div class="alert info canvas-smallnote">Flows are easier to build on a computer — you can view and adjust here, but a bigger screen helps.</div>
+    <!-- The ordered list. On a phone this is where editing happens: no dragging, no wires. -->
+    <div class="canvas-outline" id="outline">
+      <div class="outline-head">
+        <strong>Steps in order</strong>
+        <span>Tap a step to edit it · ↑ ↓ to reorder · pick a kind above, then + to add it.</span>
+      </div>
+      <div class="outline-list" id="outline-list"></div>
+    </div>
     <div class="canvas-stage">
       <!-- Zoom control lives outside the scroller so it stays pinned while the board scrolls. -->
       <div class="canvas-zoom">
@@ -580,6 +630,192 @@ function statsRow(n){
     ? `<span class="drop" title="Reached this step and went no further">${st.stalled} stopped</span>` : '';
   return `<div class="node-stats"><span title="People who reached this step">${st.reached} reached</span>${drop}</div>`;
 }
+
+/* ── Undo / redo ──────────────────────────────────────────────────────────────────
+   A flow is small enough that snapshotting the whole graph is simpler and more reliable
+   than tracking individual edits — and it can never drift out of step with the real state. */
+let HISTORY = [], FUTURE = [], SUPPRESS = false;
+
+function snapshot(){ return JSON.stringify({nodes, start}); }
+function restore(snap){
+  const d = JSON.parse(snap);
+  Object.keys(nodes).forEach(k => delete nodes[k]);
+  Object.entries(d.nodes).forEach(([k,v]) => nodes[k] = v);
+  Object.assign(start, d.start);
+  closeCfg(); render();
+}
+/* Typing is one change, not thirty. Records a single history entry for a burst of edits. */
+let TYPING_T = null;
+function markTyping(){
+  if(TYPING_T){ clearTimeout(TYPING_T); TYPING_T = setTimeout(() => TYPING_T = null, 900); return; }
+  mark();
+  TYPING_T = setTimeout(() => TYPING_T = null, 900);
+}
+
+/** Call BEFORE a change, so undo returns to how things were. */
+function mark(){ pushSnap(snapshot()); }
+/* A drag may end where it started, so gestures take their snapshot up front and only
+   commit it here if something actually moved — otherwise undo fills with no-ops. */
+function pushSnap(snap){
+  if(SUPPRESS) return;
+  HISTORY.push(snap);
+  if(HISTORY.length > 60) HISTORY.shift();
+  FUTURE = [];
+  updateUndoButtons();
+}
+function undo(){
+  if(!HISTORY.length) return;
+  FUTURE.push(snapshot());
+  SUPPRESS = true; restore(HISTORY.pop()); SUPPRESS = false;
+  updateUndoButtons(); scheduleSave();
+}
+function redo(){
+  if(!FUTURE.length) return;
+  HISTORY.push(snapshot());
+  SUPPRESS = true; restore(FUTURE.pop()); SUPPRESS = false;
+  updateUndoButtons(); scheduleSave();
+}
+function updateUndoButtons(){
+  const u = document.getElementById('btn-undo'), r = document.getElementById('btn-redo');
+  if(u) u.disabled = !HISTORY.length;
+  if(r) r.disabled = !FUTURE.length;
+}
+
+/* ── Auto-save ────────────────────────────────────────────────────────────────────
+   Losing a flow because someone navigated away without pressing Save is the kind of thing
+   people never forgive, so changes save themselves a moment after they stop editing. */
+let SAVE_T = null, SAVING = false, DIRTY = false;
+
+function setSaveState(txt, cls){
+  const el = document.getElementById('save-state');
+  if(!el) return;
+  el.textContent = txt;
+  el.className = 'save-state' + (cls ? ' ' + cls : '');
+}
+function scheduleSave(){
+  DIRTY = true;
+  setSaveState('Unsaved changes', 'dirty');
+  clearTimeout(SAVE_T);
+  SAVE_T = setTimeout(saveNow, 1200);
+}
+async function saveNow(){
+  if(SAVING) { scheduleSave(); return; }
+  SAVING = true;
+  setSaveState('Saving…');
+  try {
+    const form = document.getElementById('flow-form');
+    document.getElementById('flow_json').value = serialize();
+    const fd = new FormData(form);
+    fd.append('ajax', '1');
+    const r = await fetch('', {method:'POST', body: fd});
+    const d = await r.json().catch(() => ({ok:false}));
+    if(d.ok){
+      DIRTY = false;
+      setSaveState('Saved', 'ok');
+      // Ids change on save (steps are rewritten), so adopt the server's graph.
+      if(d.nodes){ SUPPRESS = true; adoptServerGraph(d.nodes, d.start); SUPPRESS = false; }
+    } else {
+      setSaveState('Not saved — retrying', 'err');
+      clearTimeout(SAVE_T); SAVE_T = setTimeout(saveNow, 4000);
+    }
+  } catch(e){
+    setSaveState('Not saved — retrying', 'err');
+    clearTimeout(SAVE_T); SAVE_T = setTimeout(saveNow, 4000);
+  }
+  SAVING = false;
+}
+/* After a save the server has renumbered every step, so the canvas must adopt those ids or
+   the next save would create duplicates. Positions are kept from what is on screen. */
+function adoptServerGraph(srvNodes, srvStart){
+  const open = current ? current.type : null;
+  Object.keys(nodes).forEach(k => delete nodes[k]);
+  (srvNodes || []).forEach(n => nodes[n.id] = n);
+  if(srvStart){ start.x = srvStart.x; start.y = srvStart.y; start.outputs = {next: srvStart.next || null}; }
+  render();
+  if(open){ const again = Object.values(nodes).find(n => n.type === open); if(again) openCfg(again.id); }
+}
+window.addEventListener('beforeunload', e => {
+  if(DIRTY){ e.preventDefault(); e.returnValue = ''; }
+});
+
+/* ── Add the next step straight from a node ───────────────────────────────────────
+   The single biggest thing missing: you had to add a node from the menu and then drag a
+   wire to it. Now the + on a node's port creates the next step already connected. */
+function addAfter(nodeId, portKey){
+  mark();
+  const from = nodeId === 'start' ? start : nodes[nodeId];
+  if(!from) return;
+  const type = document.getElementById('add-type').value || 'text';
+  const w = document.getElementById('cwrap');
+  const n = {
+    id: nid(), type,
+    x: (from.x || 0) + 260,
+    y: (from.y || 0) + ((Object.keys(from.outputs||{}).indexOf(portKey)) * 150),
+    config: defaultConfig(type), outputs: {}
+  };
+  nodes[n.id] = n;
+  from.outputs = from.outputs || {};
+  from.outputs[portKey] = n.id;
+  render(); openCfg(n.id); scheduleSave();
+}
+
+/* ── Tidy up ──────────────────────────────────────────────────────────────────────
+   Lay the flow out left to right by how far each step is from the trigger, so a graph
+   people have dragged into a tangle becomes readable again in one click. */
+function autoLayout(){
+  mark();
+  const depth = {}, seen = {};
+  let frontier = [start.outputs && start.outputs.next].filter(Boolean);
+  let d = 0;
+  while(frontier.length && d < 40){
+    const next = [];
+    frontier.forEach(id => {
+      if(!id || seen[id] || !nodes[id]) return;
+      seen[id] = true; depth[id] = d;
+      Object.values(nodes[id].outputs || {}).forEach(t => { if(t) next.push(t); });
+    });
+    frontier = next; d++;
+  }
+  // Anything unreachable goes in a column of its own at the end, rather than vanishing.
+  const orphans = Object.keys(nodes).filter(id => !seen[id]);
+  orphans.forEach(id => depth[id] = d + 1);
+
+  const byCol = {};
+  Object.keys(depth).forEach(id => { (byCol[depth[id]] = byCol[depth[id]] || []).push(id); });
+  start.x = 40; start.y = 40;
+  Object.keys(byCol).forEach(col => {
+    byCol[col].forEach((id, row) => {
+      nodes[id].x = 60 + (Number(col) + 1) * 260;
+      nodes[id].y = 40 + row * 160;
+    });
+  });
+  render(); scheduleSave();
+}
+
+/* ── Full screen ──────────────────────────────────────────────────────────────── */
+function toggleFocus(){
+  const on = document.body.classList.toggle('canvas-focus');
+  const b = document.getElementById('btn-focus');
+  if(b) b.textContent = on ? '⤡ Exit full screen' : '⤢ Full screen';
+  window.dispatchEvent(new Event('resize'));
+}
+document.addEventListener('keydown', e => {
+  if(e.key === 'Escape' && document.body.classList.contains('canvas-focus')) toggleFocus();
+  const meta = e.ctrlKey || e.metaKey;
+  if(meta && e.key.toLowerCase() === 'z'){
+    if(document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return;
+    e.preventDefault();
+    e.shiftKey ? redo() : undo();
+  }
+  if(meta && e.key.toLowerCase() === 's'){ e.preventDefault(); clearTimeout(SAVE_T); saveNow(); }
+  // Everything below would otherwise fire while someone is typing into the step panel.
+  if(document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return;
+  if(meta && e.key.toLowerCase() === 'c') copySel();
+  if(meta && e.key.toLowerCase() === 'v'){ e.preventDefault(); pasteClip(); }
+  if(meta && e.key.toLowerCase() === 'a'){ e.preventDefault(); SEL = new Set(Object.keys(nodes)); paintSel(); }
+  if((e.key === 'Delete' || e.key === 'Backspace') && SEL.size){ e.preventDefault(); deleteSel(); }
+  if(e.key === 'Escape') selClear();
+});
 
 /* ── Check for problems ───────────────────────────────────────────────────────── */
 async function checkFlow(){
@@ -731,15 +967,215 @@ function nodeEl(n){
     `<div class="node-head" data-drag="1">${TYPE_LABEL[n.type]||n.type}${n.type==='start'?'':'<span class="del" title="Delete">✕</span>'}</div>`+
     `<div class="node-body">${summary(n)}</div>`+
     statsRow(n)+
-    `<div class="node-ports">`+ports.map(p=>`<div class="prow"><span class="plabel">${esc(p.label)}</span><span class="port port-out" data-node="${n.id}" data-port="${p.key}"></span></div>`).join('')+`</div>`;
+    `<div class="node-ports">`+ports.map(p=>
+        `<div class="prow"><span class="plabel">${esc(p.label)}</span>`+
+        ((n.outputs||{})[p.key] ? '' :
+          `<button type="button" class="addnext" title="Add the next step here" data-add="${n.id}|${p.key}">+</button>`)+
+        `<span class="port port-out" data-node="${n.id}" data-port="${p.key}"></span></div>`).join('')+`</div>`;
   return el;
 }
 function render(){
   [...canvas.querySelectorAll('.node')].forEach(e=>e.remove());
   canvas.appendChild(nodeEl(start));
   Object.values(nodes).forEach(n=>canvas.appendChild(nodeEl(n)));
+  // The panel stays open across a re-render, so its node must stay highlighted too.
+  if(current){ const el=canvas.querySelector(`.node[data-id="${current.id}"]`); if(el) el.classList.add('sel'); }
+  paintSel();
+  renderOutline();
   redraw();
 }
+
+/* ── Multi-select, copy and paste ─────────────────────────────────────────────────
+   Shift-click gathers steps; a copied group keeps the wires between its own members, so
+   duplicating a three-step sequence gives you a working three-step sequence, not three
+   loose steps. */
+let SEL = new Set(), CLIP = [];
+
+function paintSel(){
+  canvas.querySelectorAll('.node').forEach(el => el.classList.toggle('multi', SEL.has(el.dataset.id)));
+  const n = document.getElementById('sel-count');
+  if(n) n.textContent = SEL.size > 1 ? SEL.size + ' selected' : '';
+}
+function selToggle(id){ SEL.has(id) ? SEL.delete(id) : SEL.add(id); paintSel(); }
+function selClear(){ if(SEL.size){ SEL.clear(); paintSel(); } }
+
+function copySel(){
+  const ids = [...SEL].filter(id => nodes[id]);
+  if(!ids.length) return;
+  CLIP = ids.map(id => JSON.parse(JSON.stringify(nodes[id])));
+}
+function pasteClip(){
+  if(!CLIP.length) return;
+  mark();
+  const map = {};
+  CLIP.forEach(n => map[n.id] = nid());
+  const fresh = [];
+  CLIP.forEach(src => {
+    const c = JSON.parse(JSON.stringify(src));
+    c.id = map[src.id];
+    c.x = (c.x || 0) + 40; c.y = (c.y || 0) + 40;
+    c.stats = null;                                  // the copy has its own history to make
+    // Wires that pointed inside the copied group follow the copy; the rest are dropped,
+    // because a pasted step joining the original flow at a random point is never wanted.
+    Object.keys(c.outputs || {}).forEach(k => { c.outputs[k] = map[c.outputs[k]] || null; });
+    nodes[c.id] = c; fresh.push(c.id);
+  });
+  SEL = new Set(fresh);
+  render(); scheduleSave();
+}
+function deleteSel(){
+  const ids = [...SEL].filter(id => nodes[id]);
+  if(!ids.length) return;
+  mark();
+  ids.forEach(id => { delete nodes[id]; if(current && current.id === id) closeCfg(); });
+  [start, ...Object.values(nodes)].forEach(n =>
+    Object.keys(n.outputs || {}).forEach(k => { if(ids.includes(n.outputs[k])) n.outputs[k] = null; }));
+  SEL.clear();
+  render(); scheduleSave();
+}
+
+/* ── The ordered outline ──────────────────────────────────────────────────────────
+   The canvas needs a mouse and a big screen. This is the same flow as a list: every step
+   in the order a contact meets it, editable and reorderable with taps alone. On a phone it
+   is the editing surface and the canvas is only there to look at. */
+
+function isPhone(){ return window.matchMedia('(max-width: 760px)').matches; }
+
+/** Walks the graph in the order a contact travels it. Branches nest under their node. */
+function outlineRows(){
+  const rows = [], seen = {};
+  const walk = (id, depth) => {
+    if(!id || !nodes[id]) return;
+    if(seen[id]){ rows.push({loop: id, depth}); return; }   // a jump back — shown, not re-walked
+    seen[id] = true;
+    rows.push({id, depth});
+    const n = nodes[id], ports = outPorts(n), single = ports.length === 1;
+    ports.forEach(p => {
+      const target = (n.outputs || {})[p.key] || null;
+      const d = single ? depth : depth + 1;
+      if(!single) rows.push({branch: p.label || p.key, depth: d, from: id, port: p.key});
+      if(target) walk(target, d);
+      else if(!single) rows.push({gap: true, depth: d + 1, from: id, port: p.key});
+    });
+    if(single && !((n.outputs || {})[ports[0] ? ports[0].key : 'next'])) {
+      rows.push({gap: true, depth, from: id, port: ports[0] ? ports[0].key : 'next'});
+    }
+  };
+  walk((start.outputs || {}).next, 0);
+  if(!rows.length) rows.push({gap: true, depth: 0, from: 'start', port: 'next'});
+  // Steps nothing leads to would otherwise be invisible here — and invisible is how they
+  // stay broken. They get their own section instead.
+  const loose = Object.keys(nodes).filter(k => !seen[k]);
+  if(loose.length){
+    rows.push({head: 'Not connected to anything'});
+    loose.forEach(id => { if(!seen[id]) walk(id, 0); });
+  }
+  return rows;
+}
+
+/** A step can only swap places when both it and the next step have exactly one exit. */
+function outlineSwappable(id){
+  const n = nodes[id]; if(!n) return null;
+  const po = outPorts(n); if(po.length !== 1) return null;
+  const m = nodes[(n.outputs || {})[po[0].key]]; if(!m) return null;
+  const mo = outPorts(m); if(mo.length !== 1) return null;
+  return {n, m, nk: po[0].key, mk: mo[0].key};
+}
+function outlineParent(id){
+  for(const n of [start, ...Object.values(nodes)]){
+    for(const k of Object.keys(n.outputs || {})) if(n.outputs[k] === id) return {n, k};
+  }
+  return null;
+}
+/** A → B → C becomes A → C → B. Reordering without a single drag. */
+function moveDown(id){
+  const sw = outlineSwappable(id), p = outlineParent(id);
+  if(!sw || !p) return;
+  mark();
+  const after = (sw.m.outputs || {})[sw.mk] || null;
+  p.n.outputs[p.k]        = sw.m.id;
+  sw.m.outputs[sw.mk]     = sw.n.id;
+  sw.n.outputs[sw.nk]     = after;
+  // The canvas should agree with the list, so the two trade places there too.
+  const x = sw.n.x, y = sw.n.y; sw.n.x = sw.m.x; sw.n.y = sw.m.y; sw.m.x = x; sw.m.y = y;
+  render(); scheduleSave();
+}
+function moveUp(id){
+  const p = outlineParent(id);
+  if(p && p.n.id !== 'start') moveDown(p.n.id);
+}
+function outlineDelete(id){
+  if(!nodes[id]) return;
+  mark();
+  // Close the gap rather than leaving a hole: whatever followed takes this step's place.
+  const p = outlineParent(id), po = outPorts(nodes[id]);
+  const after = po.length === 1 ? ((nodes[id].outputs || {})[po[0].key] || null) : null;
+  const selfLoop = !!p && p.n.id === id;
+  delete nodes[id];
+  [start, ...Object.values(nodes)].forEach(n =>
+    Object.keys(n.outputs || {}).forEach(k => { if(n.outputs[k] === id) n.outputs[k] = null; }));
+  if(p && after && !selfLoop) p.n.outputs[p.k] = after;
+  if(current && current.id === id) closeCfg();
+  render(); scheduleSave();
+}
+
+/** What the step picker is currently set to, in words. */
+function addLabel(){
+  const sel = document.getElementById('add-type');
+  const opt = sel && sel.selectedOptions[0];
+  return opt ? opt.textContent : 'Send text';
+}
+function renderOutline(){
+  const box = document.getElementById('outline-list');
+  if(!box) return;
+  let num = 0;
+  box.innerHTML = outlineRows().map(r => {
+    const pad = `style="--d:${r.depth || 0}"`;
+    if(r.head)   return `<div class="ol-head">${esc(r.head)}</div>`;
+    if(r.branch) return `<div class="ol-branch" ${pad}>${esc(r.branch)}</div>`;
+    if(r.loop){
+      const n = nodes[r.loop];
+      return `<div class="ol-loop" ${pad}>↺ back to ${esc(TYPE_LABEL[n.type] || n.type)}</div>`;
+    }
+    if(r.gap) return `<div class="ol-gap" ${pad}>`+
+      `<button type="button" class="ol-add" data-add="${r.from}|${r.port}">+ Add a step here: ${esc(addLabel())}</button></div>`;
+    const n = nodes[r.id];
+    num++;
+    const swap = outlineSwappable(r.id) ? '' : 'disabled';
+    const up   = (outlineParent(r.id) || {n: start}).n.id === 'start' ? 'disabled' : '';
+    return `<div class="ol-row${current && current.id === r.id ? ' on' : ''}" ${pad} data-id="${r.id}">`+
+      `<button type="button" class="ol-main" data-open="${r.id}">`+
+        `<span class="ol-num">${num}</span>`+
+        `<span class="ol-txt"><span class="ol-type">${esc(TYPE_LABEL[n.type] || n.type)}</span>`+
+        `<span class="ol-sum">${summary(n)}</span></span>`+
+      `</button>`+
+      `<span class="ol-acts">`+
+        `<button type="button" data-up="${r.id}" title="Move up" ${up}>↑</button>`+
+        `<button type="button" data-down="${r.id}" title="Move down" ${swap}>↓</button>`+
+        `<button type="button" data-del="${r.id}" title="Delete step" class="ol-del">✕</button>`+
+      `</span></div>`;
+  }).join('');
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('#outline-list button');
+  if(!b) return;
+  const d = b.dataset;
+  if(d.open) openCfg(d.open);
+  else if(d.up)   moveUp(d.up);
+  else if(d.down) moveDown(d.down);
+  else if(d.del)  outlineDelete(d.del);
+  else if(d.add){ const [id, port] = d.add.split('|'); addAfter(id, port); }
+});
+document.addEventListener('change', e => { if(e.target && e.target.id === 'add-type') renderOutline(); });
+
+/** List view on demand — and always on a phone, where dragging wires is not realistic. */
+function toggleOutline(){
+  const on = document.body.classList.toggle('outline-only');
+  const b = document.getElementById('btn-outline');
+  if(b) b.textContent = on ? 'Canvas view' : 'List view';
+  renderOutline();
+}
+
 /* ── zoom ──
    The canvas is CSS-scaled, so every getBoundingClientRect() value comes back already
    multiplied by the zoom while the SVG edge layer still draws in unscaled units. Every
@@ -771,6 +1207,10 @@ function zoomFit(){
   wrap.scrollLeft=0; wrap.scrollTop=0;
 }
 /** Screen coords → unscaled canvas coords. */
+/* Nodes land on a 20px grid so a flow looks deliberate without anyone aligning anything.
+   Hold Alt while dragging for free placement. */
+const GRID = 20;
+function gsnap(v, free){ return free ? Math.max(0, Math.round(v)) : Math.max(0, Math.round(v / GRID) * GRID); }
 function toCanvas(clientX, clientY){
   const cr=canvas.getBoundingClientRect();
   return {x:(clientX-cr.left)/Z, y:(clientY-cr.top)/Z};
@@ -866,14 +1306,15 @@ function defaultConfig(type){
     list_msg:{body:'',button:'Choose',header:'',options:[{title:'',description:''}]}}[type]||{};
 }
 function addNode(type,data){
+  mark();
   const w=document.getElementById('cwrap');
   // Drop it into the visible area — scroll offsets are in scaled px, so divide by Z.
   const n={id:nid(),type,x:(w.scrollLeft+120)/Z,y:(w.scrollTop+90)/Z,config:data?JSON.parse(JSON.stringify(data.config||defaultConfig(type))):defaultConfig(type),outputs:data?(data.outputs||{}):{}};
-  nodes[n.id]=n; render(); openCfg(n.id);
+  nodes[n.id]=n; render(); openCfg(n.id); scheduleSave();
 }
-function deleteCurrent(){ if(!current) return; const id=current.id; delete nodes[id];
+function deleteCurrent(){ if(!current) return; mark(); const id=current.id; delete nodes[id];
   [start,...Object.values(nodes)].forEach(n=>Object.keys(n.outputs||{}).forEach(k=>{ if(n.outputs[k]===id) n.outputs[k]=null; }));
-  closeCfg(); render();
+  closeCfg(); render(); scheduleSave();
 }
 
 /* ── config panel ── */
@@ -884,8 +1325,9 @@ function openCfg(id){ current = id==='start'?start:nodes[id]; if(!current) retur
   document.querySelector('#cfg [onclick="deleteCurrent()"]').parentElement.style.display=current.type==='start'?'none':'';
   document.getElementById('cfg').classList.add('open');
   bindCfg();
+  renderOutline();   // keep the list's highlight in step with the drawer
 }
-function closeCfg(){ document.getElementById('cfg').classList.remove('open'); document.querySelectorAll('.node.sel').forEach(e=>e.classList.remove('sel')); current=null; }
+function closeCfg(){ document.getElementById('cfg').classList.remove('open'); document.querySelectorAll('.node.sel').forEach(e=>e.classList.remove('sel')); current=null; renderOutline(); }
 function cfgForm(n){ const c=n.config;
   switch(n.type){
     case 'text': return `<label><span class="lbl">Message</span><textarea data-k="body" rows="3">${esc(c.body)}</textarea></label><div class="hint">Use {{name}}, {{phone}} or a saved field.</div>`;
@@ -1175,8 +1617,10 @@ function bindCfg(){
     el.addEventListener(ev,()=>{
       let v = el.type==='checkbox' ? el.checked : el.value;
       if(el.type==='number') v = +v;
+      markTyping();
       setCfgPath(current.config, el.dataset.k, v);
       renderKeepPanel(false);
+      scheduleSave();
     });
   });
   document.querySelectorAll('#cfg-body .cf').forEach(cb=>cb.addEventListener('change',()=>{ current.config.fields=[...document.querySelectorAll('#cfg-body .cf:checked')].map(x=>x.value); }));
@@ -1198,15 +1642,31 @@ function renderKeepPanel(rebind=true){ const id=current?current.id:null; render(
     // keep panel open; refresh node summary already done by render()
   } }
 
+/* The + on a port. Delegated from the canvas so it keeps working after every re-render. */
+canvas.addEventListener('click', e => {
+  const b = e.target.closest('.addnext');
+  if(!b) return;
+  e.stopPropagation();
+  const [id, port] = b.dataset.add.split('|');
+  addAfter(id, port);
+});
+
 /* ── interactions: drag + connect + pan ── */
 let drag=null, conn=null, pan=null, spaceDown=false;
 canvas.addEventListener('pointerdown',e=>{
+  // On a phone the board is for looking at. Editing happens in the list and the drawer.
+  if(isPhone() && !e.target.classList.contains('del')) return;
   const port=e.target.closest('.port-out');
-  if(port){ e.preventDefault(); const nidv=port.dataset.node, pv=port.dataset.port; conn={node:nidv,port:pv}; return; }
+  if(port){ e.preventDefault(); const nidv=port.dataset.node, pv=port.dataset.port; conn={node:nidv,port:pv,snap:snapshot()}; return; }
   const head=e.target.closest('.node-head');
-  if(e.target.classList.contains('del')){ const el=e.target.closest('.node'); const id=el.dataset.id; if(id!=='start'){ if(current&&current.id===id)closeCfg(); delete nodes[id]; [start,...Object.values(nodes)].forEach(n=>Object.keys(n.outputs).forEach(k=>{if(n.outputs[k]===id)n.outputs[k]=null;})); render(); } e.stopPropagation(); return; }
+  if(e.target.classList.contains('del')){ const el=e.target.closest('.node'); const id=el.dataset.id; if(id!=='start'){ mark(); if(current&&current.id===id)closeCfg(); delete nodes[id]; [start,...Object.values(nodes)].forEach(n=>Object.keys(n.outputs).forEach(k=>{if(n.outputs[k]===id)n.outputs[k]=null;})); render(); scheduleSave(); } e.stopPropagation(); return; }
   if(head){ const el=head.closest('.node'); const id=el.dataset.id; const n=id==='start'?start:nodes[id];
-    const p=toCanvas(e.clientX,e.clientY); drag={n,dx:p.x-n.x,dy:p.y-n.y}; }
+    const p=toCanvas(e.clientX,e.clientY);
+    // Drag one of a selected group and the whole group comes with it, keeping its shape.
+    const group = (SEL.has(id) && SEL.size > 1)
+      ? [...SEL].filter(k => nodes[k] && k !== id).map(k => ({n: nodes[k], ox: nodes[k].x - n.x, oy: nodes[k].y - n.y}))
+      : [];
+    drag={n,dx:p.x-n.x,dy:p.y-n.y,ox:n.x,oy:n.y,group,snap:snapshot()}; }
 });
 // Middle-drag, or space+drag, pans the board.
 wrap.addEventListener('pointerdown',e=>{
@@ -1222,9 +1682,14 @@ document.addEventListener('pointermove',e=>{
   if(pan){ wrap.scrollLeft=pan.sl-(e.clientX-pan.x); wrap.scrollTop=pan.st-(e.clientY-pan.y); return; }
   if(drag){
     const p=toCanvas(e.clientX,e.clientY);
-    drag.n.x=Math.max(0,p.x-drag.dx); drag.n.y=Math.max(0,p.y-drag.dy);
+    drag.n.x=gsnap(p.x-drag.dx, e.altKey); drag.n.y=gsnap(p.y-drag.dy, e.altKey);
     const el=canvas.querySelector(`.node[data-id="${drag.n.id}"]`);
     if(el){el.style.left=drag.n.x+'px';el.style.top=drag.n.y+'px';}
+    (drag.group||[]).forEach(g => {
+      g.n.x = Math.max(0, drag.n.x + g.ox); g.n.y = Math.max(0, drag.n.y + g.oy);
+      const ge = canvas.querySelector(`.node[data-id="${g.n.id}"]`);
+      if(ge){ ge.style.left = g.n.x+'px'; ge.style.top = g.n.y+'px'; }
+    });
     redraw();
   }
   else if(conn){ const a=portCenter(conn.node,conn.port,'out'); redraw({a:a||{x:0,y:0},b:toCanvas(e.clientX,e.clientY)}); }
@@ -1232,11 +1697,16 @@ document.addEventListener('pointermove',e=>{
 document.addEventListener('pointerup',e=>{
   if(pan){ pan=null; wrap.classList.remove('panning'); }
   if(conn){ const tnode=e.target.closest('.node'); const src=conn.node==='start'?start:nodes[conn.node];
+    const was=src.outputs[conn.port]||null;
     if(tnode && tnode.dataset.id!==conn.node && tnode.dataset.id!=='start'){ src.outputs[conn.port]=tnode.dataset.id; }
     else if(!tnode){ src.outputs[conn.port]=null; }
-    conn=null; redraw();
+    if((src.outputs[conn.port]||null)!==was){ pushSnap(conn.snap); scheduleSave(); }
+    conn=null; render();
   }
-  if(drag){ drag=null; }
+  if(drag){
+    if(drag.n.x!==drag.ox || drag.n.y!==drag.oy){ pushSnap(drag.snap); scheduleSave(); }
+    drag=null;
+  }
 });
 // Ctrl/⌘ + wheel zooms at the cursor; plain wheel keeps scrolling the board.
 wrap.addEventListener('wheel',e=>{
@@ -1245,7 +1715,11 @@ wrap.addEventListener('wheel',e=>{
   const r=wrap.getBoundingClientRect();
   setZoom(Z + (e.deltaY<0?0.1:-0.1), {x:e.clientX-r.left, y:e.clientY-r.top});
 },{passive:false});
-canvas.addEventListener('click',e=>{ if(e.target.closest('.port'))return; if(e.target.closest('.del'))return; const el=e.target.closest('.node'); if(el&&!e.target.closest('.node-head')) openCfg(el.dataset.id); });
+canvas.addEventListener('click',e=>{ if(e.target.closest('.port'))return; if(e.target.closest('.del'))return; const el=e.target.closest('.node');
+  if(el && el.dataset.id !== 'start' && (e.shiftKey || e.metaKey)){ selToggle(el.dataset.id); return; }
+  if(!el){ selClear(); return; }
+  // Nothing on the board drags on a phone, so the whole node — header included — opens it.
+  if(isPhone() || !e.target.closest('.node-head')) openCfg(el.dataset.id); });
 
 /* ── trigger form ── */
 /* ── source sheet (the trigger) ──
@@ -1353,9 +1827,18 @@ function onTrig(){ const v=document.getElementById('trigger_type').value; const 
   const sw=document.getElementById('sheet-wrap'); if(sw) sw.style.display=v==='google_sheet'?'block':'none'; const s=canvas.querySelector('.node.start .node-body'); if(s)s.innerHTML=summary(start); }
 
 /* ── serialize ── */
+/* The canvas as the server expects it. Shared by the Save button and the auto-save, so the
+   two can never disagree about what is being sent. */
+function serialize(){
+  return JSON.stringify({
+    start: {x:start.x, y:start.y, next: start.outputs.next || null},
+    nodes: Object.values(nodes).map(n => ({id:n.id, type:n.type, x:n.x, y:n.y, config:n.config, outputs:n.outputs}))
+  });
+}
 document.getElementById('flow-form').addEventListener('submit',()=>{
-  const out={start:{x:start.x,y:start.y,next:start.outputs.next||null}, nodes:Object.values(nodes).map(n=>({id:n.id,type:n.type,x:n.x,y:n.y,config:n.config,outputs:n.outputs}))};
-  document.getElementById('flow_json').value=JSON.stringify(out);
+  clearTimeout(SAVE_T);            // the explicit save wins over a pending auto-save
+  DIRTY = false;
+  document.getElementById('flow_json').value = serialize();
 });
 
 /* ── init ── */

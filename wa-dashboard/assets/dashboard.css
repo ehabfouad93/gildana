@@ -450,12 +450,64 @@ textarea { resize: vertical; min-height: 84px; }
 .install-bar .grow { flex: 1; }
 .install-bar .x { cursor: pointer; color: var(--muted); font-size: 17px; background: 0; border: 0; }
 
-/* Editing a flow on a phone is cramped even with touch support — say so rather than
-   letting the user fight it. */
-.canvas-smallnote { display: none; }
-@media (max-width: 700px) {
-  .canvas-smallnote { display: block; margin-bottom: 10px; font-size: 12.5px; }
-  .canvas-wrap { height: 60vh; min-height: 340px; }
+/* ── The ordered outline ──────────────────────────────────────────────────────────
+   A flow as a list of steps. Hidden on a desktop until asked for; on a phone it replaces
+   the canvas as the place editing happens, because dragging wires with a thumb does not
+   work and telling people to go find a computer is not an answer. */
+.canvas-outline { display: none; margin-bottom: 12px; }
+.outline-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; margin-bottom: 8px; }
+.outline-head strong { font-size: 14px; }
+.outline-head span { font-size: 12px; color: var(--muted); }
+.outline-list { display: flex; flex-direction: column; gap: 6px; }
+
+.ol-row { display: flex; align-items: stretch; gap: 6px; margin-left: calc(var(--d, 0) * 16px);
+          border: 1px solid var(--line-strong); border-radius: 10px; background: var(--panel); }
+.ol-row.on { border-color: var(--brand, #3D6BFF); box-shadow: 0 0 0 2px rgba(61,107,255,.14); }
+.ol-main { flex: 1; display: flex; gap: 10px; align-items: flex-start; text-align: start;
+           background: 0; border: 0; padding: 10px 4px 10px 10px; cursor: pointer; font: inherit; color: inherit; min-width: 0; }
+.ol-num { flex: 0 0 22px; height: 22px; border-radius: 999px; background: var(--chip, #EEF0F5);
+          color: var(--muted); font-size: 11.5px; font-weight: 600; display: grid; place-items: center; }
+.ol-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ol-type { font-size: 12px; font-weight: 600; }
+.ol-sum { font-size: 12.5px; color: var(--ink-soft, #5B6478); line-height: 1.45; overflow-wrap: anywhere; }
+.ol-sum .muted { color: var(--muted); }
+.ol-acts { display: flex; align-items: center; gap: 2px; padding-inline-end: 6px; }
+.ol-acts button { width: 30px; height: 30px; border: 0; background: 0; border-radius: 8px;
+                  color: var(--muted); font-size: 14px; cursor: pointer; }
+.ol-acts button:hover:not(:disabled) { background: var(--chip, #EEF0F5); color: var(--ink); }
+.ol-acts button:disabled { opacity: .28; cursor: default; }
+.ol-acts .ol-del:hover { background: #FDECEC; color: #D14343; }
+
+.ol-branch { margin-left: calc(var(--d, 0) * 16px - 16px); font-size: 11.5px; font-weight: 600;
+             color: var(--muted); text-transform: uppercase; letter-spacing: .04em; padding-top: 4px; }
+.ol-loop { margin-left: calc(var(--d, 0) * 16px); font-size: 12px; color: var(--muted); padding: 6px 10px; }
+.ol-gap { margin-left: calc(var(--d, 0) * 16px); }
+.ol-add { border: 1px dashed var(--line-strong); border-radius: 10px; background: 0; color: var(--muted);
+          font: inherit; font-size: 12.5px; padding: 8px 12px; cursor: pointer; width: 100%; text-align: start; }
+.ol-add:hover { border-color: var(--brand, #3D6BFF); color: var(--brand, #3D6BFF); }
+.ol-head { font-size: 12px; font-weight: 600; color: #B4552E; margin-top: 10px; }
+
+/* Asked for by the List view button. */
+body.outline-only .canvas-outline { display: block; }
+body.outline-only .canvas-stage,
+body.outline-only .canvas-hint-desk,
+body.outline-only .canvas-only { display: none; }
+/* The step picker sits on its own row once the toolbar wraps; it should not span it. */
+.canvas-toolbar #add-type { max-width: 260px; }
+
+@media (max-width: 760px) {
+  /* The canvas stays, but only to look at: every edit goes through the list and the
+     step drawer, so nothing here depends on dragging. */
+  .canvas-outline { display: block; }
+  /* The list is already on screen, so the button that asks for it, and the two tools that
+     only make sense with a mouse, come off the toolbar. */
+  .canvas-hint-desk, .canvas-only, #btn-outline { display: none; }
+  /* Squeezed into the row it collapses to an arrow, so it takes a row of its own. */
+  .canvas-toolbar #add-type { max-width: none; flex: 1 1 100%; }
+  .canvas-wrap { height: 42vh; min-height: 260px; }
+  .canvas .node-head { cursor: default; }
+  .canvas .port, .canvas .addnext { display: none; }
+  .cfg-panel { width: 100%; max-width: none; border-left: 0; border-radius: 0; }
 }
 
 /* Uploaded brand artwork: never let an oddly-sized file blow out the chrome. */
@@ -559,3 +611,33 @@ textarea { resize: vertical; min-height: 84px; }
 .starter-name { font-weight: 700; font-size: 14px; }
 .starter-sum { font-size: 12.5px; color: var(--ink-soft, #5B6478); line-height: 1.5; flex: 1; }
 .starter button { align-self: flex-start; margin-top: 4px; }
+
+/* ── Flow editor: full screen, save state, add-next ──────────────────────────────── */
+
+/* Focus mode — the canvas fills the window so a big flow is workable. Everything else on
+   the page stays in the DOM (and keeps its state) rather than being torn down. */
+body.canvas-focus .sidebar, body.canvas-focus .topbar,
+body.canvas-focus .page-head, body.canvas-focus .tabbar,
+body.canvas-focus .nav-backdrop, body.canvas-focus .install-bar { display: none !important; }
+body.canvas-focus .shell, body.canvas-focus .content { padding: 0 !important; margin: 0 !important; max-width: none !important; }
+body.canvas-focus .card:not(.canvas-card) { display: none !important; }
+body.canvas-focus .canvas-card { margin: 0; border-radius: 0; height: 100vh; display: flex; flex-direction: column; }
+body.canvas-focus .canvas-wrap { flex: 1; height: auto !important; min-height: 0 !important; border-radius: 0; }
+body.canvas-focus { overflow: hidden; }
+
+/* Steps gathered with shift-click. Distinct from the one open in the panel (.sel). */
+.node.multi { box-shadow: 0 0 0 2px var(--brand, #3D6BFF), 0 6px 18px rgba(26,22,18,.10); }
+.sel-count { font-size: 12px; color: var(--brand, #3D6BFF); font-weight: 600; }
+
+/* Whether the flow is saved. Quiet when it is, obvious when it is not. */
+.save-state { font-size: 12px; color: var(--muted, #7A8195); padding: 3px 8px; border-radius: 999px; }
+.save-state.dirty { color: #8A6D00; background: #FFF6DF; }
+.save-state.ok    { color: #2E7D32; }
+.save-state.err   { color: #D14343; background: #FDECEC; font-weight: 600; }
+
+/* The + beside a port: add the next step already connected. */
+.addnext { width: 17px; height: 17px; line-height: 14px; padding: 0; margin-right: 4px;
+           border: 1px dashed var(--line-strong); background: var(--white); color: var(--muted, #7A8195);
+           border-radius: 50%; cursor: pointer; font-size: 13px; opacity: 0; transition: opacity .12s, color .12s; }
+.node:hover .addnext, .node.sel .addnext { opacity: 1; }
+.addnext:hover { color: var(--brand); border-color: var(--brand); border-style: solid; }
