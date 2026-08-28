@@ -515,3 +515,33 @@ textarea { resize: vertical; min-height: 84px; }
   .help-dock { right: 12px; bottom: calc(var(--tabbar-h, 58px) + 12px); }
   .help-fab { width: 40px; height: 40px; }
 }
+
+/* ── Flow check & preview ─────────────────────────────────────────────────────── */
+.issue-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.issue { border-left: 3px solid var(--line-strong); padding: 7px 10px; border-radius: 0 6px 6px 0; background: var(--surface-2, #F6F7FA); font-size: 13px; }
+.issue.error { border-left-color: #D14343; }
+.issue.warn  { border-left-color: #E0A100; }
+
+/* A node the check flagged: outlined on the canvas so the list and the picture agree. */
+.node.has-issue { box-shadow: 0 0 0 2px #D14343, 0 6px 18px rgba(13,19,33,.14); }
+
+/* Live figures on a node — reached / stalled. Kept small so they never fight the label. */
+.node-stats { display: flex; gap: 6px; padding: 4px 10px 8px; font-size: 11px; }
+.node-stats span { display: inline-flex; align-items: center; gap: 3px; color: var(--ink-soft, #5B6478); }
+.node-stats .drop { color: #D14343; font-weight: 700; }
+
+/* Preview drawer */
+/* Above the sticky topbar (200) and the node config panel (600): opening a preview while
+   editing a node should cover both, not slide under them. */
+.pv-back { position: fixed; inset: 0; background: rgba(13,19,33,.45); display: none; z-index: 620; }
+.pv-back.open { display: block; }
+.pv-panel { position: absolute; top: 0; right: 0; height: 100%; width: min(420px, 100%); background: var(--surface, #fff);
+            box-shadow: -8px 0 30px rgba(13,19,33,.18); padding: 16px; display: flex; flex-direction: column; }
+.pv-thread { flex: 1; overflow-y: auto; background: #ECE5DD; border-radius: 10px; padding: 10px;
+             display: flex; flex-direction: column; gap: 6px; min-height: 200px; }
+.pv-msg { max-width: 82%; padding: 7px 10px; border-radius: 10px; font-size: 13.5px; line-height: 1.45;
+          white-space: pre-wrap; word-break: break-word; box-shadow: 0 1px 1px rgba(0,0,0,.08); }
+.pv-msg.us   { align-self: flex-start; background: #fff; }
+.pv-msg.them { align-self: flex-end;   background: #DCF8C6; }
+.pv-stop { font-size: 12.5px; color: var(--ink-soft, #5B6478); padding: 8px 2px 0; }
+@media (max-width: 720px) { .pv-panel { width: 100%; } }

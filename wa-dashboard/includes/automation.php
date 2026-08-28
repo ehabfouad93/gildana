@@ -85,8 +85,66 @@ function auto_replying(?bool $set = null): bool
     return $on;
 }
 
-function auto_send(array $client, array $run, array $step, array $contact, string $kind, callable $sender, string $body = ''): bool
+/**
+ * Preview mode: run a flow without sending anything.
+ *
+ * auto_send() is the single funnel every node's outbound message passes through — text,
+ * image, template, buttons and the AI reply all end up here — so intercepting this one
+ * function is enough to make the whole engine harmless. The preview therefore executes the
+ * *real* flow logic and can never drift from what production does; only the delivery is
+ * swapped out.
+ *
+ * Pass true/false to switch it on and off; the collected messages come back from
+ * auto_preview_taken().
+ */
+function auto_dry_run(?bool $set = null): bool
 {
+    static $on = false;
+    if ($set !== null) {
+        $on = $set;
+        if ($on) { $log = &auto_preview_log(); $log = []; }   // fresh transcript per preview
+    }
+    return $on;
+}
+
+/**
+ * Record what happened at one step of one run, for the drop-off figures on the canvas.
+ *
+ * 'reached' is written as the step starts and upgraded to 'advanced' when it moves on, so a
+ * step that is reached and never advances shows up as a stall — which is exactly the silent
+ * failure a client needs to see. Never written during a preview.
+ */
+function auto_step_event(array $run, int $stepId, string $outcome, string $reason = ''): void
+{
+    if ($stepId <= 0 || auto_dry_run()) return;
+    try {
+        db_run(
+            "INSERT INTO flow_step_events (flow_id,step_id,run_id,client_id,outcome,reason,created_at,updated_at)
+             VALUES (?,?,?,?,?,?,NOW(),NOW())
+             ON DUPLICATE KEY UPDATE outcome=VALUES(outcome), reason=VALUES(reason), updated_at=NOW()",
+            [(int) $run['flow_id'], $stepId, (int) $run['id'], (int) $run['client_id'],
+             $outcome, $reason !== '' ? substr($reason, 0, 64) : null]
+        );
+    } catch (Throwable $e) { /* statistics must never break a live conversation */ }
+}
+
+/** The single store for a preview transcript. Returned by reference so callers append to it. */
+function &auto_preview_log(): array
+{
+    static $log = [];
+    return $log;
+}
+
+function auto_send(array $client, array &$run, array $step, array $contact, string $kind, callable $sender, string $body = ''): bool
+{
+    /* Preview: record what WOULD go out, charge nothing, send nothing, and report success so
+       the flow advances exactly as it would in production. */
+    if (auto_dry_run()) {
+        $log = &auto_preview_log();
+        $log[] = ['step_id' => (int) ($step['id'] ?? 0), 'type' => $kind, 'body' => $body];
+        return true;
+    }
+
     // A personal number sends COLD traffic in paced slots shared with campaigns and qualifier
     // outreach. Out of budget → leave the run waiting; the next worker run picks it up rather
     // than burning the slot or dropping the message. Conversational replies are exempt: see
@@ -201,20 +259,30 @@ function automation_run_steps(array $client, array $contact, array $run, array $
     $flow = auto_flow((int) $run['flow_id']);
     if (!$flow) return;
 
+    /* Reaching a NEW step is the proof that the previous one handed over, so 'advanced' is
+       recorded here rather than in each of the fifteen node branches. A step that is reached
+       and never advances is a drop-off — computed as reached-minus-advanced at read time. */
+    $prevStep = 0;
+
     for ($i = 0; $i < AUTO_MAX_STEPS; $i++) {
         $stepId = (int) ($run['current_step_id'] ?? 0);
+        if ($prevStep > 0 && $prevStep !== $stepId) { auto_step_event($run, $prevStep, 'advanced'); $prevStep = 0; }
         if (!$stepId) { auto_finalize($run, $flow, $ctx); break; }
         $step = auto_step($stepId);
         if (!$step) { auto_finalize($run, $flow, $ctx); break; }
+        $prevStep = $stepId;
         $cfg  = auto_cfg($step);
         $type = (string) $step['type'];
         $to   = (string) $contact['phone_e164'];
+
+        auto_step_event($run, $stepId, 'reached');
 
         // Free-form sends require the 24h window; templates are always allowed.
         $freeForm = in_array($type, ['text', 'image', 'buttons', 'question', 'ai_chat'], true)
                  || ($type === 'ai_branch' && trim((string) ($cfg['prompt'] ?? '')) !== '');
         if ($freeForm && !auto_in_window($contact, $client)) {
             $run['status'] = 'blocked';
+            auto_step_event($run, $stepId, 'stalled', 'outside_24h_window');
             break;
         }
 
@@ -352,6 +420,10 @@ function automation_run_steps(array $client, array $contact, array $run, array $
     // was hit; mark blocked rather than completing. Natural End sets 'completed'
     // via the top-of-loop finalize.
     if ($run['status'] === 'active') $run['status'] = 'blocked';
+    // A run that finished cleanly means its final step did its job too.
+    if ($prevStep > 0 && in_array((string) ($run['status'] ?? ''), ['completed', 'waiting_input', 'waiting_timer'], true)) {
+        auto_step_event($run, $prevStep, 'advanced');
+    }
     auto_save_run($run, $ctx);
 }
 
@@ -736,6 +808,284 @@ function automation_enqueue_lead(array $client, array $flow, array $contact, str
     if ($inserted === 0) return false;   // already enrolled — a concurrent import won
     db_run("UPDATE flows SET runs_count=runs_count+1 WHERE id=?", [(int) $flow['id']]);
     return true;
+}
+
+/**
+ * Per-step figures for the canvas: how many people reached each step, how many got past it,
+ * and how many stopped there.
+ *
+ * "Stalled" is deliberately derived (reached minus advanced) rather than stored, so it is
+ * correct even for failure modes nobody thought to record explicitly.
+ */
+function automation_step_stats(int $flowId): array
+{
+    $rows = db_all(
+        "SELECT step_id,
+                SUM(outcome IN ('reached','advanced','stalled')) AS reached,
+                SUM(outcome = 'advanced')                        AS advanced
+           FROM flow_step_events WHERE flow_id = ? GROUP BY step_id", [$flowId]
+    );
+    $out = [];
+    foreach ($rows as $r) {
+        $reached  = (int) $r['reached'];
+        $advanced = (int) $r['advanced'];
+        $out[(int) $r['step_id']] = [
+            'reached'  => $reached,
+            'advanced' => $advanced,
+            'stalled'  => max(0, $reached - $advanced),
+        ];
+    }
+    return $out;
+}
+
+/**
+ * What is going wrong in this flow right now — the Problems list.
+ *
+ * Two sources, because a step can fail in two different ways: the send itself was rejected
+ * by WhatsApp (flow_messages carries the error), or the step never managed to send at all
+ * (flow_step_events records why). Both were previously invisible.
+ */
+function automation_problems(int $flowId, int $limit = 50): array
+{
+    $out = [];
+
+    foreach (db_all(
+        "SELECT step_id, error_title, COUNT(*) n, MAX(created_at) last_at
+           FROM flow_messages
+          WHERE flow_id = ? AND status = 'failed'
+          GROUP BY step_id, error_title
+          ORDER BY n DESC LIMIT " . (int) $limit, [$flowId]) as $r) {
+        $out[] = [
+            'step_id' => (int) $r['step_id'],
+            'count'   => (int) $r['n'],
+            'last_at' => (string) $r['last_at'],
+            'title'   => 'WhatsApp rejected the message',
+            'detail'  => (string) ($r['error_title'] ?: 'No reason given.'),
+        ];
+    }
+
+    $reasons = [
+        'outside_24h_window' => ['Blocked by the 24-hour rule',
+            'The customer had not messaged recently, so WhatsApp would not allow a free-form message.'],
+    ];
+    foreach (db_all(
+        "SELECT step_id, reason, COUNT(*) n, MAX(updated_at) last_at
+           FROM flow_step_events
+          WHERE flow_id = ? AND outcome = 'stalled' AND reason IS NOT NULL
+          GROUP BY step_id, reason
+          ORDER BY n DESC LIMIT " . (int) $limit, [$flowId]) as $r) {
+        [$t, $d] = $reasons[(string) $r['reason']] ?? ['This step could not run', (string) $r['reason']];
+        $out[] = [
+            'step_id' => (int) $r['step_id'],
+            'count'   => (int) $r['n'],
+            'last_at' => (string) $r['last_at'],
+            'title'   => $t,
+            'detail'  => $d,
+        ];
+    }
+
+    usort($out, fn($a, $b) => $b['count'] <=> $a['count']);
+    return $out;
+}
+
+/**
+ * Check a flow for the mistakes that make it stop dead without telling anyone.
+ *
+ * Every one of these is a real failure mode of the engine: a node with no outgoing edge
+ * silently ends the conversation, a deleted template fails every send, a free-form node on
+ * the Cloud API is refused outside the 24-hour window. None of them are visible on the
+ * canvas today — the flow just stops.
+ *
+ * Returns ['level'=>'error'|'warn', 'step_id'=>int, 'title'=>string, 'detail'=>string][].
+ */
+function automation_validate(array $flow, array $client = []): array
+{
+    $issues = [];
+    $flowId = (int) $flow['id'];
+    $steps  = db_all("SELECT * FROM flow_steps WHERE flow_id=? ORDER BY sort, id", [$flowId]);
+    $byId   = [];
+    foreach ($steps as $st) $byId[(int) $st['id']] = $st;
+
+    $add = function (string $level, int $stepId, string $title, string $detail) use (&$issues) {
+        $issues[] = ['level' => $level, 'step_id' => $stepId, 'title' => $title, 'detail' => $detail];
+    };
+
+    if (!$steps) {
+        $add('error', 0, 'This flow is empty', 'Add at least one step before turning it on.');
+        return $issues;
+    }
+    $first = (int) ($flow['first_step_id'] ?? 0);
+    if ($first <= 0 || !isset($byId[$first])) {
+        $add('error', 0, 'No starting step', 'Nothing is connected to the trigger, so the flow can never begin.');
+    }
+
+    /* Which nodes can actually be reached from the trigger? Walk forward through next_step_id
+       and every branch target; anything left over is dead weight the customer never sees. */
+    $reached = [];
+    $queue   = $first > 0 ? [$first] : [];
+    while ($queue) {
+        $id = (int) array_shift($queue);
+        if ($id <= 0 || isset($reached[$id]) || !isset($byId[$id])) continue;
+        $reached[$id] = true;
+        foreach (auto_step_targets($byId[$id]) as $t) $queue[] = $t;
+    }
+
+    $isPersonal = $client && function_exists('channel_is_personal') && channel_is_personal($client);
+
+    foreach ($steps as $st) {
+        $sid  = (int) $st['id'];
+        $type = (string) $st['type'];
+        $cfg  = auto_cfg($st);
+        $next = (int) ($st['next_step_id'] ?? 0);
+
+        if (!isset($reached[$sid])) {
+            $add('warn', $sid, 'Nothing leads here', 'This step is not connected to the flow, so it never runs.');
+        }
+
+        // A node that waits for an answer but has nowhere to go leaves the customer hanging.
+        if (in_array($type, ['question', 'buttons'], true) && !auto_step_targets($st)) {
+            $add('error', $sid, 'Asks a question with no next step',
+                 'The customer answers and the conversation stops with no reply.');
+        }
+        if ($type === 'buttons' && !array_filter((array) ($cfg['buttons'] ?? []))) {
+            $add('error', $sid, 'Buttons step has no buttons', 'Add at least one option for the customer to choose.');
+        }
+
+        // A template that no longer exists fails on every single send.
+        if ($type === 'template' && trim((string) ($cfg['text'] ?? '')) === '') {
+            $tid = (int) ($cfg['template_id'] ?? 0);
+            if ($tid <= 0) {
+                $add('error', $sid, 'No template chosen', 'Pick an approved template, or write the message text.');
+            } elseif (!db_row("SELECT id FROM templates WHERE id=?", [$tid])) {
+                $add('error', $sid, 'The template was deleted', 'This step fails for every contact until you pick another.');
+            }
+        }
+
+        if (in_array($type, ['ai_chat', 'ai_branch', 'ai_score'], true)) {
+            if ($client && function_exists('ai_configured') && !ai_configured($client)) {
+                $add('error', $sid, 'AI step with no AI configured',
+                     'Add an AI key in Settings, or this step stops the flow.');
+            }
+            if ($type === 'ai_chat' && trim((string) ($cfg['fallback'] ?? '')) === '') {
+                $add('warn', $sid, 'AI step has no fallback message',
+                     'If the AI is unavailable the customer gets nothing. Add a message to send instead.');
+            }
+        }
+
+        // Both send cfg['body']; a blank one is a blank WhatsApp message either way.
+        if (in_array($type, ['text', 'question'], true) && trim((string) ($cfg['body'] ?? '')) === '') {
+            $add('error', $sid, 'Empty message',
+                 $type === 'question' ? 'This step would ask the customer nothing.' : 'This step would send a blank message.');
+        }
+        if ($type === 'image' && trim((string) ($cfg['link'] ?? '')) === '') {
+            $add('error', $sid, 'Image step has no image', 'Add the image to send.');
+        }
+        if ($next > 0 && !isset($byId[$next])) {
+            $add('error', $sid, 'Points at a step that no longer exists', 'The flow ends here instead of continuing.');
+        }
+    }
+
+    /* The 24-hour rule only bites on the Cloud API, and only when the flow can start before
+       the customer has said anything. A keyword or default-reply flow is always a response to
+       an inbound message, so its window is open by definition. */
+    $coldStart = in_array((string) ($flow['trigger_type'] ?? ''), ['google_sheet', 'csv', 'campaign'], true);
+    if (!$isPersonal && $coldStart) {
+        foreach ($steps as $st) {
+            if (!isset($reached[(int) $st['id']])) continue;
+            if (in_array((string) $st['type'], ['text', 'image', 'buttons', 'question'], true)) {
+                $add('warn', (int) $st['id'], 'May be blocked by the 24-hour rule',
+                     'This flow can start before the customer has messaged you. Until they reply, WhatsApp only allows template steps out.');
+                break;   // one warning per flow — the rule is the same for every step
+            }
+        }
+    }
+    return $issues;
+}
+
+/** Every step this one can hand control to: its next step plus any branch targets. */
+function auto_step_targets(array $step): array
+{
+    $cfg = auto_cfg($step);
+    $out = [(int) ($step['next_step_id'] ?? 0)];
+    foreach (['buttons', 'branches', 'options'] as $k) {
+        foreach ((array) ($cfg[$k] ?? []) as $b) {
+            if (is_array($b) && isset($b['next'])) $out[] = (int) $b['next'];
+        }
+    }
+    foreach (['yes_step_id', 'no_step_id', 'next_step_id'] as $k) {
+        if (isset($cfg[$k])) $out[] = (int) $cfg[$k];
+    }
+    return array_values(array_filter(array_unique($out)));
+}
+
+/**
+ * Walk a flow as a preview: what would this send, and where would it stop?
+ *
+ * Runs the real engine with sending disabled, against a throwaway run that is deleted
+ * afterwards — so nothing is charged, nothing is delivered, no contact state changes, and
+ * no run is left behind. Because it is the same engine, a flow that works in preview works
+ * in production; there is no second implementation to fall out of step.
+ *
+ * $answers lets the caller script replies to Ask nodes so a whole branch can be walked.
+ * Returns ['messages'=>[], 'stopped'=>string, 'detail'=>string].
+ */
+function automation_preview(array $client, array $flow, array $contact, array $answers = []): array
+{
+    $out = ['messages' => [], 'stopped' => 'end', 'detail' => ''];
+    if (empty($flow['first_step_id'])) {
+        return ['messages' => [], 'stopped' => 'empty', 'detail' => 'This flow has no first step yet.'];
+    }
+
+    $pdo = db();
+    // A preview must never be gated by the pacing that protects a real number.
+    $wasReplying = auto_replying();
+    $pdo->beginTransaction();
+    try {
+        auto_dry_run(true);
+        auto_replying(true);
+
+        $ctx = ['fields' => [], 'transcript' => [], 'preview' => true];
+        $runId = db_insert(
+            "INSERT INTO flow_runs (flow_id,client_id,contact_id,current_step_id,status,score,context,created_at)
+             VALUES (?,?,?,?, 'active', 0, ?, NOW())",
+            [(int) $flow['id'], (int) $client['id'], (int) $contact['id'], (int) $flow['first_step_id'],
+             json_encode($ctx, JSON_UNESCAPED_UNICODE)]
+        );
+        $run = db_row("SELECT * FROM flow_runs WHERE id=?", [$runId]);
+
+        /* Walk, feeding scripted answers to each node that waits for one. The customer's
+           replies go into the SAME transcript as the sends, so the preview reads in the
+           order the conversation would actually happen. */
+        automation_run_steps($client, $contact, $run, $ctx);
+        $run = db_row("SELECT * FROM flow_runs WHERE id=?", [$runId]);
+
+        $guard = 0;
+        while ($run && $run['status'] === 'waiting_input' && $guard++ < 10) {
+            if (!$answers) break;                            // nothing scripted — stop here
+            $answer = (string) array_shift($answers);
+            $log = &auto_preview_log();
+            $log[] = ['step_id' => (int) ($run['current_step_id'] ?? 0), 'type' => 'reply', 'body' => $answer];
+            unset($log);
+            automation_handle_inbound($client, $contact, ['type' => 'text', 'text' => $answer]);
+            $run = db_row("SELECT * FROM flow_runs WHERE id=?", [$runId]);
+        }
+
+        $out['messages'] = auto_preview_log();
+        $status = (string) ($run['status'] ?? 'completed');
+        [$out['stopped'], $out['detail']] = match ($status) {
+            'waiting_input' => ['waiting_input', 'Waits here for the customer to answer.'],
+            'waiting_timer' => ['waiting_timer', 'Waits here, then continues on a timer.'],
+            'blocked'       => ['blocked', 'Stops here — the next message could not be sent.'],
+            'stopped'       => ['stopped', 'Ends here.'],
+            default         => ['end', 'Reaches the end of the flow.'],
+        };
+    } finally {
+        auto_dry_run(false);
+        auto_replying($wasReplying);
+        // Roll the whole thing back: the throwaway run, any tags, scores or captured fields.
+        $pdo->rollBack();
+    }
+    return $out;
 }
 
 /**

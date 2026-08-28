@@ -1,6 +1,11 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/_init.php';
+// The engine itself — the flow check and the preview run the real code, not a copy of it.
+require_once __DIR__ . '/../includes/campaign.php';
+require_once __DIR__ . '/../includes/inbox.php';
+require_once __DIR__ . '/../includes/ai.php';
+require_once __DIR__ . '/../includes/automation.php';
 
 $cid = (int) $CLIENT['id'];
 $id  = (int) ($_GET['id'] ?? 0);
@@ -8,6 +13,34 @@ $flow = db_row("SELECT * FROM flows WHERE id=? AND client_id=? AND kind='bot'", 
 if (!$flow) { http_response_code(404); exit('Automation not found.'); }
 
 $err = '';
+
+/* ── AJAX: what does this flow do, and what's wrong with it? ── */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array(($_POST['action'] ?? ''), ['preview', 'check'], true)) {
+    verify_csrf();
+
+    if ($_POST['action'] === 'check') {
+        json_out(['ok' => true, 'issues' => automation_validate($flow, $CLIENT)]);
+    }
+
+    /* Preview runs the real engine with sending switched off. It needs a contact to
+       personalise against — the one they picked, or any real contact, or a stand-in so an
+       empty account can still see what the flow looks like. */
+    $contact = null;
+    $pick = (int) ($_POST['contact_id'] ?? 0);
+    if ($pick > 0) $contact = db_row("SELECT * FROM contacts WHERE id=? AND client_id=?", [$pick, $cid]);
+    if (!$contact)  $contact = db_row("SELECT * FROM contacts WHERE client_id=? ORDER BY id DESC LIMIT 1", [$cid]);
+    if (!$contact) {
+        $contact = ['id' => 0, 'client_id' => $cid, 'phone_e164' => '000000000000',
+                    'name' => 'Sample Customer', 'attributes' => null,
+                    'last_inbound_at' => date('Y-m-d H:i:s'), 'opt_in_status' => 'in'];
+    }
+    // The preview is a conversation the customer started, so the 24h window is open.
+    $contact['last_inbound_at'] = date('Y-m-d H:i:s');
+
+    $answers = array_values(array_filter(array_map('trim', (array) ($_POST['answers'] ?? []))));
+    $res = automation_preview($CLIENT, $flow, $contact, $answers);
+    json_out(['ok' => true] + $res + ['contact' => (string) $contact['name']]);
+}
 
 /* ── Save (canvas graph) ── */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save') {
@@ -166,6 +199,9 @@ $tc        = json_decode((string) $flow['trigger_config'], true) ?: [];
 $scfg      = json_decode((string) $flow['source_config'], true) ?: [];
 
 $stepsRaw = db_all("SELECT * FROM flow_steps WHERE flow_id=? ORDER BY sort, id", [$id]);
+// How each step has actually performed, and anything currently going wrong in this flow.
+$stepStats = automation_step_stats($id);
+$problems  = automation_problems($id);
 $tid = fn($sid) => ($sid !== null) ? ('s' . (int) $sid) : null;
 $nodes = [];
 foreach ($stepsRaw as $k => $s) {
@@ -216,6 +252,8 @@ foreach ($stepsRaw as $k => $s) {
             $node['outputs']['fallback'] = $tid($c['fallback_next'] ?? null);
             break;
     }
+    // Real numbers for this step, so the canvas shows where people actually drop out.
+    $node['stats'] = $stepStats[(int) $s['id']] ?? null;
     $nodes[] = $node;
 }
 $startNode = [
@@ -307,6 +345,57 @@ client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
     </div>
   </div>
 
+  <?php /* ── What's wrong with this flow, and what does it actually do ── */ ?>
+  <div class="card" id="health-card">
+    <div class="row-between" style="flex-wrap:wrap;gap:10px">
+      <h2 style="margin:0">Check &amp; preview</h2>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button type="button" class="btn btn-ghost btn-sm" onclick="checkFlow()">Check for problems</button>
+        <button type="button" class="btn btn-primary btn-sm" onclick="openPreview()">Preview this flow</button>
+      </div>
+    </div>
+    <p class="text-muted" style="margin:6px 0 0">Preview runs the flow for real but sends nothing — no messages, no credits.</p>
+    <div id="check-out" style="margin-top:10px"></div>
+
+    <?php if ($problems): ?>
+      <h3 style="margin:16px 0 6px;font-size:14px">Going wrong right now</h3>
+      <table class="table">
+        <thead><tr><th>Step</th><th>Problem</th><th>Times</th><th>Last seen</th></tr></thead>
+        <tbody>
+        <?php foreach (array_slice($problems, 0, 12) as $pr): ?>
+          <tr>
+            <td><span class="pill">#<?= (int) $pr['step_id'] ?></span></td>
+            <td><strong><?= e((string) $pr['title']) ?></strong>
+                <span class="text-muted d-block"><?= e((string) $pr['detail']) ?></span></td>
+            <td><?= (int) $pr['count'] ?></td>
+            <td class="text-muted"><?= e((string) $pr['last_at']) ?></td>
+          </tr>
+        <?php endforeach; ?>
+        </tbody>
+      </table>
+    <?php endif; ?>
+  </div>
+
+  <?php /* Preview drawer — a WhatsApp-shaped transcript of what would be sent. */ ?>
+  <div id="preview-back" class="pv-back" onclick="if(event.target===this)closePreview()">
+    <div class="pv-panel">
+      <div class="row-between">
+        <h2 style="margin:0;font-size:16px">Preview</h2>
+        <button type="button" class="btn-link" onclick="closePreview()">Close</button>
+      </div>
+      <p class="text-muted" style="font-size:12px;margin:4px 0 10px">
+        Nothing is sent and nothing is charged. Type answers below to walk further into the flow.
+      </p>
+      <div id="pv-thread" class="pv-thread"></div>
+      <div id="pv-stop" class="pv-stop"></div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <input type="text" id="pv-answer" placeholder="Reply as the customer…" style="flex:1"
+               onkeydown="if(event.key==='Enter'){event.preventDefault();sendPreviewAnswer();}">
+        <button type="button" class="btn btn-sm" onclick="sendPreviewAnswer()">Send</button>
+      </div>
+    </div>
+  </div>
+
   <div class="card">
     <div class="canvas-toolbar">
       <select id="add-type">
@@ -370,6 +459,79 @@ const LISTS = <?= json_encode(array_map(fn($l)=>['id'=>(int)$l['id'],'name'=>$l[
 const INIT_NODES = <?= json_encode($nodes) ?>;
 const INIT_START = <?= json_encode($startNode) ?>;
 const esc = s => (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+/* Live figures under a node: how many got here, and how many stopped here.
+   Only rendered once a step has actually been used, so a new flow stays clean. */
+function statsRow(n){
+  const st = n.stats;
+  if(!st || !st.reached) return '';
+  const drop = st.stalled > 0
+    ? `<span class="drop" title="Reached this step and went no further">${st.stalled} stopped</span>` : '';
+  return `<div class="node-stats"><span title="People who reached this step">${st.reached} reached</span>${drop}</div>`;
+}
+
+/* ── Check for problems ───────────────────────────────────────────────────────── */
+async function checkFlow(){
+  const out = document.getElementById('check-out');
+  out.innerHTML = '<span class="text-muted">Checking…</span>';
+  const fd = new FormData(); fd.append('action','check'); fd.append('csrf_token',CSRF);
+  try{
+    const r = await fetch('', {method:'POST', body:fd}); const d = await r.json();
+    const issues = d.issues || [];
+    if(!issues.length){ out.innerHTML = '<div class="alert ok">No problems found — this flow is ready.</div>'; return; }
+    const errs = issues.filter(i=>i.level==='error').length;
+    out.innerHTML =
+      (errs ? '<div class="alert error">'+errs+' problem'+(errs>1?'s':'')+' that will stop this flow working.</div>' : '') +
+      '<ul class="issue-list">' + issues.map(i =>
+        '<li class="issue '+esc(i.level)+'">' +
+          (i.step_id ? '<span class="pill">#'+i.step_id+'</span> ' : '') +
+          '<strong>'+esc(i.title)+'</strong>' +
+          '<span class="text-muted d-block">'+esc(i.detail)+'</span>' +
+        '</li>').join('') + '</ul>';
+    // Mark the offending nodes on the canvas so the list and the picture agree.
+    document.querySelectorAll('.node.has-issue').forEach(n=>n.classList.remove('has-issue'));
+    issues.forEach(i=>{ if(!i.step_id) return;
+      const n = document.querySelector('.node[data-id="s'+i.step_id+'"]'); if(n) n.classList.add('has-issue'); });
+  }catch(e){ out.innerHTML = '<div class="alert error">Could not run the check.</div>'; }
+}
+
+/* ── Preview ──────────────────────────────────────────────────────────────────── */
+let PV_ANSWERS = [];
+
+function openPreview(){ PV_ANSWERS = []; document.getElementById('preview-back').classList.add('open'); runPreview(); }
+function closePreview(){ document.getElementById('preview-back').classList.remove('open'); }
+function sendPreviewAnswer(){
+  const box = document.getElementById('pv-answer');
+  const v = box.value.trim(); if(!v) return;
+  PV_ANSWERS.push(v); box.value = '';
+  runPreview();
+}
+
+async function runPreview(){
+  const thread = document.getElementById('pv-thread');
+  thread.innerHTML = '<div class="text-muted">Running…</div>';
+  const fd = new FormData();
+  fd.append('action','preview'); fd.append('csrf_token',CSRF);
+  PV_ANSWERS.forEach(a => fd.append('answers[]', a));
+  try{
+    const r = await fetch('', {method:'POST', body:fd}); const d = await r.json();
+    const msgs = d.messages || [];
+    thread.innerHTML = msgs.length
+      ? msgs.map(m => '<div class="pv-msg '+(m.type==='reply'?'them':'us')+'">'+esc(m.body||'(no text)')+'</div>').join('')
+      : '<div class="text-muted">This flow sends nothing.</div>';
+    const stop = document.getElementById('pv-stop');
+    const label = {
+      waiting_input:'⏸ Waits here for the customer to answer.',
+      waiting_timer:'⏱ Waits here, then continues on a timer.',
+      blocked:'⛔ Stops here — the next message could not be sent.',
+      empty:'This flow has no steps yet.',
+      stopped:'Ends here.', end:'✓ Reaches the end of the flow.'
+    }[d.stopped] || '';
+    stop.textContent = label;
+    document.getElementById('pv-answer').disabled = (d.stopped !== 'waiting_input');
+    thread.scrollTop = thread.scrollHeight;
+  }catch(e){ thread.innerHTML = '<div class="alert error">Preview failed.</div>'; }
+}
 
 const TYPE_LABEL = {start:'Trigger',text:'Send text',image:'Send image',template:'Template',buttons:'Buttons',question:'Ask',ai_chat:'AI conversation',ai_branch:'AI branch',ai_score:'AI score',score:'Add points',wait:'Wait',tag:'Tag',list_add:'Add to list',notify:'Notify',collect:'Collect',sheet_export:'Write to Sheet'};
 
@@ -435,6 +597,7 @@ function nodeEl(n){
     (n.type==='start'?'':`<span class="port port-in" data-node="${n.id}" data-port="in"></span>`) +
     `<div class="node-head" data-drag="1">${TYPE_LABEL[n.type]||n.type}${n.type==='start'?'':'<span class="del" title="Delete">✕</span>'}</div>`+
     `<div class="node-body">${summary(n)}</div>`+
+    statsRow(n)+
     `<div class="node-ports">`+ports.map(p=>`<div class="prow"><span class="plabel">${esc(p.label)}</span><span class="port port-out" data-node="${n.id}" data-port="${p.key}"></span></div>`).join('')+`</div>`;
   return el;
 }
