@@ -1,6 +1,10 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/_init.php';
+require_once __DIR__ . '/../includes/campaign.php';
+require_once __DIR__ . '/../includes/inbox.php';
+require_once __DIR__ . '/../includes/ai.php';
+require_once __DIR__ . '/../includes/automation.php';
 
 $cid = (int) $CLIENT['id'];
 
@@ -35,6 +39,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
         redirect('automation_edit.php?id=' . $newId);
     }
 }
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'install') {
+    verify_csrf();
+    // Installed paused, so nobody's customers meet a half-edited flow the moment it lands.
+    $newId = automation_install_template($CLIENT, (string) ($_POST['code'] ?? ''));
+    if ($newId > 0) {
+        flash('Added — have a look through it, then switch it on when you are happy.');
+        redirect('automation_edit.php?id=' . $newId);
+    }
+    $err = 'That template could not be added.';
+}
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delete') {
     verify_csrf();
     db_run("DELETE FROM flows WHERE id=? AND client_id=?", [(int) ($_POST['id'] ?? 0), $cid]);
@@ -47,6 +61,7 @@ $flows = db_all(
             (SELECT COUNT(*) FROM flow_messages m WHERE m.flow_id=f.id) AS sends
        FROM flows f WHERE f.client_id=? AND f.kind='bot' ORDER BY f.id DESC", [$cid]
 );
+$starters = automation_templates();
 
 $triggerLabel = ['keyword' => 'Keyword', 'welcome' => 'Welcome', 'google_sheet' => 'Google Sheet (AI leads)', 'button' => 'Button'];
 
@@ -61,6 +76,32 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
   Free-form replies only work within 24h of the contact's last message; each sent message costs 1 credit.
   <?php if (!($CLIENT['ai_provider'] ?? '')): ?><br><strong>Tip:</strong> to use AI steps, add your AI key in <a href="settings.php#ai">Settings</a>.<?php endif; ?>
 </div>
+
+<?php /* A blank canvas is where most people give up, so offer working flows to start from. */ ?>
+<?php if ($starters): ?>
+  <div class="card">
+    <div class="row-between" style="flex-wrap:wrap;gap:8px">
+      <h2 style="margin:0"><?= $flows ? 'Start from a ready-made one' : 'Start here' ?></h2>
+      <?php if ($flows): ?>
+        <button type="button" class="btn-link" onclick="document.getElementById('starters').classList.toggle('hidden')">Show / hide</button>
+      <?php endif; ?>
+    </div>
+    <p class="text-muted" style="margin:4px 0 0">Each one is a working automation you can read through
+      and change. Nothing goes live until you switch it on.</p>
+    <div id="starters" class="starter-grid <?= $flows ? 'hidden' : '' ?>">
+      <?php foreach ($starters as $t): ?>
+        <form method="post" class="starter">
+          <?= csrf_field() ?>
+          <input type="hidden" name="action" value="install">
+          <input type="hidden" name="code" value="<?= e((string) $t['code']) ?>">
+          <div class="starter-name"><?= e((string) $t['name']) ?></div>
+          <div class="starter-sum"><?= e((string) $t['summary']) ?></div>
+          <button class="btn btn-ghost btn-sm">Add this one</button>
+        </form>
+      <?php endforeach; ?>
+    </div>
+  </div>
+<?php endif; ?>
 
 <div class="card card-flush">
   <div class="table-wrap">

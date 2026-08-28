@@ -290,7 +290,7 @@ function automation_run_steps(array $client, array $contact, array $run, array $
         auto_step_event($run, $stepId, 'reached');
 
         // Free-form sends require the 24h window; templates are always allowed.
-        $freeForm = in_array($type, ['text', 'image', 'buttons', 'question', 'ai_chat'], true)
+        $freeForm = in_array($type, ['text', 'image', 'buttons', 'question', 'ai_chat', 'list_msg'], true)
                  || ($type === 'ai_branch' && trim((string) ($cfg['prompt'] ?? '')) !== '');
         if ($freeForm && !auto_in_window($contact, $client)) {
             $run['status'] = 'blocked';
@@ -401,6 +401,84 @@ function automation_run_steps(array $client, array $contact, array $run, array $
             $run['wait_until'] = date('Y-m-d H:i:s', time() + $secs);
             $run['current_step_id'] = $step['next_step_id'];  // resume here when timer fires
             $run['status'] = 'waiting_timer';
+            break;
+        } elseif ($type === 'condition') {
+            /* Branch on something already known about this contact — a captured answer, a
+               tag, their score, or a field on their record. This is what lets one flow serve
+               returning customers and new ones without building two flows. */
+            $ok   = auto_condition_met($cfg, $contact, $ctx, $run);
+            $next = $ok ? ($cfg['yes_next'] ?? null) : ($cfg['no_next'] ?? null);
+            $run['current_step_id'] = $next ?: $step['next_step_id'];
+        } elseif ($type === 'set_field') {
+            // Remember something for later steps, and for {{placeholders}} in messages.
+            $key = trim((string) ($cfg['field'] ?? ''));
+            if ($key !== '') {
+                $ctx['fields'][$key] = auto_render((string) ($cfg['value'] ?? ''), $contact, $ctx);
+                if (!empty($cfg['persist'])) auto_set_contact_attr($contact, $key, (string) $ctx['fields'][$key]);
+            }
+            $run['current_step_id'] = $step['next_step_id'];
+        } elseif ($type === 'split') {
+            /* Send people down different paths to compare them. Weights are relative, so
+               [3,1] sends three quarters down the first branch. */
+            $paths = array_values((array) ($cfg['paths'] ?? []));
+            $pick  = auto_weighted_pick($paths);
+            $run['current_step_id'] = ($paths[$pick]['next_step_id'] ?? null) ?: $step['next_step_id'];
+            if (isset($paths[$pick]['label'])) $ctx['fields']['_split'] = (string) $paths[$pick]['label'];
+        } elseif ($type === 'jump') {
+            /* Hand this contact to another flow and finish here. Useful for a shared ending —
+               one "book a call" flow reached from several places instead of copied into each. */
+            $target = db_row("SELECT * FROM flows WHERE id=? AND client_id=? AND status<>'archived'",
+                [(int) ($cfg['flow_id'] ?? 0), (int) $client['id']]);
+            $run['status'] = 'completed';
+            $run['current_step_id'] = null;
+            auto_save_run($run, $ctx);
+            if ($target && !auto_dry_run()) auto_start($client, $contact, $target);
+            return;
+        } elseif ($type === 'wait_until') {
+            /* Wait for a time of day rather than a duration — "message them at 9am", not
+               "message them in 14 hours", which drifts every time the flow runs. */
+            $run['wait_until'] = auto_next_occurrence(
+                (string) ($cfg['time'] ?? '09:00'),
+                $cfg['weekday'] === '' || $cfg['weekday'] === null ? null : (int) $cfg['weekday']
+            );
+            $run['current_step_id'] = $step['next_step_id'];
+            $run['status'] = 'waiting_timer';
+            break;
+        } elseif ($type === 'http') {
+            /* Call an outside system — a CRM, a stock check, a booking API. The response can
+               be saved into a field and used in the next message. */
+            $url  = auto_render((string) ($cfg['url'] ?? ''), $contact, $ctx);
+            $body = auto_render((string) ($cfg['body'] ?? ''), $contact, $ctx);
+            $res  = auto_dry_run()
+                  ? ['ok' => true, 'json' => null, 'body' => '', 'error' => '']
+                  : safe_http_request((string) ($cfg['method'] ?? 'GET'), $url, $body !== '' ? $body : null,
+                        ['Content-Type: application/json']);
+            $saveAs = trim((string) ($cfg['save_as'] ?? ''));
+            if ($saveAs !== '' && !empty($res['ok'])) {
+                $pick = trim((string) ($cfg['pick'] ?? ''));
+                $val  = $pick !== '' ? auto_json_pick($res['json'] ?? [], $pick) : (string) ($res['body'] ?? '');
+                $ctx['fields'][$saveAs] = mb_substr((string) $val, 0, 500);
+            }
+            if (empty($res['ok'])) {
+                auto_step_event($run, $stepId, 'stalled', 'http_failed');
+                // A failed call must not silently swallow the contact: take the failure path
+                // if one is wired, otherwise carry on so the conversation still finishes.
+                $run['current_step_id'] = ($cfg['fail_next'] ?? null) ?: $step['next_step_id'];
+            } else {
+                $run['current_step_id'] = $step['next_step_id'];
+            }
+        } elseif ($type === 'list_msg') {
+            $body = auto_render((string) ($cfg['body'] ?? ''), $contact, $ctx);
+            $rows = [];
+            foreach ((array) ($cfg['options'] ?? []) as $oi => $o) {
+                $rows[] = ['id' => 'o' . $oi, 'title' => (string) ($o['title'] ?? ''),
+                           'description' => (string) ($o['description'] ?? '')];
+            }
+            if (!auto_send($client, $run, $step, $contact, 'list',
+                    fn() => channel_send_list($client, $to, $body, (string) ($cfg['button'] ?? 'Choose'), $rows,
+                                              (string) ($cfg['header'] ?? '')), $body)) break;
+            auto_log($ctx, 'assistant', $body);
+            $run['status'] = 'waiting_input';
             break;
         } elseif ($type === 'tag') {
             auto_add_tag($contact, (string) ($cfg['tag'] ?? ''));
@@ -901,6 +979,67 @@ function automation_problems(int $flowId, int $limit = 50): array
 }
 
 /**
+ * Install a ready-made automation for a client.
+ *
+ * Clones the template's steps into their own flow, so what they get is theirs to edit and the
+ * template is never touched. The graph uses its own keys ("greet", "ask") rather than step ids,
+ * which are only known after insertion — so this inserts first, then wires the links.
+ *
+ * Returns the new flow id, or 0 if the template is gone.
+ */
+function automation_install_template(array $client, string $code, string $name = ''): int
+{
+    $tpl = db_row("SELECT * FROM flow_templates WHERE code=? AND is_active=1", [$code]);
+    if (!$tpl) return 0;
+
+    $graph = json_decode((string) $tpl['graph'], true);
+    $steps = is_array($graph['steps'] ?? null) ? $graph['steps'] : [];
+    if (!$steps) return 0;
+
+    $cid = (int) $client['id'];
+    $pdo = db();
+    $pdo->beginTransaction();
+    try {
+        $flowId = db_insert(
+            "INSERT INTO flows (client_id,name,kind,status,trigger_type,hot_min,warm_min,created_at)
+             VALUES (?,?, 'bot', 'paused', ?, 70, 40, NOW())",
+            [$cid, $name !== '' ? $name : (string) $tpl['name'], (string) $tpl['trigger_type']]
+        );
+
+        // Insert every step first so each has an id, laid out left to right on the canvas.
+        $ids = [];
+        foreach ($steps as $i => $st) {
+            $ids[(string) $st['k']] = db_insert(
+                "INSERT INTO flow_steps (flow_id,client_id,sort,pos_x,pos_y,type,config,created_at)
+                 VALUES (?,?,?,?,?,?,?,NOW())",
+                [$flowId, $cid, $i, 80 + ($i % 4) * 250, 120 + intdiv($i, 4) * 170,
+                 (string) $st['type'], json_encode((array) ($st['cfg'] ?? []), JSON_UNESCAPED_UNICODE)]
+            );
+        }
+        // Now that every key has an id, join them up.
+        foreach ($steps as $st) {
+            $next = $st['next'] ?? null;
+            if ($next !== null && isset($ids[(string) $next])) {
+                db_run("UPDATE flow_steps SET next_step_id=? WHERE id=?",
+                    [$ids[(string) $next], $ids[(string) $st['k']]]);
+            }
+        }
+        db_run("UPDATE flows SET first_step_id=? WHERE id=?", [$ids[(string) $steps[0]['k']], $flowId]);
+        $pdo->commit();
+        return $flowId;
+    } catch (Throwable $e) {
+        $pdo->rollBack();
+        return 0;
+    }
+}
+
+/** The ready-made automations on offer. */
+function automation_templates(): array
+{
+    return db_all("SELECT code, name, summary, trigger_type FROM flow_templates WHERE is_active=1 ORDER BY sort, name");
+}
+
+/**
  * Check a flow for the mistakes that make it stop dead without telling anyone.
  *
  * Every one of these is a real failure mode of the engine: a node with no outgoing edge
@@ -955,12 +1094,30 @@ function automation_validate(array $flow, array $client = []): array
         }
 
         // A node that waits for an answer but has nowhere to go leaves the customer hanging.
-        if (in_array($type, ['question', 'buttons'], true) && !auto_step_targets($st)) {
+        if (in_array($type, ['question', 'buttons', 'list_msg'], true) && !auto_step_targets($st)) {
             $add('error', $sid, 'Asks a question with no next step',
                  'The customer answers and the conversation stops with no reply.');
         }
         if ($type === 'buttons' && !array_filter((array) ($cfg['buttons'] ?? []))) {
             $add('error', $sid, 'Buttons step has no buttons', 'Add at least one option for the customer to choose.');
+        }
+        if ($type === 'list_msg' && !array_filter((array) ($cfg['options'] ?? []))) {
+            $add('error', $sid, 'List step has no options', 'Add at least one option for the customer to pick from.');
+        }
+        if ($type === 'condition' && trim((string) ($cfg['field'] ?? '')) === '') {
+            $add('error', $sid, 'Condition checks nothing', 'Choose what this step should look at before it branches.');
+        }
+        if ($type === 'http' && !safe_http_url_ok((string) ($cfg['url'] ?? ''))) {
+            $add('error', $sid, 'That web address will be refused',
+                 'Use a public https:// address. Private and local addresses are blocked for security.');
+        }
+        if ($type === 'jump') {
+            $t = (int) ($cfg['flow_id'] ?? 0);
+            if ($t <= 0 || !db_row("SELECT id FROM flows WHERE id=? AND status<>'archived'", [$t])) {
+                $add('error', $sid, 'Jumps to an automation that is gone', 'Pick the automation to continue into.');
+            } elseif ($t === $flowId) {
+                $add('error', $sid, 'Jumps to itself', 'That would loop forever. Point it at a different automation.');
+            }
         }
 
         // A template that no longer exists fails on every single send.
@@ -1019,12 +1176,16 @@ function auto_step_targets(array $step): array
 {
     $cfg = auto_cfg($step);
     $out = [(int) ($step['next_step_id'] ?? 0)];
-    foreach (['buttons', 'branches', 'options'] as $k) {
+    foreach (['buttons', 'branches', 'options', 'paths'] as $k) {
         foreach ((array) ($cfg[$k] ?? []) as $b) {
-            if (is_array($b) && isset($b['next'])) $out[] = (int) $b['next'];
+            if (!is_array($b)) continue;
+            foreach (['next', 'next_step_id'] as $nk) {
+                if (isset($b[$nk])) $out[] = (int) $b[$nk];
+            }
         }
     }
-    foreach (['yes_step_id', 'no_step_id', 'next_step_id'] as $k) {
+    foreach (['yes_step_id', 'no_step_id', 'next_step_id',
+              'yes_next', 'no_next', 'fail_next', 'fallback_next'] as $k) {
         if (isset($cfg[$k])) $out[] = (int) $cfg[$k];
     }
     return array_values(array_filter(array_unique($out)));
@@ -1181,6 +1342,120 @@ function automation_campaign_followups(int $cap = 500): int
         }
     }
     return $total;
+}
+
+/**
+ * Is a condition step's test true for this contact right now?
+ *
+ * Looks in the places a client would expect, in order: a value captured earlier in this
+ * conversation, then their tags, their score, and finally their contact record. That ordering
+ * matters — an answer given a minute ago should win over a stale value on the record.
+ */
+function auto_condition_met(array $cfg, array $contact, array $ctx, array $run): bool
+{
+    $field = strtolower(trim((string) ($cfg['field'] ?? '')));
+    $op    = (string) ($cfg['op'] ?? 'eq');
+    $want  = trim((string) ($cfg['value'] ?? ''));
+
+    if ($field === 'tag') {
+        $tags = array_map('trim', explode(',', strtolower((string) ($contact['tags'] ?? ''))));
+        $has  = in_array(strtolower($want), $tags, true);
+        return $op === 'not_has' ? !$has : $has;
+    }
+    if ($field === 'score') {
+        $have = (float) ($run['score'] ?? 0);
+        $n    = (float) $want;
+        return match ($op) { 'gt' => $have > $n, 'lt' => $have < $n, 'gte' => $have >= $n,
+                             'lte' => $have <= $n, 'ne' => $have != $n, default => $have == $n };
+    }
+
+    $have = null;
+    foreach ($ctx['fields'] ?? [] as $k => $v) {
+        if (strtolower((string) $k) === $field) { $have = (string) $v; break; }
+    }
+    if ($have === null && array_key_exists($field, $contact)) $have = (string) $contact[$field];
+    if ($have === null) {
+        $attrs = json_decode((string) ($contact['attributes'] ?? ''), true);
+        if (is_array($attrs)) {
+            foreach ($attrs as $k => $v) {
+                if (strtolower((string) $k) === $field) { $have = (string) $v; break; }
+            }
+        }
+    }
+    $have = (string) ($have ?? '');
+
+    return match ($op) {
+        'ne'       => mb_strtolower($have) !== mb_strtolower($want),
+        'contains' => $want !== '' && mb_stripos($have, $want) !== false,
+        'empty'    => trim($have) === '',
+        'not_empty'=> trim($have) !== '',
+        'gt'       => (float) $have >  (float) $want,
+        'lt'       => (float) $have <  (float) $want,
+        'gte'      => (float) $have >= (float) $want,
+        'lte'      => (float) $have <= (float) $want,
+        default    => mb_strtolower($have) === mb_strtolower($want),
+    };
+}
+
+/** Store a value on the contact record itself, so it survives beyond this conversation. */
+function auto_set_contact_attr(array &$contact, string $key, string $value): void
+{
+    $attrs = json_decode((string) ($contact['attributes'] ?? ''), true);
+    if (!is_array($attrs)) $attrs = [];
+    $attrs[$key] = $value;
+    $contact['attributes'] = json_encode($attrs, JSON_UNESCAPED_UNICODE);
+    db_run("UPDATE contacts SET attributes=? WHERE id=?", [$contact['attributes'], (int) $contact['id']]);
+}
+
+/** Pick one path by relative weight. [3,1] sends three quarters down the first. */
+function auto_weighted_pick(array $paths): int
+{
+    if (!$paths) return 0;
+    $total = 0;
+    foreach ($paths as $p) $total += max(0, (int) ($p['weight'] ?? 1));
+    if ($total <= 0) return random_int(0, count($paths) - 1);
+    $roll = random_int(1, $total);
+    foreach ($paths as $i => $p) {
+        $roll -= max(0, (int) ($p['weight'] ?? 1));
+        if ($roll <= 0) return (int) $i;
+    }
+    return count($paths) - 1;
+}
+
+/**
+ * The next time it will be $time (HH:MM), optionally only on $weekday (0 = Sunday).
+ *
+ * Always in the future: if today's slot has already passed, it rolls to the next day (or the
+ * next matching weekday), so a flow resumed at 10am for a 9am step waits until tomorrow
+ * rather than firing immediately.
+ */
+function auto_next_occurrence(string $time, ?int $weekday = null): string
+{
+    [$h, $m] = array_pad(array_map('intval', explode(':', $time)), 2, 0);
+    $h = max(0, min(23, $h)); $m = max(0, min(59, $m));
+
+    $ts = mktime($h, $m, 0);
+    if ($ts <= time()) $ts = strtotime('+1 day', $ts);
+    if ($weekday !== null) {
+        $weekday = ((int) $weekday % 7 + 7) % 7;
+        $guard = 0;
+        while ((int) date('w', $ts) !== $weekday && $guard++ < 8) $ts = strtotime('+1 day', $ts);
+    }
+    return date('Y-m-d H:i:s', $ts);
+}
+
+/** Read a value out of a JSON response by dotted path, e.g. "data.customer.name". */
+function auto_json_pick(array $json, string $path): string
+{
+    $cur = $json;
+    foreach (explode('.', $path) as $part) {
+        $part = trim($part);
+        if ($part === '') continue;
+        if (is_array($cur) && array_key_exists($part, $cur)) { $cur = $cur[$part]; continue; }
+        return '';
+    }
+    if (is_scalar($cur)) return (string) $cur;
+    return is_array($cur) ? json_encode($cur, JSON_UNESCAPED_UNICODE) : '';
 }
 
 /** Resolve one template variable spec ({source:name|static, value, fallback}) to a text value. */

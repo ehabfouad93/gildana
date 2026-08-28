@@ -350,6 +350,59 @@ function safe_http_get(string $url, int $maxBytes = 33554432, int $maxRedirects 
     return null;   // too many redirects
 }
 
+/**
+ * Call an outside URL from a flow, with the same guards as safe_http_get().
+ *
+ * An automation's HTTP step lets a client type any address, so it is exactly the hole the
+ * media fetcher was: without these checks it would reach cloud metadata, the WhatsApp gateway
+ * on the internal network, or a database port on localhost. Same guard, different verb.
+ *
+ * Returns ['ok'=>bool,'status'=>int,'body'=>string,'json'=>?array,'error'=>string].
+ */
+function safe_http_request(string $method, string $url, ?string $body = null, array $headers = [], int $maxBytes = 262144): array
+{
+    $method = strtoupper($method) === 'POST' ? 'POST' : 'GET';
+    if (!safe_http_url_ok($url)) {
+        return ['ok' => false, 'status' => 0, 'body' => '', 'json' => null,
+                'error' => 'That address is not allowed — use a public https:// URL.'];
+    }
+
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => false,          // a redirect could land somewhere private
+        CURLOPT_PROTOCOLS      => CURLPROTO_HTTPS,
+        CURLOPT_TIMEOUT        => 15,
+        CURLOPT_CONNECTTIMEOUT => 8,
+        CURLOPT_USERAGENT      => 'RevenectWA/1.0',
+        CURLOPT_HTTPHEADER     => array_merge(['Accept: application/json'], $headers),
+        CURLOPT_NOPROGRESS     => false,
+        CURLOPT_PROGRESSFUNCTION => fn($c, $dt, $dn) => ($dt > $maxBytes || $dn > $maxBytes) ? 1 : 0,
+    ]);
+    if ($method === 'POST') {
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, (string) $body);
+    }
+    $raw    = curl_exec($ch);
+    $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $cerr   = curl_error($ch);
+    curl_close($ch);
+
+    if ($raw === false) {
+        return ['ok' => false, 'status' => $status, 'body' => '', 'json' => null,
+                'error' => $cerr ?: 'Could not reach that address.'];
+    }
+    $text = substr((string) $raw, 0, $maxBytes);
+    $json = json_decode($text, true);
+    return [
+        'ok'     => $status >= 200 && $status < 300,
+        'status' => $status,
+        'body'   => $text,
+        'json'   => is_array($json) ? $json : null,
+        'error'  => ($status >= 200 && $status < 300) ? '' : 'The server answered ' . $status . '.',
+    ];
+}
+
 /** True when a URL is a public HTTPS address we are willing to fetch. */
 function safe_http_url_ok(string $url): bool
 {

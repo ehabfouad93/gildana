@@ -84,6 +84,27 @@ function channel_send_buttons(array $client, string $to, string $body, array $bu
 }
 
 /**
+ * A tappable list of up to 10 options.
+ *
+ * On the Cloud API this is a real WhatsApp list message. A personal number has no interactive
+ * messages at all — WhatsApp does not offer them to unofficial clients — so it degrades to a
+ * numbered list, which the engine's free-text matching already resolves. Same node either way.
+ */
+function channel_send_list(array $client, string $to, string $body, string $buttonText, array $rows, string $header = ''): array
+{
+    if (!channel_is_personal($client)) {
+        return wa_send_list($client, $to, $body, $buttonText, $rows, $header);
+    }
+    $lines = [];
+    foreach (array_slice(array_values($rows), 0, 10) as $i => $r) {
+        $t = (string) ($r['title'] ?? ('Option ' . ($i + 1)));
+        $d = trim((string) ($r['description'] ?? ''));
+        $lines[] = ($i + 1) . '. ' . $t . ($d !== '' ? ' — ' . $d : '');
+    }
+    return pw_send_text($client, $to, $body . ($lines ? "\n\n" . implode("\n", $lines) : ''));
+}
+
+/**
  * Send an approved template.
  *
  * Cloud: the real template message, with the full component payload.

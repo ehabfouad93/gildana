@@ -134,6 +134,65 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save'
                 case 'wait':     $cfg = ['seconds' => max(1, (int) ($c['seconds'] ?? 3600))]; $next = $R($out['next'] ?? null); break;
                 case 'tag':      $cfg = ['tag' => (string) ($c['tag'] ?? '')]; $next = $R($out['next'] ?? null); break;
                 case 'list_add': $cfg = ['list_id' => (int) ($c['list_id'] ?? 0)]; $next = $R($out['next'] ?? null); break;
+                case 'condition':
+                    $cfg = [
+                        'field'    => (string) ($c['field'] ?? ''),
+                        'op'       => (string) ($c['op'] ?? 'eq'),
+                        'value'    => (string) ($c['value'] ?? ''),
+                        'yes_next' => $R($out['yes'] ?? null),
+                        'no_next'  => $R($out['no'] ?? null),
+                    ];
+                    $next = $R($out['no'] ?? null);
+                    break;
+                case 'set_field':
+                    $cfg = ['field' => (string) ($c['field'] ?? ''), 'value' => (string) ($c['value'] ?? ''),
+                            'persist' => !empty($c['persist'])];
+                    $next = $R($out['next'] ?? null);
+                    break;
+                case 'split':
+                    $paths = [];
+                    foreach ((array) ($c['paths'] ?? []) as $pi => $pp) {
+                        $paths[] = [
+                            'label'        => (string) ($pp['label'] ?? ('Path ' . ($pi + 1))),
+                            'weight'       => max(1, (int) ($pp['weight'] ?? 1)),
+                            'next_step_id' => $R($out['p' . $pi] ?? null),
+                        ];
+                    }
+                    $cfg  = ['paths' => $paths];
+                    $next = $paths[0]['next_step_id'] ?? null;
+                    break;
+                case 'jump':
+                    $cfg  = ['flow_id' => (int) ($c['flow_id'] ?? 0)];
+                    $next = null;   // a jump ends this flow
+                    break;
+                case 'wait_until':
+                    $cfg = ['time' => (string) ($c['time'] ?? '09:00'),
+                            'weekday' => ($c['weekday'] ?? '') === '' ? null : (int) $c['weekday']];
+                    $next = $R($out['next'] ?? null);
+                    break;
+                case 'http':
+                    $cfg = [
+                        'method'    => strtoupper((string) ($c['method'] ?? 'GET')) === 'POST' ? 'POST' : 'GET',
+                        'url'       => (string) ($c['url'] ?? ''),
+                        'body'      => (string) ($c['body'] ?? ''),
+                        'save_as'   => (string) ($c['save_as'] ?? ''),
+                        'pick'      => (string) ($c['pick'] ?? ''),
+                        'fail_next' => $R($out['fail'] ?? null),
+                    ];
+                    $next = $R($out['next'] ?? null);
+                    break;
+                case 'list_msg':
+                    $opts = [];
+                    foreach ((array) ($c['options'] ?? []) as $o) {
+                        $t = trim((string) ($o['title'] ?? ''));
+                        if ($t === '') continue;
+                        $opts[] = ['title' => mb_substr($t, 0, 24),
+                                   'description' => mb_substr((string) ($o['description'] ?? ''), 0, 72)];
+                    }
+                    $cfg  = ['body' => (string) ($c['body'] ?? ''), 'button' => (string) ($c['button'] ?? 'Choose'),
+                             'header' => (string) ($c['header'] ?? ''), 'options' => array_slice($opts, 0, 10)];
+                    $next = $R($out['next'] ?? null);
+                    break;
                 case 'notify':   $cfg = ['message' => (string) ($c['message'] ?? '')]; $next = $R($out['next'] ?? null); break;
                 case 'collect':  $cfg = ['sheet_name' => (string) ($c['sheet_name'] ?? 'Leads'), 'fields' => array_values((array) ($c['fields'] ?? []))]; $next = $R($out['next'] ?? null); break;
                 case 'sheet_export':
@@ -239,6 +298,41 @@ foreach ($stepsRaw as $k => $s) {
         case 'wait':     $node['config'] = ['seconds' => (int) ($c['seconds'] ?? 3600)]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
         case 'tag':      $node['config'] = ['tag' => $c['tag'] ?? '']; $node['outputs']['next'] = $tid($s['next_step_id']); break;
         case 'list_add': $node['config'] = ['list_id' => (int) ($c['list_id'] ?? 0)]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
+        case 'condition':
+            $node['config'] = ['field' => $c['field'] ?? '', 'op' => $c['op'] ?? 'eq', 'value' => $c['value'] ?? ''];
+            $node['outputs']['yes'] = $tid($c['yes_next'] ?? null);
+            $node['outputs']['no']  = $tid($c['no_next'] ?? $s['next_step_id']);
+            break;
+        case 'set_field':
+            $node['config'] = ['field' => $c['field'] ?? '', 'value' => $c['value'] ?? '', 'persist' => !empty($c['persist'])];
+            $node['outputs']['next'] = $tid($s['next_step_id']);
+            break;
+        case 'split':
+            $paths = (array) ($c['paths'] ?? []);
+            if (!$paths) $paths = [['label' => 'A', 'weight' => 1], ['label' => 'B', 'weight' => 1]];
+            $node['config'] = ['paths' => array_map(fn($p) => [
+                'label' => $p['label'] ?? '', 'weight' => (int) ($p['weight'] ?? 1)], $paths)];
+            foreach ($paths as $pi => $p) $node['outputs']['p' . $pi] = $tid($p['next_step_id'] ?? null);
+            break;
+        case 'jump':
+            $node['config'] = ['flow_id' => (int) ($c['flow_id'] ?? 0)];
+            break;
+        case 'wait_until':
+            $node['config'] = ['time' => $c['time'] ?? '09:00',
+                               'weekday' => $c['weekday'] === null ? '' : (string) ($c['weekday'] ?? '')];
+            $node['outputs']['next'] = $tid($s['next_step_id']);
+            break;
+        case 'http':
+            $node['config'] = ['method' => $c['method'] ?? 'GET', 'url' => $c['url'] ?? '',
+                               'body' => $c['body'] ?? '', 'save_as' => $c['save_as'] ?? '', 'pick' => $c['pick'] ?? ''];
+            $node['outputs']['next'] = $tid($s['next_step_id']);
+            $node['outputs']['fail'] = $tid($c['fail_next'] ?? null);
+            break;
+        case 'list_msg':
+            $node['config'] = ['body' => $c['body'] ?? '', 'button' => $c['button'] ?? 'Choose',
+                               'header' => $c['header'] ?? '', 'options' => (array) ($c['options'] ?? [])];
+            $node['outputs']['next'] = $tid($s['next_step_id']);
+            break;
         case 'notify':   $node['config'] = ['message' => $c['message'] ?? '']; $node['outputs']['next'] = $tid($s['next_step_id']); break;
         case 'collect':  $node['config'] = ['sheet_name' => $c['sheet_name'] ?? 'Leads', 'fields' => $c['fields'] ?? ['phone','name','last_reply','score','tags']]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
         case 'sheet_export': $node['config'] = ['sheet_id' => $c['sheet_id'] ?? '', 'sheet_name' => $c['sheet_name'] ?? '', 'sheet_tab' => $c['sheet_tab'] ?? '', 'fields' => $c['fields'] ?? ['date','phone','name','last_reply','score','grade']]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
@@ -405,11 +499,18 @@ client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
           <option value="sheet_export">Write to Google Sheet</option>
           <option value="template">Send template</option>
           <option value="buttons">Reply buttons</option>
+          <option value="list_msg">Menu list (up to 10)</option>
         </optgroup>
         <optgroup label="Ask / branch">
           <option value="question">Ask &amp; capture</option>
           <option value="ai_chat">AI conversation</option>
           <option value="ai_branch">AI branch</option>
+        </optgroup>
+        <optgroup label="Logic">
+          <option value="condition">If / then</option>
+          <option value="split">Split test (A/B)</option>
+          <option value="jump">Go to another automation</option>
+          <option value="wait_until">Wait until a time</option>
         </optgroup>
         <optgroup label="Score / act">
           <option value="ai_score">AI score</option>
@@ -419,6 +520,8 @@ client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
           <option value="list_add">Add to list</option>
           <option value="notify">Notify me</option>
           <option value="collect">Collect to sheet</option>
+          <option value="set_field">Remember a value</option>
+          <option value="http">Call a web service</option>
         </optgroup>
       </select>
       <button type="button" class="btn btn-ghost btn-sm" onclick="addNode(document.getElementById('add-type').value)">+ Add node</button>
@@ -456,6 +559,14 @@ const TPL_SPECS = <?= json_encode(array_reduce($templates, function ($acc, $t) {
     return $acc;
 }, [])) ?>;
 const LISTS = <?= json_encode(array_map(fn($l)=>['id'=>(int)$l['id'],'name'=>$l['name']],$lists)) ?>;
+// Other automations this one can hand a contact to. Itself excluded — that would loop forever.
+const FLOWS = <?= json_encode(array_map(fn($f)=>['id'=>(int)$f['id'],'name'=>$f['name']],
+    db_all("SELECT id,name FROM flows WHERE client_id=? AND kind='bot' AND id<>? AND status<>'archived' ORDER BY name", [$cid, $id]))) ?>;
+// Fields already captured elsewhere in this flow, offered as suggestions for If/then.
+const KNOWN_FIELDS = <?= json_encode(array_values(array_unique(array_filter(array_merge(
+    ['name','phone','score','tag'],
+    array_map(fn($st) => (string) (json_decode((string) $st['config'], true)['save_as'] ?? ''), $stepsRaw)
+))))) ?>;
 const INIT_NODES = <?= json_encode($nodes) ?>;
 const INIT_START = <?= json_encode($startNode) ?>;
 const esc = s => (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -533,7 +644,8 @@ async function runPreview(){
   }catch(e){ thread.innerHTML = '<div class="alert error">Preview failed.</div>'; }
 }
 
-const TYPE_LABEL = {start:'Trigger',text:'Send text',image:'Send image',template:'Template',buttons:'Buttons',question:'Ask',ai_chat:'AI conversation',ai_branch:'AI branch',ai_score:'AI score',score:'Add points',wait:'Wait',tag:'Tag',list_add:'Add to list',notify:'Notify',collect:'Collect',sheet_export:'Write to Sheet'};
+const TYPE_LABEL = {start:'Trigger',text:'Send text',image:'Send image',template:'Template',buttons:'Buttons',question:'Ask',ai_chat:'AI conversation',ai_branch:'AI branch',ai_score:'AI score',score:'Add points',wait:'Wait',tag:'Tag',list_add:'Add to list',notify:'Notify',collect:'Collect',sheet_export:'Write to Sheet',
+  condition:'If / then',split:'Split test',jump:'Go to automation',wait_until:'Wait until',set_field:'Remember',http:'Web service',list_msg:'Menu list'};
 
 let nodes = {};        // id -> {id,type,x,y,config,outputs}
 let start = {id:'start', type:'start', x:INIT_START.x, y:INIT_START.y, outputs:{next:INIT_START.next||null}};
@@ -574,6 +686,23 @@ function summary(n){
     case 'wait': { let s=c.seconds||0; let t=s%86400===0?(s/86400+'d'):s%3600===0?(s/3600+'h'):Math.round(s/60)+'m'; return '⏱ wait '+t; }
     case 'tag': return '🏷 tag: '+esc(c.tag);
     case 'list_add': { const l=LISTS.find(x=>x.id==c.list_id); return '📋 add to '+(l?esc(l.name):'list'); }
+    case 'condition': {
+      const ops = {eq:'is',ne:'is not',contains:'contains',empty:'is empty',not_empty:'is filled',
+                   gt:'>',lt:'<',gte:'≥',lte:'≤',has:'has tag',not_has:"doesn't have tag"};
+      if(!c.field) return '<span class="muted">choose what to check</span>';
+      const needsVal = !['empty','not_empty'].includes(c.op);
+      return '🔀 if <b>'+esc(c.field)+'</b> '+(ops[c.op]||c.op)+(needsVal?' <b>'+esc(c.value||'…')+'</b>':'');
+    }
+    case 'split': { const p=c.paths||[]; return '🎲 '+p.map(x=>esc(x.label||'?')+' '+(x.weight||1)).join(' / '); }
+    case 'jump': { const f=(FLOWS||[]).find(x=>Number(x.id)===Number(c.flow_id));
+                   return f ? '➡️ '+esc(f.name) : '<span class="muted">choose an automation</span>'; }
+    case 'wait_until': { const d=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+                         return '⏰ '+esc(c.time||'09:00')+(c.weekday===''||c.weekday==null?' daily':' on '+d[Number(c.weekday)]); }
+    case 'set_field': return c.field ? '💾 '+esc(c.field)+' = '+esc(c.value||'') : '<span class="muted">name the value</span>';
+    case 'http': return c.url ? '🌐 '+esc(c.method||'GET')+' '+esc(String(c.url).slice(0,40)) : '<span class="muted">add the address</span>';
+    case 'list_msg': { const o=c.options||[];
+      return (esc(c.body||'') || '<span class="muted">write the message</span>') +
+             (o.length ? '<div class="muted" style="margin-top:4px">'+o.length+' option'+(o.length>1?'s':'')+'</div>' : ''); }
     case 'notify': return '🔔 notify me';
     case 'collect': return '📥 sheet: '+esc(c.sheet_name||'Leads');
     case 'sheet_export': return '📊 '+(c.sheet_id?esc(c.sheet_name||'sheet')+(c.sheet_tab?' → '+esc(c.sheet_tab):''):'<span class="muted">choose a sheet</span>');
@@ -584,6 +713,10 @@ function outPorts(n){
   if(n.type==='start') return [{key:'next',label:''}];
   if(n.type==='buttons') return (n.config.buttons||[]).map((b,i)=>({key:'b'+i,label:b.title||('Button '+(i+1))}));
   if(n.type==='ai_branch'){ const a=(n.config.branches||[]).map((b,i)=>({key:'r'+i,label:b.label||('Branch '+(i+1))})); a.push({key:'fallback',label:'(else)'}); return a; }
+  if(n.type==='condition') return [{key:'yes',label:'Yes'},{key:'no',label:'No'}];
+  if(n.type==='split') return (n.config.paths||[]).map((p,i)=>({key:'p'+i,label:(p.label||String.fromCharCode(65+i))+' ('+(p.weight||1)+')'}));
+  if(n.type==='http') return [{key:'next',label:'OK'},{key:'fail',label:'Failed'}];
+  if(n.type==='jump') return [];   // a jump hands over and ends this flow
   return [{key:'next',label:''}];
 }
 
@@ -722,7 +855,15 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeEdgeMenu(); 
 
 /* ── add / delete ── */
 function defaultConfig(type){
-  return {text:{body:''},image:{link:'',caption:''},template:{template_id:0,header_media:'',header_vars:{},header_loc:{},vars:{},buttons:{}},buttons:{body:'',buttons:[{title:'Yes',points:0},{title:'No',points:0}]},question:{body:'',save_as:''},ai_chat:{knowledge:'',intro:'',persona:'',instructions:'',goals:[],captures:[],max_turns:8},ai_branch:{prompt:'',branches:[{label:'Interested',description:'',points:0}]},ai_score:{criterion:'',max_points:10},score:{points:0},wait:{seconds:3600},tag:{tag:''},list_add:{list_id:0},notify:{message:''},collect:{sheet_name:'Leads',fields:['phone','name','last_reply','score','tags']},sheet_export:{sheet_id:'',sheet_name:'',sheet_tab:'',fields:['date','phone','name','last_reply','score','grade']}}[type]||{};
+  return {text:{body:''},image:{link:'',caption:''},template:{template_id:0,header_media:'',header_vars:{},header_loc:{},vars:{},buttons:{}},buttons:{body:'',buttons:[{title:'Yes',points:0},{title:'No',points:0}]},question:{body:'',save_as:''},ai_chat:{knowledge:'',intro:'',persona:'',instructions:'',goals:[],captures:[],max_turns:8},ai_branch:{prompt:'',branches:[{label:'Interested',description:'',points:0}]},ai_score:{criterion:'',max_points:10},score:{points:0},wait:{seconds:3600},tag:{tag:''},list_add:{list_id:0},notify:{message:''},collect:{sheet_name:'Leads',fields:['phone','name','last_reply','score','tags']},sheet_export:{sheet_id:'',sheet_name:'',sheet_tab:'',fields:['date','phone','name','last_reply','score','grade']},
+    condition:{field:'',op:'eq',value:''},
+    set_field:{field:'',value:'',persist:false},
+    // Two paths from the start, or the node has no outputs to wire anything to.
+    split:{paths:[{label:'A',weight:1},{label:'B',weight:1}]},
+    jump:{flow_id:0},
+    wait_until:{time:'09:00',weekday:''},
+    http:{method:'GET',url:'',body:'',save_as:'',pick:''},
+    list_msg:{body:'',button:'Choose',header:'',options:[{title:'',description:''}]}}[type]||{};
 }
 function addNode(type,data){
   const w=document.getElementById('cwrap');
@@ -772,6 +913,84 @@ function cfgForm(n){ const c=n.config;
     case 'wait': { let s=c.seconds||3600,u='m',v=Math.round(s/60); if(s%86400===0){u='d';v=s/86400;}else if(s%3600===0){u='h';v=s/3600;} return `<div class="grid2"><label><span class="lbl">Wait</span><input type="number" id="wv" value="${v}" min="1"></label><label><span class="lbl">Unit</span><select id="wu"><option value="m" ${u==='m'?'selected':''}>Minutes</option><option value="h" ${u==='h'?'selected':''}>Hours</option><option value="d" ${u==='d'?'selected':''}>Days</option></select></label></div><div class="hint">After 24h only template steps can send.</div>`; }
     case 'tag': return `<label><span class="lbl">Tag</span><input data-k="tag" value="${esc(c.tag)}"></label>`;
     case 'list_add': return `<label><span class="lbl">Add to list</span><select data-k="list_id">${'<option value="0">— choose —</option>'+LISTS.map(l=>`<option value="${l.id}" ${l.id==c.list_id?'selected':''}>${esc(l.name)}</option>`).join('')}</select></label>`;
+    case 'condition': {
+      const ops = [['eq','is'],['ne','is not'],['contains','contains'],['not_empty','is filled in'],
+                   ['empty','is empty'],['gt','is more than'],['lt','is less than'],
+                   ['gte','is at least'],['lte','is at most'],['has','has tag'],['not_has',"doesn't have tag"]];
+      const needsVal = !['empty','not_empty'].includes(c.op||'eq');
+      return `<label><span class="lbl">Check</span>
+          <input data-k="field" value="${esc(c.field)}" list="known-fields" placeholder="city">
+          <datalist id="known-fields">${(KNOWN_FIELDS||[]).map(f=>`<option value="${esc(f)}">`).join('')}</datalist></label>
+        <div class="hint">A value you saved earlier, a field on the contact, <b>score</b>, or <b>tag</b>.</div>
+        <label><span class="lbl">Condition</span><select data-k="op">
+          ${ops.map(([v,l])=>`<option value="${v}" ${(c.op||'eq')===v?'selected':''}>${l}</option>`).join('')}
+        </select></label>
+        <label id="cond-val" style="${needsVal?'':'display:none'}"><span class="lbl">Value</span>
+          <input data-k="value" value="${esc(c.value)}"></label>
+        <div class="hint">Wire the <b>Yes</b> and <b>No</b> ports on the node to where each answer should go.</div>`;
+    }
+    case 'set_field':
+      return `<label><span class="lbl">Call it</span><input data-k="field" value="${esc(c.field)}" placeholder="plan"></label>
+        <label><span class="lbl">Set it to</span><input data-k="value" value="${esc(c.value)}" placeholder="premium"></label>
+        <div class="hint">Use it later as <b>{{${esc(c.field||'plan')}}}</b> in any message.</div>
+        <label style="display:flex;gap:8px;align-items:center;font-weight:normal;margin-top:8px">
+          <input type="checkbox" data-k="persist" ${c.persist?'checked':''} style="width:auto">
+          Keep it on the contact after this conversation ends</label>`;
+    case 'split': {
+      const paths = c.paths && c.paths.length ? c.paths : [{label:'A',weight:1},{label:'B',weight:1}];
+      const total = paths.reduce((t,p)=>t+Math.max(1,Number(p.weight)||1),0);
+      return `<div class="hint">Send people down different paths to see which works better.
+                Weights are relative — 3 and 1 sends three quarters down the first.</div>` +
+        paths.map((p,i)=>`<div style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
+            <input data-k="paths.${i}.label" value="${esc(p.label)}" placeholder="Path ${String.fromCharCode(65+i)}" style="flex:1">
+            <input data-k="paths.${i}.weight" type="number" min="1" value="${Number(p.weight)||1}" style="width:70px">
+            <span class="muted" style="width:44px;text-align:right">${Math.round((Math.max(1,Number(p.weight)||1)/total)*100)}%</span>
+            ${paths.length>2?`<button type="button" class="btn-link" onclick="splitDel(${i})">✕</button>`:''}
+          </div>`).join('') +
+        `<button type="button" class="btn-link" onclick="splitAdd()">+ path</button>`;
+    }
+    case 'jump':
+      return `<label><span class="lbl">Continue into</span><select data-k="flow_id">
+          <option value="0">— choose —</option>
+          ${(FLOWS||[]).map(f=>`<option value="${f.id}" ${Number(c.flow_id)===Number(f.id)?'selected':''}>${esc(f.name)}</option>`).join('')}
+        </select></label>
+        <div class="hint">${(FLOWS||[]).length ? 'This conversation ends here and the other automation takes over — useful for an ending shared by several flows.' : 'You have no other automations yet.'}</div>`;
+    case 'wait_until': {
+      const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+      return `<label><span class="lbl">Wait until</span><input type="time" data-k="time" value="${esc(c.time||'09:00')}"></label>
+        <label><span class="lbl">On</span><select data-k="weekday">
+          <option value="" ${c.weekday===''||c.weekday==null?'selected':''}>Any day</option>
+          ${days.map((d,i)=>`<option value="${i}" ${String(c.weekday)===String(i)?'selected':''}>${d}</option>`).join('')}
+        </select></label>
+        <div class="hint">Waits for the next time it is that hour — so "9:00" always means 9am,
+          rather than drifting a little further each run.</div>`;
+    }
+    case 'http':
+      return `<label><span class="lbl">Method</span><select data-k="method">
+          <option value="GET" ${(c.method||'GET')==='GET'?'selected':''}>GET</option>
+          <option value="POST" ${c.method==='POST'?'selected':''}>POST</option>
+        </select></label>
+        <label><span class="lbl">Address</span><input data-k="url" value="${esc(c.url)}" placeholder="https://example.com/api"></label>
+        <div class="hint">Must be a public https:// address. Private and local addresses are blocked.</div>
+        <label><span class="lbl">Send (for POST)</span><textarea data-k="body" rows="3" placeholder='{"phone":"{{phone}}"}'>${esc(c.body)}</textarea></label>
+        <label><span class="lbl">Save the answer as</span><input data-k="save_as" value="${esc(c.save_as)}" placeholder="balance"></label>
+        <label><span class="lbl">Take this part of it</span><input data-k="pick" value="${esc(c.pick)}" placeholder="data.balance"></label>
+        <div class="hint">Leave blank to keep the whole response. Wire <b>Failed</b> to handle a service being down.</div>`;
+    case 'list_msg': {
+      const opts = c.options && c.options.length ? c.options : [{title:'',description:''}];
+      return `<label><span class="lbl">Message</span><textarea data-k="body" rows="2">${esc(c.body)}</textarea></label>
+        <label><span class="lbl">Button text</span><input data-k="button" value="${esc(c.button||'Choose')}" maxlength="20"></label>
+        <label><span class="lbl">List title</span><input data-k="header" value="${esc(c.header)}" maxlength="24" placeholder="Options"></label>
+        <div class="lbl" style="margin-top:10px">Options (up to 10)</div>` +
+        opts.map((o,i)=>`<div style="display:flex;gap:6px;margin-bottom:6px">
+            <input data-k="options.${i}.title" value="${esc(o.title)}" placeholder="Title" maxlength="24" style="flex:1">
+            <input data-k="options.${i}.description" value="${esc(o.description)}" placeholder="Description (optional)" maxlength="72" style="flex:1.4">
+            ${opts.length>1?`<button type="button" class="btn-link" onclick="listDel(${i})">✕</button>`:''}
+          </div>`).join('') +
+        (opts.length<10?`<button type="button" class="btn-link" onclick="listAdd()">+ option</button>`:'') +
+        `<div class="hint">Tappable on the WhatsApp Business API. On a personal number it is sent
+           as a numbered list — WhatsApp does not allow tappable menus from personal numbers.</div>`;
+    }
     case 'notify': return `<label><span class="lbl">Message (emailed to Gildana)</span><textarea data-k="message" rows="2">${esc(c.message)}</textarea></label>`;
     case 'collect': { const f=c.fields||[]; return `<label><span class="lbl">Sheet name</span><input data-k="sheet_name" value="${esc(c.sheet_name)}"></label><div class="lbl mt10">Capture fields</div>`+['phone','name','last_reply','score','grade','tags'].map(k=>`<label style="display:flex;gap:6px;font-weight:normal;align-items:center"><input type="checkbox" class="cf" value="${k}" ${f.includes(k)?'checked':''} style="width:auto">${k}</label>`).join(''); }
     case 'buttons': return `<label><span class="lbl">Message</span><textarea data-k="body" rows="2">${esc(c.body)}</textarea></label><div class="lbl mt10">Buttons (max 3) — wire each on the canvas</div><div id="rows">${(c.buttons||[]).map((b,i)=>btnRow(b,i)).join('')}</div><button type="button" class="btn-link" onclick="addRow('buttons')">+ button</button>`;
@@ -900,10 +1119,65 @@ function bindTplFields(){
   });
 }
 
+/* Write a value into the node's config, supporting dotted paths like "options.2.title" so a
+   repeated row can bind straight to its own slot instead of needing bespoke handlers. */
+function setCfgPath(obj, path, value){
+  const parts = String(path).split('.');
+  let cur = obj;
+  for(let i = 0; i < parts.length - 1; i++){
+    const k = parts[i], nextIsIndex = /^\d+$/.test(parts[i+1]);
+    if(cur[k] === undefined || cur[k] === null || typeof cur[k] !== 'object') cur[k] = nextIsIndex ? [] : {};
+    cur = cur[k];
+  }
+  cur[parts[parts.length - 1]] = value;
+}
+
+/* Repeated rows: split-test paths and menu options. Each edits the current node then
+   re-renders, so the ports on the canvas follow along. */
+function splitAdd(){
+  const p = current.config.paths || (current.config.paths = [{label:'A',weight:1},{label:'B',weight:1}]);
+  if(p.length >= 6) return;
+  p.push({label:String.fromCharCode(65+p.length), weight:1});
+  reopenCfg();
+}
+function splitDel(i){
+  const p = current.config.paths || [];
+  if(p.length <= 2) return;
+  p.splice(i,1);
+  delete current.config['_'];
+  reopenCfg();
+}
+function listAdd(){
+  const o = current.config.options || (current.config.options = []);
+  if(o.length >= 10) return;
+  o.push({title:'',description:''});
+  reopenCfg();
+}
+function listDel(i){
+  const o = current.config.options || [];
+  if(o.length <= 1) return;
+  o.splice(i,1);
+  reopenCfg();
+}
+
+/* Redraw the open panel so a row added or removed above shows immediately, and the node's
+   ports on the canvas follow (a split test grows an output per path). */
+function reopenCfg(){
+  const id = current ? current.id : null;
+  render();
+  if(id) openCfg(id);
+}
+
 function bindCfg(){
   if(current && current.type==='template') renderTplFields();
   document.querySelectorAll('#cfg-body [data-k]').forEach(el=>{
-    el.addEventListener('input',()=>{ let v=el.value; if(el.type==='number') v=+v; current.config[el.dataset.k]=v; renderKeepPanel(false); });
+    const ev = (el.type==='checkbox') ? 'change' : 'input';
+    el.addEventListener(ev,()=>{
+      let v = el.type==='checkbox' ? el.checked : el.value;
+      if(el.type==='number') v = +v;
+      setCfgPath(current.config, el.dataset.k, v);
+      renderKeepPanel(false);
+    });
   });
   document.querySelectorAll('#cfg-body .cf').forEach(cb=>cb.addEventListener('change',()=>{ current.config.fields=[...document.querySelectorAll('#cfg-body .cf:checked')].map(x=>x.value); }));
   // Export columns are written in the order shown, so read them in DOM order.

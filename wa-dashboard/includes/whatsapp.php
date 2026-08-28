@@ -661,6 +661,35 @@ function wa_send_image(array $client, string $to, string $link, string $caption 
  * Interactive reply buttons (max 3). $buttons = [['id'=>..,'title'=>..], ...]
  * Titles are truncated to WhatsApp's 20-char limit; ids to 256.
  */
+/**
+ * A tappable list — WhatsApp's answer to "more than three choices".
+ *
+ * Reply buttons cap at 3. A list holds up to 10 rows behind a single button, which is the
+ * difference between "pick a service" working and having to split it across screens.
+ * Cloud API only; see channel_send_list() for what a personal number does instead.
+ */
+function wa_send_list(array $client, string $to, string $body, string $buttonText, array $rows, string $header = ''): array
+{
+    $items = [];
+    foreach (array_slice(array_values($rows), 0, 10) as $i => $r) {
+        $items[] = [
+            'id'          => substr((string) ($r['id'] ?? ('r' . $i)), 0, 200),
+            'title'       => substr((string) ($r['title'] ?? ('Option ' . ($i + 1))), 0, 24),
+            'description' => substr((string) ($r['description'] ?? ''), 0, 72),
+        ];
+    }
+    $interactive = [
+        'type'   => 'list',
+        'body'   => ['text' => substr($body, 0, 1024)],
+        'action' => [
+            // Meta caps this at 20 characters and rejects the whole message if it is longer.
+            'button'   => substr($buttonText !== '' ? $buttonText : 'Choose', 0, 20),
+            'sections' => [['title' => substr($header !== '' ? $header : 'Options', 0, 24), 'rows' => $items]],
+        ],
+    ];
+    return wa_send_message($client, $to, ['type' => 'interactive', 'interactive' => $interactive]);
+}
+
 function wa_send_buttons(array $client, string $to, string $body, array $buttons): array
 {
     $rows = [];

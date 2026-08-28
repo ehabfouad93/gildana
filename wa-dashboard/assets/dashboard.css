@@ -550,3 +550,12 @@ textarea { resize: vertical; min-height: 84px; }
 .meter { height: 7px; border-radius: 4px; background: var(--line, #E4E7EE); overflow: hidden; margin-top: 10px; }
 .meter > span { display: block; height: 100%; background: var(--brand); border-radius: 4px; transition: width .3s; }
 .meter.over > span { background: #D14343; }
+
+/* Ready-made automations a client can install in one click. */
+.starter-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; margin-top: 14px; }
+.starter-grid.hidden { display: none; }
+.starter { border: 1px solid var(--line-strong); border-radius: 10px; padding: 14px;
+           display: flex; flex-direction: column; gap: 6px; background: var(--white); }
+.starter-name { font-weight: 700; font-size: 14px; }
+.starter-sum { font-size: 12.5px; color: var(--ink-soft, #5B6478); line-height: 1.5; flex: 1; }
+.starter button { align-self: flex-start; margin-top: 4px; }
