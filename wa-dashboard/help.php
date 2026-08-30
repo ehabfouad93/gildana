@@ -12,7 +12,7 @@ require_once __DIR__ . '/includes/help.php';
 require_once __DIR__ . '/includes/notify.php';
 
 $me = current_user_full();
-if (!$me) redirect('index.php');
+if (!$me) redirect('login.php');
 
 $role     = ($me['role'] ?? '') === 'admin' ? 'admin' : 'client';
 $clientId = $me['client_id'] ?? null;

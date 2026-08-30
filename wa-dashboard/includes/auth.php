@@ -78,7 +78,7 @@ function is_client(): bool { return (current_user()['role'] ?? '') === 'client';
 function require_admin(): array
 {
     $u = current_user();
-    if (!$u || $u['role'] !== 'admin') redirect('../index.php');
+    if (!$u || $u['role'] !== 'admin') redirect('../login.php');
     return $u;
 }
 
@@ -95,7 +95,7 @@ function is_impersonating(): bool
 function require_client(): array
 {
     $u = current_user();
-    if (!$u) redirect('../index.php');
+    if (!$u) redirect('../login.php');
 
     // Admin acting inside a client's workspace.
     if ($u['role'] === 'admin') {
@@ -106,7 +106,7 @@ function require_client(): array
         return [$u, $client]; // admins may manage disabled clients too
     }
 
-    if ($u['role'] !== 'client' || !$u['client_id']) redirect('../index.php');
+    if ($u['role'] !== 'client' || !$u['client_id']) redirect('../login.php');
     $client = db_row("SELECT * FROM clients WHERE id = ?", [$u['client_id']]);
     if (!$client || $client['status'] !== 'active') {
         logout();

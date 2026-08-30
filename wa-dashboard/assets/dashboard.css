@@ -641,3 +641,8 @@ body.canvas-focus { overflow: hidden; }
            border-radius: 50%; cursor: pointer; font-size: 13px; opacity: 0; transition: opacity .12s, color .12s; }
 .node:hover .addnext, .node.sel .addnext { opacity: 1; }
 .addnext:hover { color: var(--brand); border-color: var(--brand); border-style: solid; }
+
+/* A way back from the sign-in screen to the public site. */
+.login-back { text-align: center; margin: 16px 0 0; font-size: 13px; }
+.login-back a { color: var(--muted); text-decoration: none; }
+.login-back a:hover { color: var(--brand); }

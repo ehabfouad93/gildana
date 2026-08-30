@@ -23,11 +23,11 @@ if (is_file(SETUP_LOCK)) {
         http_response_code(403);
         exit('Setup is closed. To create an administrator, delete .setup_complete on the server first.');
     }
-    redirect('index.php');
+    redirect('login.php');
 }
 if (admin_exists()) {
     @file_put_contents(SETUP_LOCK, gmdate('c') . " setup completed\n");
-    redirect('index.php');
+    redirect('login.php');
 }
 
 $error = '';
@@ -52,7 +52,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // Close the door behind the first admin.
         @file_put_contents(SETUP_LOCK, gmdate('c') . " first admin created\n");
         flash('Admin account created. Please sign in.');
-        redirect('index.php');
+        redirect('login.php');
     }
 }
 
