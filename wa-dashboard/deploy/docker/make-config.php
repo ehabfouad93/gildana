@@ -13,6 +13,10 @@
  */
 declare(strict_types=1);
 
+// Operator tooling. deploy/ is inside the document root in the Docker image, so this
+// must refuse to run over HTTP the way preflight.php and rotate-hook-secrets.php do.
+if (PHP_SAPI !== 'cli') { http_response_code(403); exit("Run this from the command line.\n"); }
+
 $root = dirname(__DIR__, 2);          // /var/www/html
 chdir($root);
 

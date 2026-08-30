@@ -9,6 +9,10 @@
  * every client's WhatsApp and AI credentials are unreadable and must be re-entered.
  */
 declare(strict_types=1);
+
+// Operator tooling. deploy/ is inside the document root in the Docker image, so this
+// must refuse to run over HTTP the way preflight.php and rotate-hook-secrets.php do.
+if (PHP_SAPI !== 'cli') { http_response_code(403); exit("Run this from the command line.\n"); }
 chdir(dirname(__DIR__, 2));
 
 require 'includes/config_loader.php';

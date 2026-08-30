@@ -143,7 +143,29 @@ try {
     $add('fail', 'Cannot read schema_migrations', $e->getMessage(), 'Run setup.php once to create it.');
 }
 
-/* ── 8. Setup lock ── */
+/* ── 8. Is the operator tooling reachable from the web? ──
+   deploy/ sits inside the document root under the Docker image, and that tree holds the
+   .env with the gateway key and the database password. The nginx template denies /deploy/;
+   Apache only honours .htaccess, so check the file is actually there. */
+$dhta = dirname(__DIR__) . '/deploy/.htaccess';
+if (!is_file($dhta) || !str_contains((string) file_get_contents($dhta), 'denied')) {
+    $add('fail', 'deploy/ is not blocked from the web',
+        'These scripts and the docker .env (gateway API key, database password) live inside the '
+      . 'document root. Without deploy/.htaccess, Apache serves the lot to anyone who asks.',
+        'Restore deploy/.htaccess containing "Require all denied", then confirm with: '
+      . 'curl -sI ' . ($base ?: 'https://your-domain') . '/deploy/docker/.env');
+} else {
+    $add('ok', 'deploy/ is blocked from the web', 'Operator scripts and the .env are not served.');
+}
+// A dotfile anywhere under the root is served in plain text by a stock Apache.
+$rhta = dirname(__DIR__) . '/.htaccess';
+if (!is_file($rhta) || !str_contains((string) file_get_contents($rhta), '^\\.')) {
+    $add('warn', 'Dotfiles are not denied at the document root',
+        'Apache protects .ht* and nothing else, so any .env or .git file under the root is readable.',
+        'Add a <FilesMatch "^\\."> Require all denied block to .htaccess.');
+}
+
+/* ── 9. Setup lock ── */
 if (is_file(dirname(__DIR__) . '/.setup_complete')) {
     $add('ok', 'First-run setup is locked', 'setup.php will not create another admin.');
 } else {
