@@ -134,7 +134,7 @@ $steps = [
 <!-- ── nav ───────────────────────────────────────────────────────────────── -->
 <header class="nav">
   <div class="wrap nav-in">
-    <a class="nav-logo" href="#top" aria-label="<?= e($appName) ?>"><?= brand_logo('full', 30, './', false) ?></a>
+    <a class="nav-logo" href="#top" aria-label="<?= e($appName) ?>"><?= brand_logo('full', 42, './', false) ?></a>
     <nav class="nav-links" id="nav-links">
       <a href="#what">What it does</a>
       <a href="#how">How it works</a>
@@ -461,7 +461,7 @@ $steps = [
 <footer class="foot">
   <div class="wrap">
     <div class="foot-in">
-      <div style="color:#fff"><?= brand_logo('full', 26, './', true) ?></div>
+      <div style="color:#fff"><?= brand_logo('full', 34, './', true) ?></div>
       <nav class="foot-links">
         <a href="#what">What it does</a>
         <a href="#how">How it works</a>
