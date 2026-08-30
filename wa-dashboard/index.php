@@ -81,7 +81,7 @@ try {
     $plans = [];
 }
 
-/** A small inline icon. Kept as line art at one weight so the feature grid reads as a set. */
+/** The one inline icon left on the page: the mobile menu button. */
 function ico(string $d): string
 {
     return '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
@@ -90,23 +90,17 @@ function ico(string $d): string
 }
 
 $features = [
-    ['M21 11.5a8.4 8.4 0 0 1-9 8.4 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.1A8.4 8.4 0 0 1 12 3a8.4 8.4 0 0 1 9 8.5z',
-     'Campaigns that actually arrive',
+    ['Campaigns that actually arrive',
      'Pick an approved template or write the message yourself, pull each person’s name and details in from their contact record, send now or schedule it. Progress, delivery and read counts update live.'],
-    ['M12 2v4M12 18v4M2 12h4M18 12h4M5 5l3 3M16 16l3 3M19 5l-3 3M8 16l-3 3',
-     'Automations on a canvas',
+    ['Automations on a canvas',
      'Drag steps, wire them together, and watch a conversation branch. 22 kinds of step — ask a question, send buttons, call a web service, split-test, wait until Tuesday at 9. Five ready-made flows to start from.'],
-    ['M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11',
-     'Try it before anyone sees it',
+    ['Try it before anyone sees it',
      'Preview a flow as a real WhatsApp conversation, answering as the customer, with variables filled in. Nothing is sent, nothing is charged. Then Check for problems finds the dead ends before your customers do.'],
-    ['M12 8V4H8M4 8h16v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8zM2 8h20M9 14h6',
-     'An AI that only knows your business',
+    ['An AI that only knows your business',
      'Give it your price list, your policies, your FAQ. It answers from that and nothing else, chases the goals you set, captures what you asked for, and hands over to a human when it should.'],
-    ['M3 3v18h18M7 15l4-4 3 3 5-6',
-     'Lead scoring you can read',
+    ['Lead scoring you can read',
      'Built for property developers: it works the sheet your ads fill, asks about budget, area and payment, and hands every lead back graded hot, warm or cold with the reason attached.'],
-    ['M4 6h16M4 12h16M4 18h10M18 16v6M15 19h6',
-     'A live inbox on your phone',
+    ['A live inbox on your phone',
      'Every conversation in one thread list, replies from any device, push notifications when someone answers. Install it to your home screen and it behaves like an app.'],
 ];
 
@@ -133,6 +127,9 @@ $steps = [
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="assets/site.css?v=<?= @filemtime(__DIR__ . '/assets/site.css') ?: '1' ?>">
+<!-- Reveal-on-scroll hides content until it is reached, so it may only be armed once we know
+     scripting is available. Without this class nothing is ever hidden. -->
+<script>document.documentElement.className += ' js';</script>
 </head>
 <body style="--logo-h:<?= $logoH ?>px;--foot-logo-h:<?= $footH ?>px">
 
@@ -159,39 +156,64 @@ $steps = [
 </header>
 
 <!-- ── hero ──────────────────────────────────────────────────────────────── -->
-<section class="hero on-dark" id="top">
-  <div class="wrap hero-in">
-    <div>
-      <span class="eyebrow"><?= e(BRAND_TAGLINE) ?></span>
-      <h1>Your customers already<br>use WhatsApp.<br><span class="grad">Start selling there.</span></h1>
-      <p class="hero-sub">
-        <?= e($appName) ?> sends the campaign, answers the reply, scores the lead and hands
-        you the conversation — on the number your customers already message. One dashboard,
-        no developers.
-      </p>
-      <div class="hero-cta">
-        <a class="btn btn-primary" href="#access">Get started</a>
-        <a class="btn btn-ghost" href="#how">See how it works</a>
-      </div>
-      <p class="hero-note">Official WhatsApp Business API · or your own number by QR</p>
-    </div>
+<section class="hero" id="top">
+  <span class="eyebrow"><?= e(BRAND_TAGLINE) ?></span>
+  <h1>Your customers already use WhatsApp. <span class="grad">Start selling there.</span></h1>
+  <p class="hero-sub">
+    <?= e($appName) ?> sends the campaign, answers the reply, scores the lead and hands you
+    the conversation — on the number your customers already message. One dashboard, no
+    developers.
+  </p>
+  <div class="hero-cta">
+    <a class="btn btn-primary" href="#access">Get started</a>
+    <a class="btn btn-ghost" href="#how">See how it works</a>
+  </div>
+  <p class="hero-note">Official WhatsApp Business API · or your own number by QR</p>
 
-    <!-- Not a screenshot: a real conversation, so the page shows the thing itself. -->
-    <div class="phone" aria-hidden="true">
-      <div class="phone-bar">
-        <span class="phone-av"></span>
-        <span class="phone-who">Nile Interiors<small>● online</small></span>
-      </div>
-      <div class="thread">
-        <div class="bub out">Hi Mona 👋 Our autumn collection is live — 20% off this week.<span class="tick">✓✓</span></div>
-        <div class="bub in">Do you deliver to Alexandria?</div>
-        <div class="bub out">We do — 2 to 3 days, free over EGP 2,000. Want me to send the catalogue?
-          <span class="bub-btns"><span>Yes, send it</span><span>Talk to someone</span></span>
+  <!-- The product on the fold: the flow that ran, and the conversation it produced.
+       Not a screenshot — real nodes and real bubbles, so it can never go stale. -->
+  <div class="hero-shot" aria-hidden="true">
+    <div class="hero-shot-in">
+      <div class="canvas">
+        <div class="canvas-bar"><span>Automation canvas</span><span class="live">live · 412 in flight</span></div>
+        <div class="node">
+          <div class="node-h">Send template</div>
+          <div class="node-b">autumn_offer · 20% this week</div>
+          <div class="node-s"><span>412 reached</span></div>
         </div>
-        <div class="bub in">Yes, send it</div>
+        <div class="wire"></div>
+        <div class="node on">
+          <div class="node-h">Ask &amp; capture → city</div>
+          <div class="node-b">“Which city are we delivering to?”</div>
+          <div class="node-s"><span>338 reached</span><span class="drop">44 stopped</span></div>
+        </div>
+        <div class="wire"></div>
+        <div class="node-row">
+          <div class="node">
+            <div class="node-h">If / then</div>
+            <div class="node-b">city is <b>Alexandria</b></div>
+          </div>
+          <div class="node">
+            <div class="node-h">AI score</div>
+            <div class="node-b">🎯 buying intent · max 100</div>
+          </div>
+        </div>
       </div>
-      <div class="phone-tag">
-        <span>AI scored this lead</span><span class="hot">HOT · 82</span><span>→ tagged, added to “Ready to buy”</span>
+
+      <div class="phone">
+        <div class="phone-bar">
+          <span class="phone-av"></span>
+          <span class="phone-who">Nile Interiors<small>● online</small></span>
+        </div>
+        <div class="thread">
+          <div class="bub out">Hi Mona 👋 Our autumn collection is live — 20% off this week.<span class="tick">✓✓</span></div>
+          <div class="bub in">Do you deliver to Alexandria?</div>
+          <div class="bub out">We do — 2 to 3 days, free over EGP 2,000. Want me to send the catalogue?
+            <span class="bub-btns"><span>Yes, send it</span><span>Talk to someone</span></span>
+          </div>
+          <div class="bub in">Yes, send it</div>
+        </div>
+        <div class="phone-tag"><span>AI scored this lead</span><span class="hot">HOT · 82</span></div>
       </div>
     </div>
   </div>
@@ -200,15 +222,15 @@ $steps = [
 <!-- ── the honest numbers: what the product has, not invented metrics ────── -->
 <section class="strip">
   <div class="wrap strip-in">
-    <div class="strip-i"><span class="k"><span class="grad">2</span></span><span class="l">ways to send — official API or your own number</span></div>
-    <div class="strip-i"><span class="k"><span class="grad">22</span></span><span class="l">kinds of automation step</span></div>
-    <div class="strip-i"><span class="k"><span class="grad">5</span></span><span class="l">ready-made automations, installed in one click</span></div>
-    <div class="strip-i"><span class="k"><span class="grad">24/7</span></span><span class="l">worker — campaigns keep sending after you close the tab</span></div>
+    <div class="strip-i" data-reveal><span class="k"><span class="grad">2</span></span><span class="l">ways to send — official API or your own number</span></div>
+    <div class="strip-i" data-reveal><span class="k"><span class="grad">22</span></span><span class="l">kinds of automation step</span></div>
+    <div class="strip-i" data-reveal><span class="k"><span class="grad">5</span></span><span class="l">ready-made automations, installed in one click</span></div>
+    <div class="strip-i" data-reveal><span class="k"><span class="grad">24/7</span></span><span class="l">worker — campaigns keep sending after you close the tab</span></div>
   </div>
 </section>
 
 <!-- ── what it does ──────────────────────────────────────────────────────── -->
-<section class="section" id="what">
+<section class="section tint" id="what">
   <div class="wrap">
     <div class="section-head">
       <span class="eyebrow">What it does</span>
@@ -217,9 +239,9 @@ $steps = [
          most of this product lives.</p>
     </div>
     <div class="grid">
-      <?php foreach ($features as [$path, $title, $copy]): ?>
-        <article class="f">
-          <div class="f-icon"><?= ico('<path d="' . $path . '"/>') ?></div>
+      <?php foreach ($features as $i => [$title, $copy]): ?>
+        <article class="f" data-reveal>
+          <span class="f-num"><?= str_pad((string) ($i + 1), 2, '0', STR_PAD_LEFT) ?></span>
           <h3><?= e($title) ?></h3>
           <p><?= e($copy) ?></p>
         </article>
@@ -229,7 +251,7 @@ $steps = [
 </section>
 
 <!-- ── how it works ──────────────────────────────────────────────────────── -->
-<section class="section" id="how" style="background:var(--card);border-block:1px solid var(--line)">
+<section class="section" id="how">
   <div class="wrap">
     <div class="section-head">
       <span class="eyebrow">How it works</span>
@@ -237,15 +259,18 @@ $steps = [
       <p>Four steps, in this order. Nothing here needs a developer.</p>
     </div>
     <div class="steps">
-      <?php foreach ($steps as [$t, $c]): ?>
-        <div class="step"><h3><?= e($t) ?></h3><p><?= e($c) ?></p></div>
+      <?php foreach ($steps as $i => [$t, $c]): ?>
+        <div class="step" data-reveal>
+          <div class="step-n"><span><?= str_pad((string) ($i + 1), 2, '0', STR_PAD_LEFT) ?></span><span class="rule"></span></div>
+          <h3><?= e($t) ?></h3><p><?= e($c) ?></p>
+        </div>
       <?php endforeach; ?>
     </div>
   </div>
 </section>
 
 <!-- ── the two channels: the real differentiator, stated honestly ────────── -->
-<section class="section" id="channels">
+<section class="section tint" id="channels">
   <div class="wrap">
     <div class="section-head">
       <span class="eyebrow">Your number, your choice</span>
@@ -256,7 +281,7 @@ $steps = [
          yet. So the same dashboard also drives the phone already on the desk.</p>
     </div>
     <div class="two">
-      <div class="ch lead">
+      <div class="ch lead" data-reveal>
         <span class="ch-tag">Recommended</span>
         <h3>Official WhatsApp Business API</h3>
         <p>A verified sender, at scale, with Meta’s blessing.</p>
@@ -273,7 +298,7 @@ $steps = [
           minutes, sometimes a few hours. We walk you through all of it.
         </div>
       </div>
-      <div class="ch">
+      <div class="ch" data-reveal>
         <span class="ch-tag">No approval needed</span>
         <h3>The number you already use</h3>
         <p>Scan a QR code with your phone and start sending in minutes.</p>
@@ -341,7 +366,7 @@ $steps = [
 </section>
 
 <!-- ── lead qualifier ────────────────────────────────────────────────────── -->
-<section class="section" id="qualifier" style="background:var(--card);border-block:1px solid var(--line)">
+<section class="section" id="qualifier">
   <div class="wrap">
     <div class="section-head">
       <span class="eyebrow">Lead Qualifier</span>
@@ -385,7 +410,7 @@ $steps = [
       </div>
 
       <!-- A lead as it actually comes back, not an illustration of one. -->
-      <aside class="lead-card" aria-hidden="true">
+      <aside class="lead-card" data-reveal aria-hidden="true">
         <div class="lead-top">
           <div>
             <strong>Mona Adel</strong>
@@ -411,18 +436,18 @@ $steps = [
 
 <?php if ($plans): ?>
 <!-- ── pricing: whatever the operator has switched on in Admin → Plans ───── -->
-<section class="section" id="pricing" style="background:var(--card);border-block:1px solid var(--line)">
+<section class="section tint" id="pricing">
   <div class="wrap">
     <div class="section-head">
       <span class="eyebrow">Pricing</span>
-      <h2>Pay for the plan, then for what you send</h2>
+      <h2>Plans</h2>
       <p>Each plan includes a monthly allowance of message credits. One credit is one
          outbound message; replies you receive are free.</p>
     </div>
     <div class="plans">
       <?php foreach ($plans as $i => $p):
         $hi = count($plans) > 1 && $i === (int) floor((count($plans) - 1) / 2); ?>
-        <div class="plan<?= $hi ? ' hi' : '' ?>">
+        <div class="plan<?= $hi ? ' hi' : '' ?>" data-reveal>
           <h3><?= e((string) $p['name']) ?></h3>
           <div class="price"><?= e((string) ($p['currency'] ?: 'USD')) ?> <?= number_format((float) $p['price_month'], 0) ?></div>
           <div class="per">per month</div>
@@ -556,6 +581,24 @@ $steps = [
 
 <script>
 /* The whole page is server-rendered; this is the only behaviour it needs. */
+/* Sections arrive as you reach them. Skipped entirely when the visitor has asked for less
+   motion, and skipped when IntersectionObserver is missing — in both cases the CSS default
+   would leave the page invisible, so the class goes on immediately instead. */
+(function () {
+  var els = document.querySelectorAll('[data-reveal]');
+  var still = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (still || !('IntersectionObserver' in window)) {
+    els.forEach(function (el) { el.classList.add('in'); });
+    return;
+  }
+  var io = new IntersectionObserver(function (rows) {
+    rows.forEach(function (r) { if (r.isIntersecting) { r.target.classList.add('in'); io.unobserve(r.target); } });
+    // Fire on the first pixel, and a little before it: a fast scroll must never leave a
+    // card blank on screen while it waits for a threshold to be crossed.
+  }, { rootMargin: '0px 0px 5% 0px', threshold: 0 });
+  els.forEach(function (el, i) { el.style.transitionDelay = (i % 4) * 60 + 'ms'; io.observe(el); });
+})();
+
 (function () {
   var b = document.getElementById('burger'), n = document.getElementById('nav-links');
   if (!b || !n) return;
