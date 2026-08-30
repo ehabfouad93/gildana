@@ -235,6 +235,59 @@ p { margin: 0; }
 .node-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .wire { height: 16px; margin-left: 26px; border-left: 2px solid rgba(255,255,255,.16); }
 
+/* ── lead qualifier ──────────────────────────────────────────────────────── */
+.lq { display: grid; grid-template-columns: 1.1fr .9fr; gap: 56px; align-items: start; }
+
+/* Numbered because this genuinely is a sequence — the sheet, then the message, then the
+   questions, then the score. The number is the marker; no bullet fights it. */
+.lq-steps { list-style: none; margin: 0; padding: 0; counter-reset: q; }
+.lq-steps li { position: relative; padding: 0 0 26px 52px; }
+.lq-steps li::before {
+  counter-increment: q; content: counter(q);
+  position: absolute; left: 0; top: 0; width: 32px; height: 32px; border-radius: 50%;
+  display: grid; place-items: center; font-family: var(--mono); font-size: 13px; font-weight: 500;
+  color: #fff; background: var(--grad);
+}
+/* The thread down the left, so the four read as one journey. */
+.lq-steps li::after {
+  content: ""; position: absolute; left: 15.5px; top: 38px; bottom: 6px; width: 1px; background: var(--line-2);
+}
+.lq-steps li:last-child { padding-bottom: 0; }
+.lq-steps li:last-child::after { display: none; }
+.lq-steps h3 { font-size: 17px; margin-bottom: 7px; }
+.lq-steps p { font-size: 14.5px; color: var(--slate); }
+
+/* A lead record as the app hands it back. */
+.lead-card {
+  background: var(--paper); border: 1px solid var(--line-2); border-radius: var(--r);
+  padding: 22px 24px; position: sticky; top: calc(var(--logo-h, 42px) + 54px);
+}
+.lead-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.lead-top strong { display: block; font-family: var(--display); font-size: 17px; }
+.lead-ph { font-family: var(--mono); font-size: 12.5px; color: var(--faint); }
+.pill-hot {
+  flex: none; font-family: var(--mono); font-size: 11.5px; font-weight: 500; letter-spacing: .04em;
+  color: #9F1239; background: #FFE4E6; border: 1px solid #FECDD3; padding: 4px 10px; border-radius: 999px;
+}
+.lead-meter { height: 5px; border-radius: 3px; background: var(--line); margin: 14px 0 18px; overflow: hidden; }
+.lead-meter span { display: block; height: 100%; background: var(--grad); }
+.lead-fields { margin: 0; display: flex; flex-direction: column; gap: 9px; }
+.lead-fields > div { display: flex; gap: 14px; align-items: baseline; }
+.lead-fields dt {
+  flex: 0 0 84px; font-family: var(--mono); font-size: 11px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--faint);
+}
+.lead-fields dd { margin: 0; font-size: 14.5px; }
+.lead-why {
+  margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line);
+  font-size: 13.5px; color: var(--slate); line-height: 1.6;
+}
+.lead-why span {
+  display: block; font-family: var(--mono); font-size: 11px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--v); margin-bottom: 5px;
+}
+.lead-foot { margin-top: 16px; font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
+
 /* ── pricing ─────────────────────────────────────────────────────────────── */
 .plans { display: grid; gap: 20px; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); }
 .plan { background: var(--card); border: 1px solid var(--line); border-radius: var(--r); padding: 28px; display: flex; flex-direction: column; }
@@ -299,6 +352,8 @@ p { margin: 0; }
 /* ── responsive ──────────────────────────────────────────────────────────── */
 @media (max-width: 940px) {
   .hero-in, .builder-in, .cta-in { grid-template-columns: 1fr; gap: 44px; }
+  .lq { grid-template-columns: 1fr; gap: 36px; }
+  .lead-card { position: static; }
   .grid { grid-template-columns: repeat(2, 1fr); }
   .steps { grid-template-columns: repeat(2, 1fr); row-gap: 34px; }
   .step:nth-child(2)::after { display: none; }
@@ -323,6 +378,8 @@ p { margin: 0; }
   .grid, .steps { grid-template-columns: 1fr; }
   .step::after { display: none; }
   .node-row { grid-template-columns: 1fr; }
+  .lead-fields > div { flex-direction: column; gap: 2px; }
+  .lead-fields dt { flex: none; }
   .hero { padding: 62px 0 74px; }
 }
 

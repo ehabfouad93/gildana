@@ -104,7 +104,7 @@ $features = [
      'Give it your price list, your policies, your FAQ. It answers from that and nothing else, chases the goals you set, captures what you asked for, and hands over to a human when it should.'],
     ['M3 3v18h18M7 15l4-4 3 3 5-6',
      'Lead scoring you can read',
-     'The qualifier pulls leads from a Google Sheet, sends the outreach, asks your questions, and grades every reply hot, warm or cold — with the whole conversation kept next to the score.'],
+     'Built for property developers: it works the sheet your ads fill, asks about budget, area and payment, and hands every lead back graded hot, warm or cold with the reason attached.'],
     ['M4 6h16M4 12h16M4 18h10M18 16v6M15 19h6',
      'A live inbox on your phone',
      'Every conversation in one thread list, replies from any device, push notifications when someone answers. Install it to your home screen and it behaves like an app.'],
@@ -144,6 +144,7 @@ $steps = [
       <a href="#what">What it does</a>
       <a href="#how">How it works</a>
       <a href="#channels">Your number</a>
+      <a href="#qualifier">Lead Qualifier</a>
       <?php if ($plans): ?><a href="#pricing">Pricing</a><?php endif; ?>
       <?php if ($faqs): ?><a href="#faq">FAQ</a><?php endif; ?>
     </nav>
@@ -201,7 +202,7 @@ $steps = [
   <div class="wrap strip-in">
     <div class="strip-i"><span class="k"><span class="grad">2</span></span><span class="l">ways to send — official API or your own number</span></div>
     <div class="strip-i"><span class="k"><span class="grad">22</span></span><span class="l">kinds of automation step</span></div>
-    <div class="strip-i"><span class="k"><span class="grad">0</span></span><span class="l">messages sent, and credits spent, when you test a flow</span></div>
+    <div class="strip-i"><span class="k"><span class="grad">5</span></span><span class="l">ready-made automations, installed in one click</span></div>
     <div class="strip-i"><span class="k"><span class="grad">24/7</span></span><span class="l">worker — campaigns keep sending after you close the tab</span></div>
   </div>
 </section>
@@ -339,6 +340,75 @@ $steps = [
   </div>
 </section>
 
+<!-- ── lead qualifier ────────────────────────────────────────────────────── -->
+<section class="section" id="qualifier" style="background:var(--card);border-block:1px solid var(--line)">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">Lead Qualifier</span>
+      <h2>Built for real estate. Your sales team only calls the ones worth calling.</h2>
+      <p>Ads fill a sheet with hundreds of numbers and nobody knows which twenty are serious.
+         This was built for exactly that problem, with property developers, and it has been
+         through the hands of several large real-estate companies. It reaches every lead on
+         WhatsApp, asks what your sales team would have asked, and hands them back sorted.</p>
+    </div>
+
+    <div class="lq">
+      <div>
+        <ol class="lq-steps">
+          <li>
+            <h3>It watches your sheet</h3>
+            <p>Point it at the Google Sheet your ads already fill. New rows are picked up on
+               their own, every few minutes. Local numbers get your country code added;
+               anyone already in the qualifier is never messaged twice.</p>
+          </li>
+          <li>
+            <h3>It opens the conversation</h3>
+            <p>An approved template on the official API, or a message you wrote if you are
+               sending from your own number — with the project image attached if you want one.</p>
+          </li>
+          <li>
+            <h3>The AI asks what you would ask</h3>
+            <p>Budget, area, unit type, cash or instalments, when they want to move. It
+               answers their questions too — from your price list and your project details
+               and nothing else — in your dialect, with the persona you set. It pursues the
+               goals you give it and pulls out the details you asked it to capture.</p>
+          </li>
+          <li>
+            <h3>Every lead comes back graded</h3>
+            <p>You write what makes a good lead; the AI scores the whole conversation against
+               it and marks each one <strong>hot</strong>, <strong>warm</strong> or
+               <strong>cold</strong> at the thresholds you choose. The score, the reason and
+               the full conversation sit together — and can be written straight back out to a
+               sheet your team already works from.</p>
+          </li>
+        </ol>
+      </div>
+
+      <!-- A lead as it actually comes back, not an illustration of one. -->
+      <aside class="lead-card" aria-hidden="true">
+        <div class="lead-top">
+          <div>
+            <strong>Mona Adel</strong>
+            <span class="lead-ph">+20 100 000 0000</span>
+          </div>
+          <span class="pill-hot">HOT · 82</span>
+        </div>
+        <div class="lead-meter"><span style="width:82%"></span></div>
+        <dl class="lead-fields">
+          <div><dt>Budget</dt><dd>6–7M EGP</dd></div>
+          <div><dt>Area</dt><dd>New Cairo, Fifth Settlement</dd></div>
+          <div><dt>Unit</dt><dd>3-bed apartment</dd></div>
+          <div><dt>Payment</dt><dd>Instalments, 8 years</dd></div>
+          <div><dt>Timing</dt><dd>Within 3 months</dd></div>
+        </dl>
+        <p class="lead-why"><span>Why hot</span> Budget matches the project, ready to pay in
+          instalments, asked twice about delivery date, and requested a site visit.</p>
+        <div class="lead-foot">Qualified in 6 messages · no one from your team involved</div>
+      </aside>
+    </div>
+  </div>
+</section>
+
 <?php if ($plans): ?>
 <!-- ── pricing: whatever the operator has switched on in Admin → Plans ───── -->
 <section class="section" id="pricing" style="background:var(--card);border-block:1px solid var(--line)">
@@ -470,6 +540,7 @@ $steps = [
       <nav class="foot-links">
         <a href="#what">What it does</a>
         <a href="#how">How it works</a>
+        <a href="#qualifier">Lead Qualifier</a>
         <?php if ($plans): ?><a href="#pricing">Pricing</a><?php endif; ?>
         <?php if ($faqs): ?><a href="#faq">FAQ</a><?php endif; ?>
         <a href="#access">Get started</a>
