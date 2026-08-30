@@ -107,6 +107,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($action === 'save_logo_height') {
         setting_set('logo_height', (string) max(20, min(120, (int) ($_POST['logo_height'] ?? 40))));
+        setting_set('site_logo_height', (string) max(20, min(120, (int) ($_POST['site_logo_height'] ?? 42))));
         flash('Logo size updated.');
         redirect('settings.php#branding');
     }
@@ -159,15 +160,25 @@ if ($ok):  ?><div class="alert success"><?= e($ok) ?></div><?php endif; ?>
 
   <form method="post" style="margin-bottom:18px">
     <?= csrf_field() ?><input type="hidden" name="action" value="save_logo_height">
-    <div class="field" style="max-width:320px"><span class="lbl">Logo height in the top bar</span>
-      <div style="display:flex;gap:8px;align-items:center">
-        <input type="number" name="logo_height" min="20" max="120" value="<?= (int) brand_logo_height() ?>" style="max-width:110px">
-        <span class="text-muted" style="font-size:12px">px</span>
-        <button class="btn btn-ghost btn-sm">Apply</button>
+    <div class="grid2">
+      <div class="field"><span class="lbl">Logo height in the top bar</span>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="number" name="logo_height" min="20" max="120" value="<?= (int) brand_logo_height() ?>" style="max-width:110px">
+          <span class="text-muted" style="font-size:12px">px</span>
+        </div>
+        <span class="text-muted" style="font-size:11.5px">Inside the dashboard. The bar grows to fit, so a tall
+          logo won't be cropped. A wide wordmark reads well around 30–40; a square or stacked mark usually needs 60–80.</span>
       </div>
-      <span class="text-muted" style="font-size:11.5px">The bar grows to fit, so a tall logo won't be cropped.
-        A wide wordmark reads well around 30–40; a square or stacked mark usually needs 60–80.</span>
+      <div class="field"><span class="lbl">Logo height on the landing page</span>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="number" name="site_logo_height" min="20" max="120" value="<?= (int) site_logo_height() ?>" style="max-width:110px">
+          <span class="text-muted" style="font-size:12px">px</span>
+        </div>
+        <span class="text-muted" style="font-size:11.5px">The public page at your address — the first thing a
+          visitor sees, so it usually wants to be bigger than the app's. Default 42. The footer follows at 80% of it.</span>
+      </div>
     </div>
+    <button class="btn btn-ghost btn-sm">Apply</button>
   </form>
   <?php
     $slots = [

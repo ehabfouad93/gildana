@@ -69,6 +69,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'acces
 $appName = brand_name();
 $faqs    = faq_live();
 
+// Admin → Settings → Branding. Passed to CSS as a variable so one number drives the tag,
+// the bar height, the footer and the scroll offset together.
+$logoH = site_logo_height();
+$footH = max(20, (int) round($logoH * 0.8));
+
 // Only plans the operator has switched on. Empty is a valid answer: the section disappears.
 try {
     $plans = db_all("SELECT * FROM plans WHERE is_active=1 ORDER BY sort, price_month");
@@ -129,12 +134,12 @@ $steps = [
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="assets/site.css?v=<?= @filemtime(__DIR__ . '/assets/site.css') ?: '1' ?>">
 </head>
-<body>
+<body style="--logo-h:<?= $logoH ?>px;--foot-logo-h:<?= $footH ?>px">
 
 <!-- ── nav ───────────────────────────────────────────────────────────────── -->
 <header class="nav">
   <div class="wrap nav-in">
-    <a class="nav-logo" href="#top" aria-label="<?= e($appName) ?>"><?= brand_logo('full', 42, './', false) ?></a>
+    <a class="nav-logo" href="#top" aria-label="<?= e($appName) ?>"><?= brand_logo('full', $logoH, './', false) ?></a>
     <nav class="nav-links" id="nav-links">
       <a href="#what">What it does</a>
       <a href="#how">How it works</a>
@@ -196,7 +201,7 @@ $steps = [
   <div class="wrap strip-in">
     <div class="strip-i"><span class="k"><span class="grad">2</span></span><span class="l">ways to send — official API or your own number</span></div>
     <div class="strip-i"><span class="k"><span class="grad">22</span></span><span class="l">kinds of automation step</span></div>
-    <div class="strip-i"><span class="k"><span class="grad">0</span></span><span class="l">messages sent while you preview a flow</span></div>
+    <div class="strip-i"><span class="k"><span class="grad">0</span></span><span class="l">messages sent, and credits spent, when you test a flow</span></div>
     <div class="strip-i"><span class="k"><span class="grad">24/7</span></span><span class="l">worker — campaigns keep sending after you close the tab</span></div>
   </div>
 </section>
@@ -461,7 +466,7 @@ $steps = [
 <footer class="foot">
   <div class="wrap">
     <div class="foot-in">
-      <div style="color:#fff"><?= brand_logo('full', 34, './', true) ?></div>
+      <div style="color:#fff"><?= brand_logo('full', $footH, './', true) ?></div>
       <nav class="foot-links">
         <a href="#what">What it does</a>
         <a href="#how">How it works</a>

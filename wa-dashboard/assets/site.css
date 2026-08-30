@@ -39,7 +39,7 @@
 }
 
 * { box-sizing: border-box; }
-html { scroll-behavior: smooth; scroll-padding-top: 96px; }
+html { scroll-behavior: smooth; scroll-padding-top: calc(var(--logo-h, 42px) + 54px); }
 body {
   margin: 0; background: var(--paper); color: var(--text);
   font-family: var(--body); font-size: 16px; line-height: 1.65;
@@ -87,13 +87,16 @@ p { margin: 0; }
   background: rgba(247,248,251,.82); backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--line);
 }
-.nav-in { display: flex; align-items: center; gap: 28px; height: 80px; }
+/* --logo-h comes from Admin → Settings → Branding, set on <body> by index.php. The bar is
+   sized from it rather than fixed, so a tall logo makes the bar taller instead of being
+   cropped — the same promise the dashboard's own logo-height setting makes. */
+.nav-in { display: flex; align-items: center; gap: 28px;
+          min-height: calc(var(--logo-h, 42px) + 38px); padding: 8px 0; }
 .nav-logo { display: flex; align-items: center; text-decoration: none; margin-right: auto; }
-/* The mark is a small part of a wide wordmark, so a height that looks generous as a number
-   still reads as tiny on screen. Set it here as well as on the tag, so a custom uploaded
-   logo of any proportion lands at the same optical size as the built-in one. */
-.nav-logo svg, .nav-logo img { height: 42px; width: auto; display: block; }
-.foot svg, .foot img { height: 34px; width: auto; display: block; }
+/* Set here as well as on the tag, so a custom uploaded logo of any proportion lands at the
+   same optical size as the built-in one. */
+.nav-logo svg, .nav-logo img { height: var(--logo-h, 42px); width: auto; display: block; }
+.foot svg, .foot img { height: var(--foot-logo-h, 34px); width: auto; display: block; }
 .nav-links { display: flex; gap: 26px; }
 .nav-links a { font-size: 14.5px; font-weight: 500; color: var(--slate); text-decoration: none; }
 .nav-links a:hover { color: var(--v); }
@@ -306,13 +309,16 @@ p { margin: 0; }
   .section { padding: 68px 0; }
   .nav-links { display: none; }
   .nav-links.open {
-    display: flex; flex-direction: column; gap: 0; position: absolute; top: 72px; left: 0; right: 0;
+    display: flex; flex-direction: column; gap: 0; position: absolute;
+    top: calc(var(--logo-h, 42px) * .8 + 30px); left: 0; right: 0;
     background: var(--paper); border-bottom: 1px solid var(--line); padding: 8px 24px 18px;
   }
   .nav-links.open a { padding: 12px 0; border-bottom: 1px solid var(--line); }
   .nav-burger { display: block; }
-  .nav-in { height: 72px; gap: 12px; }
-  .nav-logo svg, .nav-logo img { height: 34px; }
+  /* The bar also carries a burger and a button here, so the logo steps down proportionally
+     rather than to a fixed size — an operator who picked 90px still gets 72 on a phone. */
+  .nav-in { min-height: calc(var(--logo-h, 42px) * .8 + 30px); gap: 12px; }
+  .nav-logo svg, .nav-logo img { height: calc(var(--logo-h, 42px) * .8); }
   .nav-cta .signin { display: none; }
   .grid, .steps { grid-template-columns: 1fr; }
   .step::after { display: none; }

@@ -88,6 +88,27 @@ function brand_logo_svg(string $variant = 'full', int $h = 28): string
          . '<title>' . BRAND_NAME . '</title>' . $grad . $mark . $word . '</svg>';
 }
 
+/**
+ * Height of the logo on the public landing page, in px.
+ *
+ * Separate from the top bar's logo_height (includes/view.php) on purpose: the two sit on
+ * different grounds at different sizes, and artwork that reads well in a 56px app bar is
+ * usually too small at the head of a marketing page. Tying them together would mean
+ * every fix to one broke the other.
+ *
+ * Lives here rather than in view.php because the landing page never loads view.php —
+ * exactly the trap the top bar's own setting fell into once already.
+ */
+function site_logo_height(): int
+{
+    static $h = null;
+    if ($h === null) {
+        try { $h = (int) db_val("SELECT v FROM app_settings WHERE k='site_logo_height'"); }
+        catch (Throwable $e) { $h = 0; }
+    }
+    return $h > 0 ? max(20, min(120, $h)) : 42;
+}
+
 /* ─────────────────────────────────────────────
    Custom artwork
    Files dropped in assets/brand/ override the built-in SVG above. They can arrive either
