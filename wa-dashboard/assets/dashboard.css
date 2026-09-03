@@ -646,3 +646,53 @@ body.canvas-focus { overflow: hidden; }
 .login-back { text-align: center; margin: 16px 0 0; font-size: 13px; }
 .login-back a { color: var(--muted); text-decoration: none; }
 .login-back a:hover { color: var(--brand); }
+
+/* ── Contact tags and bulk selection ──────────────────────────────────────────────
+   Tags are a comma-separated column, written by the automation tag step and by hand from
+   Contacts. These render them as chips, and give the table the selection chrome the bulk
+   actions need. */
+.tag-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; line-height: 1; padding: 4px 9px; border-radius: 999px;
+  background: var(--brand-tint); color: var(--brand); border: 1px solid transparent;
+  white-space: nowrap; margin: 2px 4px 2px 0; text-decoration: none;
+}
+.tag-chip.more { background: var(--chip, #EEF0F5); color: var(--muted); cursor: default; }
+.tag-chip span { font-size: 10.5px; opacity: .7; font-variant-numeric: tabular-nums; }
+/* The filter variant is a control, so it reads as one until it is the chosen one. */
+.tag-chip.filt { background: 0; border-color: var(--line-strong); color: var(--text); cursor: pointer; font-size: 12px; padding: 5px 11px; }
+.tag-chip.filt:hover { border-color: var(--brand); color: var(--brand); }
+.tag-chip.filt.on { background: var(--brand); border-color: var(--brand); color: #fff; }
+.tag-chip.filt.on span { opacity: .85; }
+.tags-cell { max-width: 240px; }
+
+.c-toolbar { padding: 14px 18px; display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.c-search { display: flex; gap: 8px; max-width: 360px; width: 100%; }
+.c-tags { padding: 0 18px 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 2px; }
+.c-sep { width: 1px; height: 18px; background: var(--line-strong); margin: 0 8px; }
+
+/* Only ever on screen when something is selected. */
+.bulkbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 12px 18px; background: var(--brand-tint); border-block: 1px solid var(--line);
+  font-size: 13px;
+}
+.bulkbar .grow { flex: 1; }
+.bulkbar .btn.danger { color: var(--danger); border-color: rgba(185,28,28,.28); }
+.bulkbar .btn.danger:hover { background: var(--danger-bg); }
+.bulkbar[hidden] { display: none; }
+
+td.ck, th.ck { width: 34px; text-align: center; }
+td.ck input, th.ck input { width: auto; margin: 0; cursor: pointer; }
+
+.tag-add { display: flex; flex-wrap: wrap; gap: 2px; margin-bottom: 12px; }
+.tag-optin { display: flex; gap: 8px; align-items: baseline; font-weight: normal; font-size: 13px; flex-wrap: wrap; }
+.tag-optin input { width: auto; }
+.tag-optin .text-muted { font-size: 12px; }
+
+@media (max-width: 700px) {
+  .bulkbar { position: sticky; bottom: 0; z-index: 30; background: var(--surface);
+             border-top: 1px solid var(--line-strong); box-shadow: 0 -6px 18px rgba(13,19,33,.08); }
+  .bulkbar .btn { flex: 1 0 auto; }
+  .tags-cell { max-width: 160px; }
+}

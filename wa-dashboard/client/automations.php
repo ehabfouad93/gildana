@@ -28,8 +28,10 @@ $err = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'create') {
     verify_csrf();
     $name    = trim((string) ($_POST['name'] ?? ''));
+    // Must match the editor's own list (automation_edit.php), or a trigger you can choose
+    // here would be silently rewritten the moment the flow opens.
     $trigger = (string) ($_POST['trigger_type'] ?? 'keyword');
-    if (!in_array($trigger, ['keyword', 'welcome'], true)) $trigger = 'keyword';
+    if (!in_array($trigger, ['keyword', 'welcome', 'default', 'google_sheet'], true)) $trigger = 'keyword';
     if ($name === '') $err = 'Enter an automation name.';
     else {
         $newId = db_insert(
@@ -161,8 +163,13 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
       <select name="trigger_type">
         <option value="keyword">Keyword reply</option>
         <option value="welcome">Welcome (first message)</option>
+        <option value="default">Default reply (nothing else matched)</option>
+        <option value="google_sheet">New row in a Google Sheet</option>
       </select>
-      <div class="hint">For AI lead scoring from a Google Sheet, use the <strong>Lead Qualifier</strong> section instead.</div>
+      <div class="hint">All four can be changed later in the editor. Keywords, the sheet to watch and
+        the rest of the settings are set there once the flow opens.<br>
+        For AI lead <em>scoring</em> from a sheet, the <strong>Lead Qualifier</strong> section is the
+        better fit — this one runs a flow you build yourself.</div>
     </div>
     <div class="modal-actions">
       <button type="button" class="btn btn-ghost" onclick="document.getElementById('m-new').classList.remove('open')">Cancel</button>

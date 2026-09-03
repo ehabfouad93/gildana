@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/_init.php';
+require_once __DIR__ . '/../includes/contacts.php';
 
 $cid = (int) $CLIENT['id'];
 
@@ -24,6 +25,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['ajax'])) {
         db_run("DELETE FROM contact_list_members WHERE list_id=? AND contact_id=?", [$lid, (int) ($_POST['contact_id'] ?? 0)]);
         json_out(['ok' => true]);
     }
+    if ($a === 'add_by_tag') {
+        // Everyone carrying a tag, in one action. Opted-out contacts are included or not by
+        // the same switch the "all opted-in" button implies, so the two behave alike.
+        $tag = trim((string) ($_POST['tag'] ?? ''));
+        if ($tag === '') json_out(['ok' => false, 'error' => 'Choose a tag.']);
+        $onlyIn = ($_POST['only_optin'] ?? '1') === '1';
+        $sql = "INSERT IGNORE INTO contact_list_members (list_id, contact_id)
+                SELECT ?, id FROM contacts WHERE client_id=? AND FIND_IN_SET(?, tags)";
+        $args = [$lid, $cid, $tag];
+        if ($onlyIn) $sql .= " AND opt_in_status='in'";
+        $n = db_run($sql, $args);
+        json_out(['ok' => true, 'added' => $n,
+                  'msg' => $n . ' contact(s) tagged “' . $tag . '” added.'
+                         . ($n === 0 ? ' They were all in the list already.' : '')]);
+    }
     if ($a === 'add_all_optin') {
         $n = db_run(
             "INSERT IGNORE INTO contact_list_members (list_id, contact_id)
@@ -40,10 +56,22 @@ $err = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'create_list') {
     verify_csrf();
     $name = trim((string) ($_POST['name'] ?? ''));
+    $fromTag = trim((string) ($_POST['from_tag'] ?? ''));
+    // Naming it after the tag is what people mean nine times in ten, so offer it for free.
+    if ($name === '' && $fromTag !== '') $name = $fromTag;
     if ($name === '') $err = 'Enter a list name.';
     else {
         $newId = db_insert("INSERT INTO contact_lists (client_id,name,created_at) VALUES (?,?,NOW())", [$cid, $name]);
-        flash('List created.');
+        if ($fromTag !== '') {
+            $sql = "INSERT IGNORE INTO contact_list_members (list_id, contact_id)
+                    SELECT ?, id FROM contacts WHERE client_id=? AND FIND_IN_SET(?, tags)";
+            $args = [$newId, $cid, $fromTag];
+            if (($_POST['only_optin'] ?? '1') === '1') $sql .= " AND opt_in_status='in'";
+            $n = db_run($sql, $args);
+            flash('List created with ' . $n . ' contact(s) tagged “' . $fromTag . '”.');
+        } else {
+            flash('List created.');
+        }
         redirect('lists.php?id=' . $newId);
     }
 }
@@ -66,6 +94,7 @@ if ($detailId) {
           WHERE m.list_id=? ORDER BY c.id DESC LIMIT 500", [$detailId]
     );
     $memberCount = (int) db_val("SELECT COUNT(*) FROM contact_list_members WHERE list_id=?", [$detailId]);
+    $allTags = contact_tags($cid);
 
     client_header('List · ' . $list['name'], 'lists', $CLIENT);
     ?>
@@ -77,8 +106,27 @@ if ($detailId) {
       </div>
     </div>
 
+    <?php if ($allTags): ?>
     <div class="card">
-      <h2>Add contacts</h2>
+      <h2>Add everyone with a tag</h2>
+      <p class="text-muted" style="font-size:12.5px;margin:-6px 0 12px">
+        The fastest way to fill a list: pick a tag and everyone carrying it joins in one go.
+        Anyone already in the list is skipped, so you can run it again as more get tagged.</p>
+      <div class="tag-add">
+        <?php foreach ($allTags as $t): ?>
+          <button type="button" class="tag-chip filt" onclick="addByTag(<?= e(json_encode($t['tag'])) ?>, <?= (int) $t['n'] ?>)">
+            <?= e($t['tag']) ?> <span><?= (int) $t['n'] ?></span></button>
+        <?php endforeach; ?>
+      </div>
+      <label class="tag-optin">
+        <input type="checkbox" id="only-optin" checked> Opted-in contacts only
+        <span class="text-muted">— leave this on unless you have a reason not to; opted-out contacts are never messaged anyway.</span>
+      </label>
+    </div>
+    <?php endif; ?>
+
+    <div class="card">
+      <h2>Add contacts one at a time</h2>
       <input type="search" id="search" placeholder="Search contacts to add…" oninput="searchContacts(this.value)">
       <div id="search-results" class="mt10"></div>
     </div>
@@ -135,6 +183,14 @@ if ($detailId) {
       if(d.ok){ document.getElementById('m-'+id)?.remove(); showToast('Removed.'); }
       else showToast('Could not remove.',true);
     }
+    async function addByTag(tag, n){
+      const onlyIn = document.getElementById('only-optin').checked;
+      if(!confirm('Add everyone tagged “'+tag+'” to this list?\n\n'+n+' contact(s) carry it'
+                  + (onlyIn ? ', opted-in ones only.' : ', including opted-out ones.'))) return;
+      const d = await post({action:'add_by_tag', tag: tag, only_optin: onlyIn ? '1' : '0'});
+      if(d.ok){ showToast(d.msg); setTimeout(()=>location.reload(),800); }
+      else showToast(d.error||'Could not add.',true);
+    }
     async function addAll(){
       if(!confirm('Add ALL opted-in contacts to this list?')) return;
       const d=await post({action:'add_all_optin'});
@@ -148,6 +204,7 @@ if ($detailId) {
 }
 
 /* ══ INDEX VIEW ══ */
+$allTags = contact_tags($cid);
 $lists = db_all(
     "SELECT l.*, (SELECT COUNT(*) FROM contact_list_members m WHERE m.list_id=l.id) AS members
        FROM contact_lists l WHERE l.client_id=? ORDER BY l.id DESC", [$cid]
@@ -184,16 +241,42 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 </div>
 
 <div class="modal-back" id="m-new">
-  <form class="modal" method="post">
+  <form class="modal" method="post" onsubmit="return nlCheck()">
     <?= csrf_field() ?>
     <input type="hidden" name="action" value="create_list">
     <h2>New List</h2>
-    <div class="field"><span class="lbl">List Name</span><input type="text" name="name" placeholder="e.g. VIP customers" required></div>
+    <div class="field"><span class="lbl">List Name</span>
+      <input type="text" name="name" id="nl-name" placeholder="e.g. VIP customers">
+      <div class="hint">Leave it blank when you pick a tag below and the list takes the tag's name.</div>
+    </div>
+    <?php if ($allTags): ?>
+      <div class="field"><span class="lbl">Fill it from a tag <span class="text-muted">(optional)</span></span>
+        <select name="from_tag" id="nl-tag">
+          <option value="">— start empty —</option>
+          <?php foreach ($allTags as $t): ?>
+            <option value="<?= e($t['tag']) ?>"><?= e($t['tag']) ?> · <?= (int) $t['n'] ?> contact<?= $t['n'] === 1 ? '' : 's' ?></option>
+          <?php endforeach; ?>
+        </select>
+        <div class="hint">Everyone carrying the tag joins the moment the list is created. You can add
+          more later, and re-run it from the list itself as more get tagged.</div>
+      </div>
+      <label class="tag-optin"><input type="checkbox" name="only_optin" value="1" checked> Opted-in contacts only</label>
+    <?php endif; ?>
     <div class="modal-actions">
       <button type="button" class="btn btn-ghost" onclick="document.getElementById('m-new').classList.remove('open')">Cancel</button>
       <button type="submit" class="btn btn-primary">Create</button>
     </div>
   </form>
 </div>
+
+<script>
+/* A list needs a name OR a tag to take its name from — the server enforces the same rule. */
+function nlCheck(){
+  const n = document.getElementById('nl-name').value.trim();
+  const t = document.getElementById('nl-tag');
+  if (n === '' && (!t || t.value === '')) { showToast('Name the list, or pick a tag to name it after.', true); return false; }
+  return true;
+}
+</script>
 
 <?php layout_footer(); ?>
