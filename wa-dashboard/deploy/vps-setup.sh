@@ -143,8 +143,13 @@ chown -R www-data:www-data "$APP_DIR"
 find "$APP_DIR" -type d -exec chmod 755 {} \;
 find "$APP_DIR" -type f -exec chmod 644 {} \;
 chmod 640 "$APP_DIR/config.php"              # secrets: not world-readable
-mkdir -p "$APP_DIR/uploads" "$APP_DIR/assets/brand" "$APP_DIR/cron"
-chmod 775 "$APP_DIR/uploads" "$APP_DIR/assets/brand" "$APP_DIR/cron"
+# Every directory the app writes to at runtime. Miss one and the feature that writes there
+# fails with a permissions error the first time someone tries to use it, which is a bad way
+# to find out — assets/media (walkthrough videos) was added and forgotten exactly once.
+WRITABLE="$APP_DIR/uploads $APP_DIR/assets/brand $APP_DIR/assets/media $APP_DIR/cron"
+mkdir -p $WRITABLE
+chown -R www-data:www-data $WRITABLE
+chmod 775 $WRITABLE
 ok "owner www-data, config.php 640"
 
 # ── 6. nginx ─────────────────────────────────────────────────────────────────────

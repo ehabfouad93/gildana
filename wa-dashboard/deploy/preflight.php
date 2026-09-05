@@ -165,6 +165,55 @@ if (!is_file($rhta) || !str_contains((string) file_get_contents($rhta), '^\\.'))
         'Add a <FilesMatch "^\\."> Require all denied block to .htaccess.');
 }
 
+/* ── 9. Directories the app writes to ──
+   Every one of these is written at runtime by a feature a person will eventually click. A
+   missing chmod is invisible until then, and the first sign of it is a customer telling you
+   an upload does not work — which is how assets/media was found, after it had shipped.
+
+   is_writable() is NOT enough here. This script is normally run as root (docker exec), and
+   root can write to a directory nobody else can, so is_writable() answers a question we did
+   not ask: it says "root can write", when what matters is "can the PHP process write". So
+   when running as root the mode and owner are judged directly instead. */
+$writable = [
+    'uploads'      => 'Contact CSVs and campaign media',
+    'assets/brand' => 'The uploaded logo and app icon',
+    'assets/media' => 'Walkthrough videos for Help and the landing page',
+    'cron'         => 'The worker heartbeat',
+];
+$amRoot  = function_exists('posix_geteuid') && posix_geteuid() === 0;
+$badDirs = [];
+$owners  = [];
+foreach ($writable as $rel => $what) {
+    $abs = dirname(__DIR__) . '/' . $rel;
+    if (!is_dir($abs)) { $badDirs[] = "$rel (missing)"; continue; }
+
+    $mode  = fileperms($abs) & 0777;
+    $uid   = fileowner($abs);
+    $owner = function_exists('posix_getpwuid') ? (posix_getpwuid($uid)['name'] ?? (string) $uid) : (string) $uid;
+    $owners[] = sprintf('%s %o %s', $rel, $mode, $owner);
+
+    if ($amRoot) {
+        // The PHP process is not root. It can only write here as the owner or via the group,
+        // so a root-owned directory with no group write bit will fail for it however much
+        // is_writable() reassures us.
+        $ownerWrites = ($mode & 0200) && $owner !== 'root';
+        $groupWrites = (bool) ($mode & 0020);
+        if (!$ownerWrites && !$groupWrites) {
+            $badDirs[] = sprintf('%s (mode %o, owned by %s)', $rel, $mode, $owner);
+        }
+    } elseif (!is_writable($abs)) {
+        $badDirs[] = "$rel (not writable)";
+    }
+}
+if ($badDirs) {
+    $add('fail', 'Some directories the app writes to are not usable',
+        implode(', ', $badDirs) . ' — the features that write there will fail when someone uses them.',
+        'chown -R www-data:www-data and chmod 775 on each. deploy/vps-setup.sh does all of them.');
+} else {
+    $add('ok', 'Writable directories are in place',
+        implode(' · ', $owners) . ($amRoot ? '  (checked by mode and owner: this ran as root)' : ''));
+}
+
 /* ── 9. Setup lock ── */
 if (is_file(dirname(__DIR__) . '/.setup_complete')) {
     $add('ok', 'First-run setup is locked', 'setup.php will not create another admin.');
