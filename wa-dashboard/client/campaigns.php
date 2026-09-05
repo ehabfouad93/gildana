@@ -77,6 +77,10 @@ page_head('Campaigns', $actions);
           </td>
           <td style="text-align:right;white-space:nowrap">
             <a class="btn btn-ghost btn-sm" href="report.php?id=<?= (int) $c['id'] ?>">Report</a>
+            <?php /* Opens the new-campaign form filled in, rather than queueing a send behind
+                      a single click — the audience and timing deserve a second look. */ ?>
+            <a class="btn btn-ghost btn-sm" href="campaign_new.php?copy=<?= (int) $c['id'] ?>"
+               title="Send this again — opens a copy you can check first">Duplicate</a>
             <?php if (in_array($c['status'], ['sending', 'scheduled'], true)): ?>
               <button class="btn-link" onclick="act('pause',<?= (int) $c['id'] ?>)">Pause</button>
             <?php elseif ($c['status'] === 'paused'): ?>

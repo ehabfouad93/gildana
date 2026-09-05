@@ -18,7 +18,38 @@ client_header('Dashboard', 'dashboard', $CLIENT);
 page_head('Welcome, ' . $CLIENT['name']);
 
 if (!client_ready($CLIENT)): ?>
-  <div class="alert info">Your WhatsApp number isn't connected yet. Gildana needs to add your API credentials before you can send campaigns.</div>
+  <div class="alert info"><?= channel_is_personal($CLIENT)
+      ? 'Your WhatsApp number isn\'t linked yet. Go to <strong>Settings → My WhatsApp Number</strong> and scan the QR code to start sending.'
+      : 'Your WhatsApp number isn\'t connected yet. ' . e(BRAND_PARENT) . ' needs to add your API credentials before you can send campaigns.' ?></div>
+<?php endif; ?>
+
+<?php
+/* The first-run walkthrough, answered from real data rather than a list someone ticks by
+   hand. It disappears the moment everything is done — a checklist of six ticks is clutter. */
+$gs = guide_checklist($CLIENT);
+if ($gs['done'] < $gs['total']): ?>
+  <div class="card">
+    <div class="gs-head">
+      <h2 style="margin:0;border:0;padding:0">Getting started</h2>
+      <span class="gs-count"><?= $gs['done'] ?> of <?= $gs['total'] ?> done</span>
+    </div>
+    <p class="text-muted" style="font-size:12.5px;margin:0">
+      In this order, and each one takes a few minutes. This card goes away once you are set up.
+    </p>
+    <div class="gs-bar"><span style="width:<?= (int) round(100 * $gs['done'] / max(1, $gs['total'])) ?>%"></span></div>
+    <div class="gs-list">
+      <?php foreach ($gs['items'] as $i): ?>
+        <div class="gs-item <?= $i['done'] ? 'done' : '' ?>">
+          <span class="gs-tick" aria-hidden="true">✓</span>
+          <span class="gs-text">
+            <b><?= e($i['label']) ?></b>
+            <span><?= e($i['help']) ?></span>
+          </span>
+          <a class="btn btn-ghost btn-sm" href="<?= e($i['url']) ?>"><?= e($i['cta']) ?></a>
+        </div>
+      <?php endforeach; ?>
+    </div>
+  </div>
 <?php endif; ?>
 
 <div class="stats-row">

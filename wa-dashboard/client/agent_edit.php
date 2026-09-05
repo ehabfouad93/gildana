@@ -98,6 +98,7 @@ client_header('Agent · ' . $flow['name'], 'agents', $CLIENT);
 ?>
 <div class="page-head"><h1><?= e((string) $flow['name']) ?></h1>
   <div class="page-actions">
+    <?= guide_button('agents') ?>
     <a class="btn btn-ghost btn-sm" href="agents.php">← All</a>
     <a class="btn btn-ghost btn-sm" href="agent_chats.php?flow=<?= $id ?>">Chats →</a>
   </div>

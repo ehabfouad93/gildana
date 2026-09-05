@@ -2,6 +2,8 @@
 declare(strict_types=1);
 require __DIR__ . '/_init.php';
 require __DIR__ . '/../includes/ai.php';
+require_once __DIR__ . '/../includes/push.php';
+require_once __DIR__ . '/../includes/channel.php';
 
 $cid = (int) $CLIENT['id'];
 
@@ -32,11 +34,51 @@ $add = function (string $state, string $title, string $detail, string $fix = '')
     $checks[] = compact('state', 'title', 'detail', 'fix');
 };
 
-// 1. WhatsApp credentials
-if ($CLIENT['access_token_enc'] && $CLIENT['phone_number_id']) {
+/* 0. Webhook signing. Only meaningful on the Cloud API — a personal number's inbound
+      comes through the gateway, which has its own secret. */
+if (!channel_is_personal($CLIENT)) {
+    if (empty($CLIENT['app_secret_enc'])) {
+        $add('fail', 'Incoming messages are not verified',
+            'Without your App Secret we cannot prove a callback really came from WhatsApp, '
+          . 'so anyone who finds your webhook address could forge delivery reports or trigger your automations.',
+            'Ask your administrator to add your Meta App Secret (Meta app → Settings → Basic) to your account.');
+    } elseif (empty($CLIENT['require_signed_webhook'])) {
+        $add('warn', 'Message verification is not enforced yet',
+            'Your App Secret is saved and every callback is being checked against it, but unsigned ones are still accepted.',
+            'Ask your administrator to switch on "Reject callbacks that aren\'t correctly signed".');
+    } else {
+        $add('ok', 'Incoming messages are verified',
+            'Every callback is checked against your Meta App Secret, and unsigned ones are rejected.', '');
+    }
+}
+
+// 1. WhatsApp connection — depends on which channel this account sends through.
+if (channel_is_personal($CLIENT)) {
+    $st = (string) ($CLIENT['personal_status'] ?? 'disconnected');
+    if ($st === 'connected') {
+        $num = $CLIENT['personal_msisdn'] ? ' (+' . $CLIENT['personal_msisdn'] . ')' : '';
+        $add('ok', 'Your WhatsApp number is linked', 'Sending from your own number' . $num . '.', '');
+    } else {
+        $add('fail', 'Your WhatsApp number is not linked',
+            'Nothing can send until you scan the QR code.',
+            'Go to Settings → My WhatsApp Number and tap "Connect my WhatsApp".');
+    }
+    // Pacing: explain the current state rather than showing it as a problem.
+    $size  = (int) ($CLIENT['slot_size'] ?: 15);
+    $pause = (int) ($CLIENT['slot_pause_sec'] ?: 180);
+    if (slot_cooling($CLIENT)) {
+        $wait = max(0, strtotime((string) $CLIENT['next_slot_at']) - time());
+        $add('warn', 'Sending is paused between batches',
+            "Waiting {$wait}s before the next batch of {$size}.",
+            'This is normal — it protects your number from being banned for sending too fast.');
+    } else {
+        $add('ok', 'Sending pace',
+            "Up to {$size} messages at a time, then a " . round($pause / 60, 1) . " minute pause.", '');
+    }
+} elseif ($CLIENT['access_token_enc'] && $CLIENT['phone_number_id']) {
     $add('ok', 'WhatsApp connected', 'Phone Number ID + access token are set.', '');
 } else {
-    $add('fail', 'WhatsApp not connected', 'Missing phone number ID or access token — nothing can send.', 'Contact Gildana to add your WhatsApp API credentials.');
+    $add('fail', 'WhatsApp not connected', 'Missing phone number ID or access token — nothing can send.', 'Contact support to add your WhatsApp API credentials.');
 }
 
 // 2. Credits
@@ -50,14 +92,40 @@ if ($CLIENT['ai_provider'] && $CLIENT['ai_api_key_enc']) {
     $add('warn', 'AI engine not set', 'AI branch and lead scoring won\'t work without a key.', 'Settings → AI Engine → add your Claude/OpenAI key.');
 }
 
-// 4. Webhook receiving (global signal — any client's inbound proves Meta reaches webhook.php)
-$lastWh = db_val("SELECT MAX(received_at) FROM webhook_events");
-if ($lastWh) {
-    $mins = (int) round((time() - strtotime((string) $lastWh)) / 60);
+// 4. Inbound receiving — scoped to THIS client's own messages, not a global signal, so it
+//    actually tells a personal-channel client whether their replies are arriving.
+$lastIn = db_val("SELECT MAX(created_at) FROM messages WHERE client_id=? AND direction='in'", [$cid]);
+if (channel_is_personal($CLIENT)) {
+    if ($lastIn) {
+        $mins = (int) round((time() - strtotime((string) $lastIn)) / 60);
+        $add('ok', 'Receiving replies', 'Your last inbound message arrived ' . ($mins <= 1 ? 'just now' : $mins . ' min ago') . '.', '');
+    } elseif (($CLIENT['personal_status'] ?? '') === 'connected') {
+        $add('warn', 'No inbound messages yet',
+            'Your number is linked but no reply has come in yet — either nobody has messaged it, or the gateway\'s webhook needs resyncing.',
+            'Ask a friend to message your number as a test, or use "Resync connection" in Settings → My WhatsApp Number.');
+    } else {
+        $add('warn', 'Not linked yet', 'Nothing can arrive until you connect your number.', 'Go to Settings → My WhatsApp Number.');
+    }
+} elseif ($lastIn) {
+    $mins = (int) round((time() - strtotime((string) $lastIn)) / 60);
     $add('ok', 'Webhook receiving', 'Meta last reached your webhook ' . ($mins <= 1 ? 'just now' : $mins . ' min ago') . '.', '');
 } else {
     $add('fail', 'Webhook never received anything', 'Meta has NOT contacted webhook.php. Chatbot replies and lead conversations cannot work.',
-        'In Meta → WhatsApp → Configuration: set Callback URL to https://' . e((string) ($_SERVER['HTTP_HOST'] ?? 'your-domain')) . dirname(dirname((string) $_SERVER['SCRIPT_NAME'])) . '/webhook.php, use your verify token, and SUBSCRIBE to the "messages" field.');
+        'In Meta → WhatsApp → Configuration: set Callback URL to ' . e(app_base_url()) . '/webhook.php, use your verify token, and SUBSCRIBE to the "messages" field.');
+}
+
+// 4b. Push notifications
+$vk = push_vapid_keys(false);
+$nSubs = 0;
+try { $nSubs = (int) db_val("SELECT COUNT(*) FROM push_subscriptions WHERE client_id=?", [$cid]); } catch (Throwable $e) {}
+if (!$vk) {
+    $add('warn', 'Push notifications not set up', 'Nobody can be alerted on their phone when a customer replies.',
+         'Ask Gildana to open Admin → Settings → Push Notifications and click "Generate keys" (one time).');
+} elseif ($nSubs === 0) {
+    $add('warn', 'No devices subscribed', 'Push is ready, but no phone has turned notifications on yet.',
+         'On your phone: install the app to the Home Screen, then Settings → Notifications → Enable.');
+} else {
+    $add('ok', 'Push notifications', $nSubs . ' device' . ($nSubs === 1 ? '' : 's') . ' will be alerted on a new reply.', '');
 }
 
 // 5. Cron running (heartbeat)
@@ -138,6 +206,54 @@ page_head('Automation Health Check');
     <?php endforeach; ?>
     </tbody>
   </table></div>
+</div>
+
+<?php
+/* Why each recent incoming message did or did not get an answer. Silence has several
+   legitimate causes and they are indistinguishable from a fault without this. */
+$inbound = [];
+try {
+    $inbound = db_all("SELECT * FROM inbound_log WHERE client_id=? ORDER BY id DESC LIMIT 25", [$cid]);
+} catch (Throwable $e) { /* migration 014 not applied yet */ }
+$LABEL = [
+    'replied'     => ['green', 'Replied'],
+    'no_send'     => ['red',   'Tried but nothing sent'],
+    'no_flow'     => ['amber', 'No automation matched'],
+    'bot_paused'  => ['gray',  'Bot paused — human handling'],
+    'no_text'     => ['gray',  'No text to match'],
+    'flow_broken' => ['red',   'Flow step missing'],
+];
+?>
+<div class="card">
+  <h2>Why incoming messages were or weren't answered</h2>
+  <p class="text-muted" style="font-size:12.5px;margin:-6px 0 14px">
+    The last 25 messages your number received, and what the bot decided for each one.
+    <strong>Not every silence is a fault</strong> — but this says which is which.
+  </p>
+  <?php if (!$inbound): ?>
+    <div class="alert info" style="font-size:12.5px">Nothing recorded yet. Send your number a message and refresh this page.</div>
+  <?php else: ?>
+    <div class="table-wrap"><table class="data">
+      <thead><tr><th>When</th><th>Message</th><th>Outcome</th><th>Why</th></tr></thead>
+      <tbody>
+      <?php foreach ($inbound as $r):
+        [$cls, $lbl] = $LABEL[(string) $r['decision']] ?? ['gray', (string) $r['decision']]; ?>
+        <tr>
+          <td class="text-muted" style="white-space:nowrap"><?= e(date('d M H:i', strtotime((string) $r['created_at']))) ?></td>
+          <td><?= e(mb_substr((string) $r['body'], 0, 60)) ?: '<span class="text-muted">—</span>' ?></td>
+          <td><span class="pill <?= $cls ?>"><?= e($lbl) ?></span></td>
+          <td class="text-muted" style="font-size:12px"><?= e((string) $r['detail']) ?></td>
+        </tr>
+      <?php endforeach; ?>
+      </tbody>
+    </table></div>
+    <div class="hint" style="margin-top:10px">
+      <strong>No automation matched</strong> is the usual reason a follow-up message goes unanswered:
+      a new contact's first message starts your <em>welcome</em> flow, but everything after it only
+      gets a reply if a keyword matches or you have a <em>default</em> catch-all flow switched on.
+      Set one in <a href="automations.php">Automations</a> or use the <a href="agents.php">AI Chat Agent</a>.
+    </div>
+  <?php endif; ?>
 </div>
 
 <div class="card">

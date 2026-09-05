@@ -1,9 +1,209 @@
-# Gildana WhatsApp Dashboard — Project Handoff
+# REVENECT by Gildana — Project Handoff
 
 > Paste this file into a new Claude chat to continue work with full context.
-> Last updated: 2026-07-30.
+> Last updated: 2026-08-23 (personal-number channel).
 
-## ⏱️ CURRENT STATE — read this first
+## 🆕 LATEST — personal WhatsApp number as a second channel
+
+A client with no Meta Cloud API number can now send from **their own personal WhatsApp
+number**, using every module (Campaigns, Automations, Lead Qualifier, Inbox).
+Needs **migration `011_personal_channel.sql`**.
+
+**This is against WhatsApp's Terms and the number can be banned**, so pacing is built in
+rather than optional: **15 messages per batch, then a 3-minute pause, then the next batch**
+(per-client `slot_size` / `slot_pause_sec`). One batch is **shared across all modules** —
+campaigns, qualifier outreach and automation steps draw from the same 15, otherwise three
+modules would each send a full batch. Sends go **one at a time** with a random 2–6 s gap
+(`slot_gap_min_ms` / `slot_gap_max_ms`), never the 30-way parallel burst the Cloud path uses.
+The pause is state-based (`clients.next_slot_at`), never `sleep()` — the worker holds
+`GET_LOCK('wa_dispatch')`, so sleeping would stall every other client.
+
+**How it fits together**
+- `includes/channel.php` — the seam. Every module calls `channel_send_*`; the personal
+  adapter returns the *identical* array shape to `wa_send_*`, so `auto_send()`, `msg_log()`,
+  credits and delivery-status handling were untouched. Also holds `slot_budget()` /
+  `slot_consume()` / `slot_close()`.
+- `includes/personal_wa.php` — gateway adapter (instance create, QR, pairing code, status,
+  logout, send, inbound parse). Endpoint paths and field names are overridable in Admin →
+  Settings, so switching gateway vendor needs no code change.
+- `webhook_personal.php` — inbound. Identified by a per-client secret in the URL, then joins
+  the **existing** path (contact upsert → `msg_log()` → `automation_handle_inbound()`), so
+  Inbox, flows, AI agent and human takeover all work unchanged.
+
+**Client experience:** Settings → **My WhatsApp Number** → Connect → scan the QR (or use the
+8-character pairing code — WhatsApp has no SMS linking). The QR auto-refreshes every 20 s
+because the codes rotate and a stale one silently stops working. Clients never see a gateway
+URL or key.
+
+**Admin:** per-client **Sending Channel** card (Cloud vs personal, batch size, pause, live
+status) on the client page; the gateway base URL + API key are set **once** in Admin → Settings.
+
+**Behaviour differences on this channel:** no approved templates and no 24-hour window, so a
+template is rendered to **plain text** with its variables filled in (an image header becomes an
+image send with that text as the caption); reply buttons degrade to a numbered list and a
+customer answering "2" is matched to the second option.
+
+**Hosting:** the gateway is a persistent WhatsApp Web session and **cannot run on cPanel
+shared hosting** — it needs a VPS (or a paid service). Point the base URL at
+`http://127.0.0.1:3000` when it runs on the same box; it holds clients' live sessions and
+should not be reachable from the internet. Use a **Baileys**-based gateway (e.g. Evolution
+API), not `whatsapp-web.js`/Puppeteer, which runs a headless Chrome per client (~300–500 MB).
+
+**Two bugs this surfaced and fixed:** `client_ready()` only checked Cloud credentials, which
+locked personal clients out of creating campaigns; and `channel.php` / `push.php` were
+plain-`require()`d from paths that can load together, which fatals on redeclare — all now
+`require_once`.
+
+## Earlier — upload your own logo & app icon
+
+**Admin → Settings → Branding.** Three slots: **Logo** (top bar + sign-in), **Logo for dark
+backgrounds** (optional — the sign-in screen is near-black, a dark logo vanishes there), and
+**App icon** (one square image ≥512px, regenerates every PWA/favicon/apple-touch file).
+
+Equivalent manual route — **drop the files into `wa-dashboard/assets/brand/` over FTP**:
+`logo.{svg,png,webp,jpg}` · `logo-light.*` · `icon-source.{png,jpg,webp}`. Nothing is stored
+in the DB; `brand_logo()` only looks at what is on disk, so both paths behave identically.
+Per-variant overrides also work: `logo-full.*`, `logo-mark.*`, `logo-stack.*` beat plain
+`logo.*`. Remove the files (or click Remove) and the built-in Revenect SVG returns.
+
+Notes for whoever works on this next:
+- Uploaded artwork is emitted as **`<img>`, never inlined**. An SVG can carry script, so
+  inlining a customer file into every page would be an XSS hole.
+- `assets/brand/` must be **writable (755)**; the card says so by name if it isn't.
+- The icon builder centre-crops to square and **flattens transparency onto the brand ink** —
+  iOS home-screen icons have no alpha and a transparent PNG would otherwise go black. The
+  maskable variant keeps an ~11% inset for Android's adaptive crop.
+- Uploads are gitignored (they are per-install, not source).
+- SVG is rejected for the **app icon** slot only — GD cannot rasterise it.
+- Fixed while here: `admin/settings.php` set `$ok` in several places but never rendered it,
+  so even the existing "push keys generated" confirmation was invisible.
+
+## Earlier — rebranded to REVENECT
+
+The product is now **REVENECT by Gildana** — "Business Interaction Engine". Revenect is the
+PRODUCT; **Gildana is still the company**, so copy addressing the agency ("Contact Gildana",
+"emailed to Gildana", "ask Gildana to top up") deliberately still says Gildana. Only the
+product's own name changed — a blind find-replace here would be wrong.
+
+- **Palette** (`assets/dashboard.css` `:root`): violet `#7C3AED` / blue `#2563EB` /
+  cyan `#06B6D4` / ink `#0D1321` / cloud `#F3F4F6`, replacing gold+paper. Tokens are now
+  semantic (`--brand`, `--accent`, `--ink`, `--surface`, `--bg`); **the old `--gold`,
+  `--paper`, `--black`… names are kept as aliases** because ~27 rules plus inline styles in
+  PHP/JS still use them and a missing variable fails silently.
+- **Topbar is light now** and carries the logo; sidebar active item is a violet pill. The
+  topbar+sidebar *structure* was kept deliberately — the responsive drawer, bottom tab bar
+  and the whole mobile test suite are built on it.
+- **Logo**: `includes/brand.php` → `brand_logo_svg('mark'|'full'|'stack')`, inline SVG with
+  the brand gradient. It is a hand-built interpretation of the supplied artwork; dropping in
+  the official file is a one-function change.
+- **`brand_name()` treats the old `app_name` values as unset.** `config.php` is never
+  deployed, so every existing install still says "Gildana WhatsApp" and would otherwise keep
+  showing the old name until someone edited PHP on the server. A genuinely custom name still
+  wins (white-labelling).
+- **Icons regenerated** (`assets/icons/generate.php`) — the R filled with the brand gradient
+  on ink. GD has no gradient fill, so it paints a gradient, stamps the R as a mask and
+  composites, at 4× then downsampled.
+- Contrast verified to WCAG AA; `--danger` was darkened to `#B91C1C` because `#DC2626` on
+  the error background came in at 4.41:1, just under the 4.5 threshold.
+- The **Inbox message bubbles stay WhatsApp-green on purpose** — that screen mirrors
+  WhatsApp and the familiarity is the point; only its chrome was retoned.
+
+## Earlier (2026-08-18) — mobile app (PWA) + push notifications
+
+Needs **migrations `009` and `010`**, then one click: **Admin → Settings → Push
+Notifications → Generate keys**.
+
+**The dashboard is now an installable app.** It was desktop-only (one media query in the
+whole stylesheet, a fixed 232px sidebar). All chrome comes from `includes/view.php`, so the
+responsive work landed in one place:
+- Sidebar → off-canvas drawer below 900px (hamburger + backdrop); phones get a **bottom tab
+  bar** built from `nav_items()`/`nav_primary()`.
+- **Inbox is single-pane on phones** — list → tap → conversation → back arrow.
+- Inputs forced to ≥16px (anything smaller makes iOS Safari zoom on focus).
+- `manifest.webmanifest`, `sw.js`, `offline.html`, and an icon set generated by
+  `assets/icons/generate.php` (gold ring + G). The app had **no favicon at all** before.
+- **The service worker never caches HTML** — these pages render one client's contacts and
+  conversations, and a cached copy could surface under the wrong account on a shared phone.
+- Android shows a real **Install** button (`beforeinstallprompt`); **iOS shows manual
+  Share → Add to Home Screen steps**, because Apple fires no install event and users
+  otherwise never find it.
+- Flow canvas moved to **pointer events**, so node dragging and connecting work by touch;
+  long-press replaces right-click for deleting an edge.
+
+**Push notifications** (`includes/push.php`) — the phone buzzes when a customer replies:
+- **Payload-less Web Push.** Encrypting a payload needs ECDH + AES128GCM, impractical
+  without Composer on this host. A bodyless push needs only a **VAPID JWT signed ES256**,
+  which core `openssl` does. The service worker then fetches the unread count itself.
+- ⚠️ The subtle part is `der_to_raw_signature()`: OpenSSL returns DER, but JWS ES256 needs
+  raw `R||S` padded to 32 bytes each. Get it wrong and every push service silently rejects
+  the token. It has its own tests, including the leading-zero case.
+- `push_outbox` holds **one row per client**, so a burst of replies collapses into a single
+  notification instead of one per message; the notification uses a fixed `tag` so the OS
+  replaces rather than stacks.
+- The webhook only does one cheap UPSERT then `trigger_worker()` — Meta retries slow
+  callbacks, so it must never block on HTTPS pushes. Delivery is still near-instant.
+- `push_status.php` is keyed on the **push endpoint**, not the login session (the session
+  cookie has `lifetime => 0` and dies with the browser), and returns only a bare count.
+- VAPID keys live in the new `app_settings` table, private key encrypted with
+  `encrypt_secret()`; generated from Admin → Settings since the client never edits PHP.
+- Clients turn it on per device in **Settings → Notifications**. On iPhone the app must be
+  installed to the Home Screen **first** — iOS only delivers push to installed web apps.
+
+**Also fixed:** the long-standing `//webhook.php` double slash in Health Check (new shared
+`app_base_url()` helper in `helpers.php`), a new **Push notifications** Health Check row,
+and stat tiles whose label/value/sub ran together (`CREDITS4,9871 credit / message`) because
+the spans had no `display:block`.
+
+**Test rig:** 150 automated checks — local MariaDB, a mock Graph API *and* mock push
+service, plus Chromium at iPhone/Android/desktop viewports.
+Note: a real `pushManager.subscribe()` can't run in that sandbox (Chrome disables the Push
+API in incognito, and FCM is unreachable), so the browser subscribe step is the one thing
+that needs a real device.
+
+## Earlier (2026-08-11) — template media + full fields + chatbot upgrade
+
+The inbound-webhook problem below was solved earlier ("okay it works finally"). This
+session fixed **bulk marketing templates with an image header** and added the chatbot
+upgrades. Needs **migration `009_media_cache.sql`**.
+
+**Root cause 1 — image templates failed, worse the bigger the send.** Header media was
+always sent as a public `link`, so Meta re-downloaded the same image *once per recipient*
+(30 concurrent) from the cPanel host → throttling → `#131053` / `#130472`.
+→ Fixed: `wa_upload_media()` + `wa_resolve_media()` upload the file **once** and send by
+**media id**, cached in the new `media_cache` table (per client + file hash, re-uploaded
+after 25 days since ids expire). Any failure falls back to the old link behaviour.
+
+**Root cause 2 — incomplete template payloads.** Only the Lead Qualifier built a full
+payload. **Campaigns** sent BODY variables only and the **bot canvas template node** sent
+*no* components → `#132012` on any template with an image header.
+→ Fixed: `auto_build_components()` promoted to **`wa_build_components()`** in
+`whatsapp.php` — now the single builder behind Campaigns, the bot canvas and the
+Qualifier. Campaigns + canvas gained the full field UI (header media/text/location, body
+vars, dynamic URL + copy-code buttons).
+
+Campaign components stay in `link` form at creation; the worker swaps in a freshly
+resolved media id at **send** time, so a campaign scheduled weeks out can't ship an
+expired id.
+
+**Also shipped:**
+- `send_parallel_media` (default 10) — gentler concurrency for media templates.
+- Transient failures (media / rate-limit / 5xx) retry **once**; permanent ones
+  (`#132012`, `#200`) do not — `wa_error_is_transient()`.
+- Campaign report groups failure reasons with a targeted hint each.
+- **Canvas UX:** fits the page width on load, ＋/−/Fit zoom + Ctrl/⌘-wheel, middle/space
+  drag to pan, and **right-click a connection to delete it**. All screen→canvas math goes
+  through `toCanvas()` and divides by the zoom — otherwise nodes drift from the cursor and
+  edges detach from ports at any zoom ≠ 100%.
+- **AI conversation node** (`ai_chat`) now in the bot canvas palette (the engine already
+  supported it; it just wasn't exposed).
+- **Live takeover:** replying by hand in the Inbox pauses the bot for that contact
+  (`contacts.bot_paused_until`) and stops timer runs; header pill + Take over / Resume bot.
+- **Default reply:** `trigger_type='default'` flows answer anything that matched no
+  keyword and isn't a first message (an always-on AI FAQ).
+
+Everything degrades safely if migration 009 hasn't run yet.
+
+## ⏱️ EARLIER STATE — historical context below
 
 Everything is deployed and **Health Check is all green** (WhatsApp, credits, AI=openai,
 webhook, cron, chatbots, qualifiers). Lead import + outreach template send both work.
@@ -95,7 +295,9 @@ is fully separate from the public Gildana marketing site.
 - `includes/crypto.php` — AES-256-GCM secret encryption.
 - `includes/whatsapp.php` — `wa_request()`, `wa_send_template()`,
   `wa_send_template_batch()` (parallel `curl_multi`), `wa_send_text/image/buttons`,
-  `wa_fetch_templates()`.
+  `wa_fetch_templates()`, plus (2026-08-11) `wa_upload_media()`, `wa_resolve_media()`,
+  `wa_apply_media_id()`, `wa_build_components()` (**the** shared template payload builder),
+  `wa_template_has_media()`, `wa_error_is_transient()`.
 - `includes/ai.php` — `ai_config`, `ai_complete`, `ai_classify`, `ai_score_reply`,
   `ai_test_key`.
 - `includes/automation.php` — **the automation/qualifier engine**. Key functions:
@@ -153,8 +355,14 @@ is fully separate from the public Gildana marketing site.
   `context` JSON (fields + transcript).
 - `flow_messages` — send/delivery log. `flow_collected` — exportable lead rows.
 - `campaigns`, `campaign_messages`, `webhook_events`, `schema_migrations`.
+- `media_cache` — Meta media handles: `client_id`, `file_hash` (sha256 of the bytes),
+  `file_url`, `media_id`, `mime`, `uploaded_at`. Unique on (client, hash). Rows older than
+  25 days are treated as stale and re-uploaded.
+- `contacts.bot_paused_until` — NULL = bot active; a future timestamp = a human took the
+  conversation over in the Inbox.
 - Migrations of note: `005_automations.sql`, `006_flow_canvas_kind.sql`
-  (adds `flows.kind`, `flow_steps.pos_x/pos_y`; migrates google_sheet→qualifier).
+  (adds `flows.kind`, `flow_steps.pos_x/pos_y`; migrates google_sheet→qualifier),
+  `009_media_cache.sql` (media handles + bot handoff).
 
 ## 6. Most recent work (this session)
 

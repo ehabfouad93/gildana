@@ -10,3 +10,15 @@
         Deny from all
     </FilesMatch>
 </IfModule>
+
+# Dotfiles. Apache's stock config protects .ht* and nothing else, so a .env sitting anywhere
+# under the document root is served as plain text. Deny the lot rather than name them.
+<FilesMatch "^\.">
+    Require all denied
+</FilesMatch>
+<IfModule !mod_authz_core.c>
+    <FilesMatch "^\.">
+        Order allow,deny
+        Deny from all
+    </FilesMatch>
+</IfModule>

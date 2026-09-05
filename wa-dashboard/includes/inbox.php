@@ -8,6 +8,7 @@ declare(strict_types=1);
  */
 require_once __DIR__ . '/crypto.php';
 require_once __DIR__ . '/whatsapp.php';
+require_once __DIR__ . '/channel.php';
 require_once __DIR__ . '/credits.php';
 
 /** Record one message. Returns the row id. $opts: type, wamid, status, error, source.
@@ -31,8 +32,11 @@ function msg_log(int $clientId, int $contactId, string $direction, string $body,
 }
 
 /** Within the 24h window (free-form text allowed) of the contact's last inbound? */
-function inbox_window_open(array $contact): bool
+function inbox_window_open(array $contact, array $client = []): bool
 {
+    // The 24-hour rule belongs to Meta's Cloud API. A personal number sends ordinary
+    // messages, so an agent can always reply from the Inbox on that channel.
+    if ($client && function_exists('channel_is_personal') && channel_is_personal($client)) return true;
     $last = $contact['last_inbound_at'] ?? null;
     return $last && strtotime((string) $last) > time() - 86400;
 }
@@ -105,13 +109,22 @@ function inbox_handle_ajax(array $client): void
         $msgs = inbox_thread($cid, $contactId, $after);
         inbox_mark_read($cid, $contactId);
         json_out([
-            'ok' => true, 'messages' => $msgs, 'window_open' => inbox_window_open($contact),
+            'ok' => true, 'messages' => $msgs, 'window_open' => inbox_window_open($contact, $client),
             'name' => (string) $contact['name'], 'phone' => (string) $contact['phone_e164'],
+            'bot_paused' => inbox_bot_paused($contact),
         ]);
     }
     if ($a === 'send') {
         verify_csrf();
         json_out(inbox_send($client, (int) ($_POST['contact'] ?? 0), (string) ($_POST['body'] ?? '')));
+    }
+    // Live takeover: pause the bot for this contact / hand it back.
+    if ($a === 'takeover' || $a === 'resume') {
+        verify_csrf();
+        $contactId = (int) ($_POST['contact'] ?? 0);
+        if (!db_row("SELECT id FROM contacts WHERE id=? AND client_id=?", [$contactId, $cid])) json_out(['ok' => false]);
+        $a === 'takeover' ? inbox_take_over($cid, $contactId) : inbox_resume_bot($cid, $contactId);
+        json_out(['ok' => true, 'bot_paused' => $a === 'takeover']);
     }
     json_out(['ok' => false]);
 }
@@ -123,16 +136,62 @@ function inbox_send(array $client, int $contactId, string $body): array
     if ($body === '') return ['ok' => false, 'error' => 'Type a message first.'];
     $contact = db_row("SELECT * FROM contacts WHERE id=? AND client_id=?", [$contactId, (int) $client['id']]);
     if (!$contact) return ['ok' => false, 'error' => 'Contact not found.'];
-    if (!inbox_window_open($contact)) {
+    if (!inbox_window_open($contact, $client)) {
         return ['ok' => false, 'error' => 'Outside the 24-hour window — you can only reach this contact with an approved template (use Campaigns).'];
     }
-    $bal = credits_adjust((int) $client['id'], -1, 'inbox', null);
+    /* Only reachable inside the 24-hour window (checked just above), so this is always a
+       service message — the category Meta does not charge for. */
+    $cost = function_exists('billing_message_credits')
+          ? billing_message_credits($client, (string) $contact['phone_e164'], 'service') : 1;
+    $bal = credits_adjust((int) $client['id'], -$cost, 'inbox', null);
     if ($bal === null) return ['ok' => false, 'error' => 'No credits left.'];
-    $res = wa_send_text($client, (string) $contact['phone_e164'], $body);
-    if (empty($res['ok'])) credits_adjust((int) $client['id'], 1, 'inbox_refund', null);
+    $res = channel_send_text($client, (string) $contact['phone_e164'], $body);
+    if (empty($res['ok'])) {
+        credits_adjust((int) $client['id'], $cost, 'inbox_refund', null);
+    } elseif (function_exists('billing_record_messages')) {
+        billing_record_messages($client, (string) $contact['phone_e164'], 'service', 1, 0.0, $cost);
+    }
     $id = msg_log((int) $client['id'], $contactId, 'out', $body, [
         'source' => 'manual', 'status' => !empty($res['ok']) ? 'sent' : 'failed',
         'wamid' => $res['wamid'] ?? null, 'error' => $res['error_title'] ?? null,
     ]);
+    // A human just replied → take the conversation over so the bot can't talk over them.
+    if (!empty($res['ok'])) inbox_take_over((int) $client['id'], $contactId);
     return ['ok' => !empty($res['ok']), 'error' => !empty($res['ok']) ? '' : (string) ($res['error_title'] ?? 'Send failed.'), 'id' => $id];
+}
+
+/* ─────────────────────────────────────────────
+   Human handoff (live takeover)
+───────────────────────────────────────────── */
+
+/** Pause the bot for this contact and stop any run that would resume it on a timer. */
+function inbox_take_over(int $clientId, int $contactId, int $hours = 24): void
+{
+    try {
+        db_run("UPDATE contacts SET bot_paused_until = DATE_ADD(NOW(), INTERVAL ? HOUR) WHERE id=? AND client_id=?",
+            [max(1, $hours), $contactId, $clientId]);
+        // Otherwise a waiting_timer run could fire mid-conversation behind the agent's back.
+        db_run("UPDATE flow_runs SET status='stopped', updated_at=NOW()
+                 WHERE contact_id=? AND client_id=? AND status IN ('active','waiting_input','waiting_timer')",
+            [$contactId, $clientId]);
+    } catch (Throwable $e) {
+        error_log('inbox_take_over skipped: ' . $e->getMessage());   // migration 009 not applied yet
+    }
+}
+
+/** Hand the conversation back to the bot. */
+function inbox_resume_bot(int $clientId, int $contactId): void
+{
+    try {
+        db_run("UPDATE contacts SET bot_paused_until=NULL WHERE id=? AND client_id=?", [$contactId, $clientId]);
+    } catch (Throwable $e) {
+        error_log('inbox_resume_bot skipped: ' . $e->getMessage());
+    }
+}
+
+/** Is the bot currently paused for this contact? */
+function inbox_bot_paused(array $contact): bool
+{
+    $u = $contact['bot_paused_until'] ?? null;
+    return $u !== null && strtotime((string) $u) > time();
 }

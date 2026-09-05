@@ -39,6 +39,27 @@ function logout(): void
     session_destroy();
 }
 
+/**
+ * The signed-in user's full row, not just what the session carries.
+ *
+ * current_user() is deliberately session-only — cheap, and enough for auth checks. But the
+ * top bar needs the name and picture, which live in the database and change while the session
+ * is open, so those have to be read. Cached per request: this runs on every page render.
+ */
+function current_user_full(): ?array
+{
+    static $row = false;
+    if ($row !== false) return $row;
+    $u = current_user();
+    if (!$u) return $row = null;
+    try {
+        $row = db_row("SELECT * FROM users WHERE id=?", [(int) $u['id']]) ?: $u;
+    } catch (Throwable $e) {
+        $row = $u;                       // never let the chrome break the page
+    }
+    return $row;
+}
+
 function current_user(): ?array
 {
     if (empty($_SESSION['uid'])) return null;
@@ -57,7 +78,7 @@ function is_client(): bool { return (current_user()['role'] ?? '') === 'client';
 function require_admin(): array
 {
     $u = current_user();
-    if (!$u || $u['role'] !== 'admin') redirect('../index.php');
+    if (!$u || $u['role'] !== 'admin') redirect('../login.php');
     return $u;
 }
 
@@ -74,7 +95,7 @@ function is_impersonating(): bool
 function require_client(): array
 {
     $u = current_user();
-    if (!$u) redirect('../index.php');
+    if (!$u) redirect('../login.php');
 
     // Admin acting inside a client's workspace.
     if ($u['role'] === 'admin') {
@@ -85,7 +106,7 @@ function require_client(): array
         return [$u, $client]; // admins may manage disabled clients too
     }
 
-    if ($u['role'] !== 'client' || !$u['client_id']) redirect('../index.php');
+    if ($u['role'] !== 'client' || !$u['client_id']) redirect('../login.php');
     $client = db_row("SELECT * FROM clients WHERE id = ?", [$u['client_id']]);
     if (!$client || $client['status'] !== 'active') {
         logout();

@@ -2,8 +2,69 @@
 declare(strict_types=1);
 require __DIR__ . '/_init.php';
 require __DIR__ . '/../includes/ai.php';
+require_once __DIR__ . '/../includes/channel.php';
+require_once __DIR__ . '/../includes/profile.php';
+require_once __DIR__ . '/../includes/google.php';
 
 $cid = (int) $CLIENT['id'];
+
+/* ── AJAX: connect / inspect this client's own WhatsApp number ──
+   Only meaningful on the personal channel. The client never sees a gateway URL or key —
+   they scan a QR (or use the pairing code), exactly like WhatsApp Web. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array(($_POST['action'] ?? ''), ['pw_connect', 'pw_qr', 'pw_status', 'pw_pair', 'pw_logout', 'pw_resync'], true)) {
+    verify_csrf();
+    $fresh = db_row("SELECT * FROM clients WHERE id=?", [$cid]) ?: [];
+    if (!channel_is_personal($fresh)) json_out(['ok' => false, 'error' => 'This account sends through the WhatsApp Cloud API.']);
+    if (!pw_configured())            json_out(['ok' => false, 'error' => 'The WhatsApp gateway is not set up yet — contact support.']);
+
+    $action = (string) $_POST['action'];
+    if ($action === 'pw_connect') {
+        $r = pw_instance_create($fresh);
+        if (empty($r['ok'])) json_out(['ok' => false, 'error' => $r['error']]);
+        $fresh = db_row("SELECT * FROM clients WHERE id=?", [$cid]) ?: [];
+        $q = pw_qr($fresh);
+        json_out(['ok' => $q['ok'], 'qr' => $q['qr'], 'error' => $q['error']]);
+    }
+    if ($action === 'pw_resync') {
+        // Re-registers the inbound webhook without touching the linked session — for a
+        // number that's already connected but whose replies never showed up in the Inbox.
+        $r = pw_set_webhook($fresh);
+        json_out(['ok' => $r['ok'], 'error' => $r['error']]);
+    }
+    if ($action === 'pw_qr') {
+        // QR codes rotate every ~20-60s, so the page re-fetches instead of showing a dead one.
+        $q = pw_qr($fresh);
+        json_out(['ok' => $q['ok'], 'qr' => $q['qr'], 'error' => $q['error']]);
+    }
+    if ($action === 'pw_pair') {
+        $r = pw_pair_code($fresh, (string) ($_POST['msisdn'] ?? ''));
+        json_out(['ok' => $r['ok'], 'code' => $r['code'], 'error' => $r['error']]);
+    }
+    if ($action === 'pw_logout') {
+        pw_logout($fresh);
+        json_out(['ok' => true]);
+    }
+    $st = pw_status($fresh);
+    json_out(['ok' => true, 'state' => $st['state'], 'msisdn' => $st['msisdn'], 'error' => $st['error']]);
+}
+
+/* ── Google: start / stop the connection ── */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'google_connect') {
+    verify_csrf();
+    if (!google_configured()) {
+        $err = 'Google isn\'t set up on this platform yet — contact ' . BRAND_PARENT . '.';
+    } else {
+        // Off to Google's consent screen; google_oauth.php brings them back here.
+        header('Location: ' . google_auth_url($cid, (int) $ME['id'], 'client/settings.php#google'));
+        exit;
+    }
+}
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'google_disconnect') {
+    verify_csrf();
+    google_disconnect($cid);
+    flash('Google account disconnected.');
+    redirect('settings.php#google');
+}
 
 /* ── AJAX: test the AI key ── */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'test_ai') {
@@ -14,6 +75,91 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'test_
 }
 
 $err = '';
+
+/* ── Switch sending channel ──
+   The client owns this choice: they may have both a Cloud API number and their own phone and
+   want to move between them without waiting on support. Each direction is only offered when
+   it can actually send, so switching can't leave the account unable to send at all. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_channel') {
+    verify_csrf();
+    $want = ($_POST['channel'] ?? 'cloud') === 'personal' ? 'personal' : 'cloud';
+    if ($want === channel_of($CLIENT)) {
+        redirect('settings.php#channel');
+    } elseif ($want === 'personal' && !pw_configured()) {
+        $err = 'Sending from your own number isn\'t available on your account yet — contact ' . BRAND_PARENT . '.';
+    } elseif ($want === 'cloud' && !($CLIENT['access_token_enc'] && $CLIENT['phone_number_id'])) {
+        $err = 'Your WhatsApp Cloud API number isn\'t set up, so there is nothing to switch to. Contact ' . BRAND_PARENT . '.';
+    } else {
+        db_run("UPDATE clients SET channel=? WHERE id=?", [$want, $cid]);
+        flash($want === 'personal'
+            ? 'Now sending from your own number — link it below to start.'
+            : 'Now sending through the WhatsApp Cloud API.');
+        redirect('settings.php#' . ($want === 'personal' ? 'mynumber' : 'channel'));
+    }
+}
+
+/* ── AJAX: does the Cloud API actually answer with these credentials? ──
+   Saving credentials and knowing they work are different things, and a client should not have
+   to ask their operator which of the two just happened. Same check the admin screen runs. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'test_connection') {
+    verify_csrf();
+    $fresh = db_row("SELECT * FROM clients WHERE id=?", [$cid]) ?: [];
+    if (!client_may_edit_credentials($fresh)) json_out(['ok' => false, 'error' => 'Not available on this account.']);
+    $res = wa_fetch_templates($fresh);
+    if ($res['ok']) {
+        $approved = count(array_filter($res['templates'], fn($t) => strtoupper((string) ($t['status'] ?? '')) === 'APPROVED'));
+        json_out(['ok' => true, 'count' => count($res['templates']), 'approved' => $approved]);
+    }
+    json_out(['ok' => false, 'error' => $res['error']]);
+}
+
+/* ── Save this client's own WhatsApp credentials ──
+   A port of the admin screen's handler, scoped to the signed-in client so onboarding and an
+   expired token no longer need the operator in the loop. The rules are the same because the
+   column constraints are the same: a blank secret keeps the stored one (they are never shown
+   back, so an empty box means "unchanged", not "erase"), and phone_number_id is written NULL
+   rather than '' so the unique index still allows many clients without one. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_credentials') {
+    verify_csrf();
+    $fresh = db_row("SELECT * FROM clients WHERE id=?", [$cid]) ?: [];
+
+    // Hidden in the UI for platform-WABA accounts; refused here too. A control that is only
+    // hidden is not a control — the POST is what has to be rejected.
+    if (!client_may_edit_credentials($fresh)) {
+        $err = 'Your WhatsApp number is managed by ' . BRAND_PARENT . ' — contact them to change it.';
+    } else {
+        $token  = trim((string) ($_POST['access_token'] ?? ''));
+        $secret = trim((string) ($_POST['app_secret'] ?? ''));
+        $pnid   = trim((string) ($_POST['phone_number_id'] ?? ''));
+        $tokenEnc  = $token  !== '' ? encrypt_secret($token)  : $fresh['access_token_enc'];
+        $secretEnc = $secret !== '' ? encrypt_secret($secret) : $fresh['app_secret_enc'];
+        try {
+            db_run(
+                "UPDATE clients SET app_id=?, phone_number_id=?, waba_id=?, access_token_enc=?,
+                        app_secret_enc=?, require_signed_webhook=?, token_updated_at=NOW()
+                  WHERE id=?",
+                [
+                    trim((string) ($_POST['app_id'] ?? '')),
+                    $pnid !== '' ? $pnid : null,
+                    trim((string) ($_POST['waba_id'] ?? '')),
+                    $tokenEnc, $secretEnc,
+                    // Only enforceable once there is a secret to check the signature against.
+                    (!empty($secretEnc) && !empty($_POST['require_signed_webhook'])) ? 1 : 0,
+                    $cid,
+                ]
+            );
+            flash('WhatsApp credentials saved. Use "Test connection" to check they work.');
+            redirect('settings.php#credentials');
+        } catch (PDOException $ex) {
+            if (str_contains($ex->getMessage(), 'uq_phone_number_id')) {
+                $err = 'That Phone Number ID is already in use on another account.';
+            } else {
+                error_log('client save credentials failed: ' . $ex->getMessage());
+                $err = 'Could not save credentials. Please try again.';
+            }
+        }
+    }
+}
 
 /* ── Save AI settings ── */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_ai') {
@@ -27,6 +173,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
         [$provider, $model, $keyEnc, $cid]);
     flash('AI settings saved.');
     redirect('settings.php#ai');
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array(($_POST['action'] ?? ''), ['save_profile', 'clear_avatar'], true)) {
+    verify_csrf();
+    if (($_POST['action'] ?? '') === 'clear_avatar') { profile_clear_avatar((int) $ME['id']); flash('Picture removed.'); redirect('settings.php#profile'); }
+    $r = profile_save((int) $ME['id'], $_POST, $_FILES);
+    if (!$r['ok']) $err = $r['error'];
+    else { flash('Profile saved.'); redirect('settings.php#profile'); }
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'change_password') {
@@ -60,11 +214,288 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
     <div class="field"><span class="lbl">Login Email</span><input type="text" value="<?= e((string) $ME['email']) ?>" disabled></div>
     <div class="field"><span class="lbl">Credit Balance</span><input type="text" value="<?= number_format((int) $CLIENT['credits_balance']) ?> credits" disabled></div>
     <div class="field"><span class="lbl">WhatsApp Connection</span>
-      <input type="text" value="<?= client_ready($CLIENT) ? 'Connected' : 'Not connected — contact Gildana' ?>" disabled>
+      <?php if (channel_is_personal($CLIENT)): ?>
+        <input type="text" value="<?= $CLIENT['personal_status'] === 'connected'
+            ? 'Your own number' . ($CLIENT['personal_msisdn'] ? ' (+' . e((string) $CLIENT['personal_msisdn']) . ')' : '')
+            : 'Your own number — not linked yet' ?>" disabled>
+      <?php else: ?>
+        <input type="text" value="<?= client_ready($CLIENT) ? 'Connected' : 'Not connected — contact support' ?>" disabled>
+      <?php endif; ?>
     </div>
   </div>
-  <p class="text-muted" style="font-size:12.5px">Need more credits or a credential change? Contact Gildana — these are managed for you.</p>
+  <p class="text-muted" style="font-size:12.5px">Need more credits or a credential change? Contact <?= e(BRAND_PARENT) ?> — these are managed for you.</p>
 </div>
+
+<?php
+$onPersonal  = channel_is_personal($CLIENT);
+$hasCloud    = (bool) ($CLIENT['access_token_enc'] && $CLIENT['phone_number_id']);
+$hasPersonal = pw_configured();
+// The card always shows where messages currently go out from; the option they can't use yet
+// is disabled with the reason on it, rather than hidden with no explanation.
+?>
+<div class="card" id="channel">
+  <h2>Sending Channel</h2>
+  <p class="text-muted" style="font-size:12.5px;margin:-6px 0 14px">
+    Where your messages go out from. Campaigns, Automations, the Lead Qualifier and the Inbox all
+    follow this one setting — switch it and every module follows immediately.
+  </p>
+  <form method="post">
+    <?= csrf_field() ?><input type="hidden" name="action" value="save_channel">
+    <div class="field" style="max-width:420px"><span class="lbl">Send from</span>
+      <select name="channel" id="ch-sel" onchange="chNote()">
+        <option value="cloud"    <?= $onPersonal ? '' : 'selected' ?> <?= $hasCloud    ? '' : 'disabled' ?>>Business number (WhatsApp Cloud API)<?= $hasCloud ? '' : ' — not set up' ?></option>
+        <option value="personal" <?= $onPersonal ? 'selected' : '' ?> <?= $hasPersonal ? '' : 'disabled' ?>>My own WhatsApp number<?= $hasPersonal ? '' : ' — not available' ?></option>
+      </select>
+    </div>
+    <div id="ch-note-personal" style="display:<?= $onPersonal ? 'block' : 'none' ?>">
+      <div class="alert error" style="font-size:12.5px">
+        <strong>Read this before switching.</strong> Sending from your own number uses a WhatsApp Web
+        session, which is against WhatsApp's Terms — the number can be banned, and the risk rises the
+        faster it sends. That's why messages go out
+        <strong><?= (int) ($CLIENT['slot_size'] ?: 15) ?> at a time</strong> with a
+        <strong><?= round((int) ($CLIENT['slot_pause_sec'] ?: 180) / 60, 1) ?>-minute</strong> pause between
+        batches, shared across every module. There are no approved templates and no 24-hour window
+        here — you write your messages directly.
+      </div>
+    </div>
+    <div id="ch-note-cloud" style="display:<?= $onPersonal ? 'none' : 'block' ?>">
+      <div class="alert info" style="font-size:12.5px">
+        The official channel: full speed, no ban risk, but the first message to a customer must use a
+        Meta-<strong>approved template</strong> and free-form replies only work inside the 24-hour window.
+      </div>
+    </div>
+    <?php if ($onPersonal ? $hasCloud : $hasPersonal): ?>
+      <button type="submit" class="btn btn-primary">Save channel</button>
+    <?php else: ?>
+      <p class="text-muted" style="font-size:12.5px;margin:0">
+        There is only one channel set up on your account. To add the other one, contact <?= e(BRAND_PARENT) ?>.
+      </p>
+    <?php endif; ?>
+  </form>
+</div>
+<script>
+function chNote(){
+  var p = document.getElementById('ch-sel').value === 'personal';
+  document.getElementById('ch-note-personal').style.display = p ? 'block' : 'none';
+  document.getElementById('ch-note-cloud').style.display    = p ? 'none' : 'block';
+}
+</script>
+
+<?php if (channel_is_personal($CLIENT)): $pwState = (string) $CLIENT['personal_status']; ?>
+<div class="card" id="mynumber">
+  <h2>My WhatsApp Number</h2>
+  <p class="text-muted" style="font-size:12.5px;margin:-6px 0 14px">
+    Link your own WhatsApp so campaigns, automations and the Inbox send from your number.
+    Messages are sent in small batches with a pause between them to keep your number safe.
+  </p>
+
+  <!-- connected -->
+  <div id="pw-connected" style="display:<?= $pwState === 'connected' ? 'block' : 'none' ?>">
+    <div class="alert success" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <strong>Connected</strong>
+      <span id="pw-number" class="text-muted"><?= $CLIENT['personal_msisdn'] ? '+' . e((string) $CLIENT['personal_msisdn']) : '' ?></span>
+      <button type="button" class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="pwLogout()">Disconnect</button>
+    </div>
+    <div style="margin-top:10px;font-size:12.5px" class="text-muted">
+      Not seeing customer replies come in? <button type="button" class="btn-link" onclick="pwResync()">Resync connection</button>
+      <span id="pw-resync-msg"></span>
+    </div>
+  </div>
+
+  <!-- not connected -->
+  <div id="pw-idle" style="display:<?= $pwState === 'connected' ? 'none' : 'block' ?>">
+    <button type="button" class="btn btn-primary" id="pw-start" onclick="pwConnect()">Connect my WhatsApp</button>
+    <span id="pw-msg" class="text-muted" style="margin-left:10px;font-size:12.5px"></span>
+  </div>
+
+  <!-- linking -->
+  <div id="pw-linking" style="display:none;margin-top:14px">
+    <div style="display:flex;gap:22px;flex-wrap:wrap;align-items:flex-start">
+      <div style="text-align:center">
+        <img id="pw-qr" alt="WhatsApp QR code" style="width:230px;height:230px;border:1px solid var(--line);border-radius:10px;background:#fff">
+        <div class="text-muted" style="font-size:11.5px;margin-top:6px">The code refreshes automatically</div>
+      </div>
+      <div style="flex:1;min-width:230px">
+        <ol style="padding-left:18px;line-height:1.9;font-size:13.5px;margin:0">
+          <li>Open <strong>WhatsApp</strong> on your phone</li>
+          <li>Tap <strong>Settings</strong> → <strong>Linked devices</strong></li>
+          <li>Tap <strong>Link a device</strong> and scan this code</li>
+        </ol>
+        <div style="margin-top:14px">
+          <button type="button" class="btn-link" onclick="pwTogglePair()">Can't scan? Link with your phone number instead</button>
+        </div>
+        <div id="pw-pair" style="display:none;margin-top:10px">
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <input type="text" id="pw-msisdn" placeholder="201012345678" style="flex:1;min-width:170px">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="pwPair()">Get code</button>
+          </div>
+          <div id="pw-code" style="display:none;margin-top:10px">
+            <div class="text-muted" style="font-size:12px">On your phone: Linked devices → Link with phone number, then enter:</div>
+            <div style="font-size:26px;letter-spacing:.22em;font-weight:700;margin-top:4px" id="pw-code-val"></div>
+          </div>
+        </div>
+        <div style="margin-top:14px"><button type="button" class="btn btn-ghost btn-sm" onclick="pwCancel()">Cancel</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const PW_CSRF = <?= json_encode(csrf_token()) ?>;
+let pwQrTimer = null, pwStatusTimer = null;
+const pwEl = id => document.getElementById(id);
+
+async function pwPost(action, extra) {
+  const fd = new FormData();
+  fd.append('csrf_token', PW_CSRF); fd.append('action', action);
+  for (const k in (extra || {})) fd.append(k, extra[k]);
+  const r = await fetch('settings.php', { method: 'POST', body: fd });
+  return r.json();
+}
+function pwShow(which) {
+  pwEl('pw-idle').style.display      = which === 'idle'      ? 'block' : 'none';
+  pwEl('pw-linking').style.display   = which === 'linking'   ? 'block' : 'none';
+  pwEl('pw-connected').style.display = which === 'connected' ? 'block' : 'none';
+}
+function pwStop() { clearInterval(pwQrTimer); clearInterval(pwStatusTimer); pwQrTimer = pwStatusTimer = null; }
+
+async function pwConnect() {
+  const b = pwEl('pw-start'); b.disabled = true; pwEl('pw-msg').textContent = 'Preparing…';
+  const d = await pwPost('pw_connect');
+  b.disabled = false; pwEl('pw-msg').textContent = '';
+  if (!d.ok) { pwEl('pw-msg').textContent = d.error || 'Could not start.'; return; }
+  if (d.qr) pwEl('pw-qr').src = d.qr;
+  pwShow('linking');
+  // A stale QR silently stops working, so refresh it and watch for the link to complete.
+  pwQrTimer     = setInterval(pwRefreshQr, 20000);
+  pwStatusTimer = setInterval(pwPollStatus, 3000);
+}
+async function pwRefreshQr() {
+  const d = await pwPost('pw_qr');
+  if (d.ok && d.qr) pwEl('pw-qr').src = d.qr;
+}
+async function pwPollStatus() {
+  const d = await pwPost('pw_status');
+  if (d.ok && d.state === 'connected') {
+    pwStop();
+    pwEl('pw-number').textContent = d.msisdn ? '+' + d.msisdn : '';
+    pwShow('connected');
+  }
+}
+function pwTogglePair() { const p = pwEl('pw-pair'); p.style.display = p.style.display === 'none' ? 'block' : 'none'; }
+async function pwPair() {
+  const d = await pwPost('pw_pair', { msisdn: pwEl('pw-msisdn').value });
+  if (!d.ok) { alert(d.error || 'Could not get a code.'); return; }
+  pwEl('pw-code-val').textContent = d.code;
+  pwEl('pw-code').style.display = 'block';
+}
+function pwCancel() { pwStop(); pwShow('idle'); }
+async function pwLogout() {
+  if (!confirm('Disconnect your WhatsApp number? Sending will stop until you link it again.')) return;
+  await pwPost('pw_logout');
+  pwShow('idle');
+}
+async function pwResync() {
+  const m = pwEl('pw-resync-msg'); m.textContent = ' Resyncing…';
+  const d = await pwPost('pw_resync');
+  m.textContent = d.ok ? ' Done — replies should arrive now.' : ' Could not resync: ' + (d.error || 'unknown error');
+}
+</script>
+<?php endif; ?>
+
+<?php /* ── WhatsApp API credentials ──────────────────────────────────────────────
+   The client's own Meta app details. This used to be admin-only, which meant every
+   onboarding and every expired token needed the operator in the loop. Secrets go in
+   encrypted and are never rendered back — an empty box means "leave it alone". */
+$isPersonal = channel_is_personal($CLIENT); ?>
+
+<?php if (!client_may_edit_credentials($CLIENT)): ?>
+  <div class="card" id="credentials">
+    <h2>WhatsApp Number</h2>
+    <p class="text-muted" style="font-size:12.5px;margin:-6px 0 0">
+      Your messages go out on <?= e(BRAND_PARENT) ?>'s WhatsApp account, so there is nothing to
+      set up here and no Meta bill of your own. To move onto your own number instead, contact
+      <?= e(BRAND_PARENT) ?> — it changes how your sending is billed.
+    </p>
+  </div>
+<?php else: ?>
+  <div class="card" id="credentials" style="<?= $isPersonal ? 'opacity:.6' : '' ?>">
+    <h2>WhatsApp API Credentials</h2>
+    <?php if ($isPersonal): ?>
+      <div class="alert info" style="font-size:12.5px">Not used while you are sending from your
+        own number — kept in case you switch back to the WhatsApp Business API.</div>
+    <?php endif; ?>
+    <p class="text-muted" style="font-size:12.5px;margin:-6px 0 16px">
+      From your Meta app at <span class="mono">developers.facebook.com</span>. The token and the
+      secret are encrypted before they are stored and are never shown again.
+    </p>
+
+    <form method="post">
+      <?= csrf_field() ?><input type="hidden" name="action" value="save_credentials">
+      <div class="grid2">
+        <div class="field"><span class="lbl">App ID</span>
+          <input type="text" name="app_id" value="<?= e((string) $CLIENT['app_id']) ?>"></div>
+        <div class="field"><span class="lbl">Phone Number ID</span>
+          <input type="text" name="phone_number_id" value="<?= e((string) $CLIENT['phone_number_id']) ?>"></div>
+        <div class="field"><span class="lbl">WhatsApp Business Account ID</span>
+          <input type="text" name="waba_id" value="<?= e((string) $CLIENT['waba_id']) ?>"></div>
+        <div class="field"><span class="lbl">Access Token
+          <?= $CLIENT['access_token_enc'] ? '<span class="pill green" style="margin-inline-start:6px">••• set</span>' : '' ?></span>
+          <input type="text" name="access_token" autocomplete="off"
+                 placeholder="<?= $CLIENT['access_token_enc'] ? 'Leave blank to keep the current one' : 'Permanent / system-user token' ?>"></div>
+        <div class="field"><span class="lbl">App Secret
+          <?= $CLIENT['app_secret_enc'] ? '<span class="pill green" style="margin-inline-start:6px">••• set</span>'
+                                        : '<span class="pill red" style="margin-inline-start:6px">not set</span>' ?></span>
+          <input type="text" name="app_secret" autocomplete="off"
+                 placeholder="<?= $CLIENT['app_secret_enc'] ? 'Leave blank to keep the current one' : 'Meta app → Settings → Basic' ?>"></div>
+      </div>
+
+      <?php /* Every client has their own Meta app, so each callback is signed with THAT app's
+               secret — there is no platform-wide value that could verify them all. */ ?>
+      <div class="note mt10" style="font-size:13px">
+        <?php if (!$CLIENT['app_secret_enc']): ?>
+          <strong>Your WhatsApp callbacks are not being verified.</strong>
+          Without your App Secret, anyone who finds your webhook URL can forge delivery reports,
+          create contacts and set your automations running — which spends your credits. Paste the
+          App Secret from your Meta app (Settings → Basic) above.
+        <?php else: ?>
+          <label class="row" style="gap:8px;align-items:center">
+            <input type="checkbox" name="require_signed_webhook" value="1" <?= $CLIENT['require_signed_webhook'] ? 'checked' : '' ?>>
+            <span>Reject callbacks that aren't correctly signed by your Meta app.
+              <span class="text-muted">Leave this off and unsigned requests are still accepted.</span></span>
+          </label>
+        <?php endif; ?>
+      </div>
+
+      <div class="row-between mt10">
+        <button type="button" class="btn btn-ghost" id="btn-test-wa">Test connection</button>
+        <button type="submit" class="btn btn-primary">Save credentials</button>
+      </div>
+      <div id="wa-test-result" class="mt10"></div>
+    </form>
+  </div>
+
+  <script>
+  /* Its own token rather than the CSRF const further down the page: this block is parsed
+     before that one, and depending on declaration order across script tags is the kind of
+     thing that breaks silently the day someone moves a card. */
+  const WA_CSRF = <?= json_encode(csrf_token()) ?>;
+  document.getElementById('btn-test-wa').addEventListener('click', async function () {
+    const box = document.getElementById('wa-test-result');
+    this.disabled = true; this.textContent = 'Testing…'; box.innerHTML = '';
+    try {
+      const fd = new FormData();
+      fd.append('action', 'test_connection');
+      fd.append('csrf_token', WA_CSRF);
+      const d = await (await fetch('', { method: 'POST', body: fd })).json();
+      box.innerHTML = d.ok
+        ? '<div class="alert success">Connected — ' + d.count + ' template(s), ' + d.approved + ' approved.</div>'
+        : '<div class="alert error">Could not connect: ' + (d.error || 'unknown error') + '</div>';
+    } catch (e) { box.innerHTML = '<div class="alert error">Network error.</div>'; }
+    this.disabled = false; this.textContent = 'Test connection';
+  });
+  </script>
+<?php endif; ?>
 
 <div class="card" id="ai">
   <h2>AI Engine (for AI-powered automations)</h2>
@@ -102,6 +533,56 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
   </form>
 </div>
 
+<div class="card" id="notif-card" style="display:none">
+  <h2>Notifications</h2>
+  <p class="text-muted" style="font-size:12.5px;margin:-6px 0 14px">
+    Get an alert on this device when a customer replies, so you can jump into the Inbox and take over.
+  </p>
+  <div id="notif-body"></div>
+</div>
+
+<?php $gClient = db_row("SELECT * FROM clients WHERE id=?", [$cid]) ?: $CLIENT; ?>
+<div class="card" id="google">
+  <h2>Google Sheets</h2>
+  <p class="text-muted" style="font-size:12.5px;margin:-6px 0 14px">
+    Connect your Google account once, then any automation can read leads from a sheet and write
+    results back to one. You pick which spreadsheet — nothing else in your Drive is reachable.
+  </p>
+
+  <?php if (!google_configured()): ?>
+    <div class="alert info" style="font-size:12.5px">
+      Google isn't set up on this platform yet. Contact <?= e(BRAND_PARENT) ?> to enable it.
+    </div>
+  <?php elseif (google_connected($gClient)): ?>
+    <div class="alert success" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <strong>Connected</strong>
+      <span class="text-muted"><?= e((string) ($gClient['google_email'] ?: '')) ?></span>
+      <form method="post" style="margin-left:auto" onsubmit="return confirm('Disconnect Google? Automations that read or write sheets will stop until you reconnect.')">
+        <?= csrf_field() ?><input type="hidden" name="action" value="google_disconnect">
+        <button class="btn btn-ghost btn-sm">Disconnect</button>
+      </form>
+    </div>
+    <p class="text-muted" style="font-size:12.5px;margin:10px 0 0">
+      Choose the spreadsheet inside each automation — that way different automations can use
+      different sheets.
+    </p>
+  <?php else: ?>
+    <form method="post">
+      <?= csrf_field() ?><input type="hidden" name="action" value="google_connect">
+      <button class="btn btn-primary" style="display:inline-flex;align-items:center;gap:9px">
+        <svg width="17" height="17" viewBox="0 0 18 18" aria-hidden="true"><path fill="#fff" d="M17.6 9.2c0-.6-.05-1.2-.16-1.8H9v3.4h4.8a4.1 4.1 0 01-1.8 2.7v2.2h2.9c1.7-1.6 2.7-3.9 2.7-6.5z" opacity=".95"/><path fill="#fff" d="M9 18c2.4 0 4.5-.8 6-2.2l-2.9-2.2c-.8.5-1.8.9-3.1.9-2.4 0-4.4-1.6-5.1-3.8H.9v2.3A9 9 0 009 18z" opacity=".8"/><path fill="#fff" d="M3.9 10.7a5.4 5.4 0 010-3.4V5H.9a9 9 0 000 8l3-2.3z" opacity=".65"/><path fill="#fff" d="M9 3.6c1.3 0 2.5.5 3.4 1.3l2.6-2.6A9 9 0 00.9 5l3 2.3C4.6 5.2 6.6 3.6 9 3.6z" opacity=".9"/></svg>
+        Connect your Google account
+      </button>
+    </form>
+    <p class="text-muted" style="font-size:12px;margin:10px 0 0">
+      You'll sign in with Google and approve access. We only ask for the files you choose —
+      we can't see the rest of your Drive.
+    </p>
+  <?php endif; ?>
+</div>
+
+<?= profile_card_html(db_row("SELECT * FROM users WHERE id=?", [(int) $ME['id']]) ?: $ME, '../') ?>
+
 <div class="card">
   <h2>Change Password</h2>
   <form method="post" style="max-width:420px">
@@ -116,6 +597,73 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 
 <script>
 const CSRF = <?= json_encode(csrf_token()) ?>;
+
+/* ── push notifications ──
+   Permission must be requested from a user gesture (iOS refuses otherwise), so this is
+   always behind a button. On iOS push only works once the app is on the Home Screen. */
+(function(){
+  var card=document.getElementById('notif-card'), box=document.getElementById('notif-body');
+  if(!card||!box) return;
+  var supported = ('serviceWorker' in navigator) && ('PushManager' in window) && ('Notification' in window);
+  var iOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
+  var standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+
+  if(!supported){
+    if(iOS && !standalone){
+      card.style.display='';
+      box.innerHTML='<div class="alert info">On iPhone, add this app to your Home Screen first '
+        +'(<strong>Share</strong> &#8593; &rarr; <strong>Add to Home Screen</strong>), open it from there, then come back to turn notifications on.</div>';
+    }
+    return;   // desktop browser without push support: nothing to offer
+  }
+  card.style.display='';
+
+  function b64ToU8(b64){
+    var pad='='.repeat((4 - b64.length % 4) % 4);
+    var raw=atob((b64+pad).replace(/-/g,'+').replace(/_/g,'/'));
+    return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)));
+  }
+  function render(on, note){
+    box.innerHTML = (note?('<div class="alert '+(note.err?'error':'info')+'">'+note.msg+'</div>'):'')
+      + '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
+      + '<span class="pill '+(on?'green':'gray')+' dot">'+(on?'Enabled on this device':'Off')+'</span>'
+      + '<button type="button" class="btn '+(on?'btn-ghost':'btn-primary')+' btn-sm" id="notif-btn">'
+      + (on?'Turn off':'Enable notifications on this device')+'</button></div>';
+    document.getElementById('notif-btn').addEventListener('click', on?disable:enable);
+  }
+  async function current(){
+    var reg = await navigator.serviceWorker.ready;
+    return await reg.pushManager.getSubscription();
+  }
+  async function enable(){
+    var btn=document.getElementById('notif-btn'); btn.disabled=true; btn.textContent='Enabling…';
+    try{
+      var perm = await Notification.requestPermission();
+      if(perm!=='granted'){ render(false,{err:true,msg:'Notifications are blocked for this site. Allow them in your browser settings, then try again.'}); return; }
+      var kr = await (await fetch('../push_subscribe.php?key=1')).json();
+      if(!kr.ok || !kr.key){ render(false,{err:true,msg:'Notifications are not set up on the server yet — ask Gildana to generate the keys.'}); return; }
+      var reg = await navigator.serviceWorker.ready;
+      var sub = await reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:b64ToU8(kr.key)});
+      var fd=new FormData(); fd.append('action','subscribe'); fd.append('csrf_token',CSRF); fd.append('sub',JSON.stringify(sub));
+      var res = await (await fetch('../push_subscribe.php',{method:'POST',body:fd})).json();
+      if(!res.ok){ render(false,{err:true,msg:res.error||'Could not save the subscription.'}); return; }
+      render(true,{msg:'Done — this device will be notified when a customer replies.'});
+    }catch(e){ render(false,{err:true,msg:'Could not enable notifications: '+e.message}); }
+  }
+  async function disable(){
+    var btn=document.getElementById('notif-btn'); btn.disabled=true; btn.textContent='Turning off…';
+    try{
+      var sub = await current();
+      if(sub){
+        var fd=new FormData(); fd.append('action','unsubscribe'); fd.append('csrf_token',CSRF); fd.append('sub',JSON.stringify(sub));
+        await fetch('../push_subscribe.php',{method:'POST',body:fd});
+        await sub.unsubscribe();
+      }
+      render(false,{msg:'Notifications turned off on this device.'});
+    }catch(e){ render(false,{err:true,msg:'Could not turn them off: '+e.message}); }
+  }
+  current().then(function(sub){ render(!!sub, null); }).catch(function(){ render(false,null); });
+})();
 document.getElementById('btn-test-ai').addEventListener('click', async function(){
   const box = document.getElementById('ai-test-result');
   this.disabled = true; this.textContent = 'Testing…'; box.innerHTML = '';

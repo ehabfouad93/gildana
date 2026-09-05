@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/_init.php';
+require_once __DIR__ . '/../includes/automation.php';   // flow_duplicate()
 
 $cid = (int) $CLIENT['id'];
 
@@ -29,6 +30,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
         $newId = db_insert("INSERT INTO flows (client_id,name,kind,status,trigger_type,created_at) VALUES (?,?, 'agent','draft', ?, NOW())", [$cid, $name, $trigger]);
         redirect('agent_edit.php?id=' . $newId);
     }
+}
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'duplicate') {
+    verify_csrf();
+    $newId = flow_duplicate((int) ($_POST['id'] ?? 0), $cid, 'agent');
+    if ($newId > 0) {
+        flash('Copied. This one is a draft — switch it on when you are happy with it.');
+        redirect('agent_edit.php?id=' . $newId);
+    }
+    $err = 'That agent could not be copied.';
 }
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delete') {
     verify_csrf();
@@ -73,6 +83,10 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
           <td style="text-align:right;white-space:nowrap">
             <a class="btn btn-ghost btn-sm" href="agent_edit.php?id=<?= (int) $f['id'] ?>">Edit</a>
             <a class="btn btn-ghost btn-sm" href="agent_chats.php?flow=<?= (int) $f['id'] ?>">Chats</a>
+            <form method="post" style="display:inline">
+              <?= csrf_field() ?><input type="hidden" name="action" value="duplicate"><input type="hidden" name="id" value="<?= (int) $f['id'] ?>">
+              <button class="btn btn-ghost btn-sm" title="Make a copy of this agent">Duplicate</button>
+            </form>
             <form method="post" style="display:inline" onsubmit="return confirm('Delete this agent and its chats?')">
               <?= csrf_field() ?><input type="hidden" name="action" value="delete"><input type="hidden" name="id" value="<?= (int) $f['id'] ?>">
               <button class="icon-btn" title="Delete">&#x2715;</button>

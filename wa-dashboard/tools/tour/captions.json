@@ -1,0 +1,178 @@
+{
+  "_readme": {
+    "en": "Every line spoken in the video, in one file so wording is fixed in one place.",
+    "ar": "كل جملة في الفيديو، في ملف واحد عشان أي تعديل في الصياغة يتعمل مرة واحدة."
+  },
+
+  "ch_start": {
+    "en": "Revenect",
+    "ar": "Revenect",
+    "sub": {
+      "en": "WhatsApp campaigns, automations and leads — one dashboard",
+      "ar": "حملات واتساب والردود الأوتوماتيك والعملاء المحتملين — لوحة واحدة"
+    }
+  },
+  "signin": {
+    "en": "You sign in, and everything is already here — nothing to install.",
+    "ar": "بتسجّل دخولك، وكل حاجة قدامك — مفيش أي برنامج بيتثبّت."
+  },
+  "dash": {
+    "en": "The dashboard: your credits, your contacts, and what has been sent.",
+    "ar": "الصفحة الرئيسية: رصيدك، وجهات اتصالك، والرسايل اللي اتبعتت."
+  },
+  "checklist": {
+    "en": "A new account gets a checklist that ticks itself off from your real data.",
+    "ar": "الحساب الجديد بيلاقي قايمة خطوات بتتعلّم لوحدها من بياناتك الحقيقية."
+  },
+
+  "ch_contacts": {
+    "en": "Contacts",
+    "ar": "جهات الاتصال",
+    "sub": {
+      "en": "Bring people in, tag them, act on the whole group at once",
+      "ar": "تضيف الناس، تحطّ عليهم وسوم، وتتصرّف في المجموعة كلها مرة واحدة"
+    }
+  },
+  "contacts_in": {
+    "en": "Import a CSV, add people one by one, or feed them in from a Google Sheet.",
+    "ar": "استورد ملف CSV، أو ضيف واحد واحد، أو خلي جوجل شيت يغذّيها لوحده."
+  },
+  "contacts_tags": {
+    "en": "Tags are how you find a group again — hot, New Cairo, booked a viewing.",
+    "ar": "الوسوم هي طريقتك ترجع تلاقي مجموعة تاني — مهتم، التجمع، حجز معاينة."
+  },
+  "contacts_pick": {
+    "en": "Tick the ones you want…",
+    "ar": "علّم على اللي عايزهم…"
+  },
+  "contacts_bulk": {
+    "en": "…and act on all of them at once. Four thousand is as easy as four.",
+    "ar": "…واتصرّف فيهم كلهم مرة واحدة. أربع تلاف زي أربعة بالظبط."
+  },
+  "contacts_list": {
+    "en": "That group becomes a list you can send to.",
+    "ar": "المجموعة دي بتبقى قايمة تقدر تبعت لها."
+  },
+
+  "ch_campaign": {
+    "en": "Campaigns",
+    "ar": "الحملات",
+    "sub": {
+      "en": "Write once, send to everybody, see exactly what happened",
+      "ar": "تكتب مرة، تبعت للكل، وتشوف بالظبط حصل إيه"
+    }
+  },
+  "camp_new": {
+    "en": "A campaign is three choices: who, what, and when.",
+    "ar": "الحملة تلات اختيارات بس: مين، وإيه، وإمتى."
+  },
+  "camp_list": {
+    "en": "Pick the list you just built.",
+    "ar": "اختار القايمة اللي لسه عاملها."
+  },
+  "camp_tpl": {
+    "en": "Pick an approved template. The blanks fill in from each contact's own record.",
+    "ar": "اختار قالب معتمد. والفراغات بتتملى من بيانات كل عميل هو."
+  },
+  "camp_send": {
+    "en": "Send it. The worker keeps sending after you close the tab.",
+    "ar": "ابعت. والسيرفر بيكمّل إرسال حتى لو قفلت المتصفح."
+  },
+  "report": {
+    "en": "Sent, delivered, read — per message, not an estimate.",
+    "ar": "اتبعت، وصلت، اتقريت — لكل رسالة، مش تقدير."
+  },
+  "report_fail": {
+    "en": "Anything that failed says why, and is refunded.",
+    "ar": "أي رسالة فشلت بتقول السبب، والرصيد بيرجع."
+  },
+
+  "ch_inbox": {
+    "en": "The inbox",
+    "ar": "صندوق الوارد",
+    "sub": {
+      "en": "Every reply in one place, on any device",
+      "ar": "كل الردود في مكان واحد، ومن أي جهاز"
+    }
+  },
+  "inbox": {
+    "en": "Replies land here. Messages you receive are always free.",
+    "ar": "الردود بتيجي هنا. والرسايل اللي بتوصلك مجانية دايمًا."
+  },
+  "inbox_reply": {
+    "en": "Answer yourself whenever you want to take over from the bot.",
+    "ar": "ردّ بنفسك في أي وقت لو حبيت تمسك المحادثة من البوت."
+  },
+
+  "ch_auto": {
+    "en": "Automations",
+    "ar": "الردود الأوتوماتيك",
+    "sub": {
+      "en": "Draw the conversation once — it runs itself after that",
+      "ar": "ارسم المحادثة مرة واحدة — وبعد كده بتشتغل لوحدها"
+    }
+  },
+  "auto_canvas": {
+    "en": "You draw the conversation. Twenty-two kinds of step, joined up on a canvas.",
+    "ar": "بترسم المحادثة. اتنين وعشرين نوع خطوة، موصولين على لوحة واحدة."
+  },
+  "auto_stats": {
+    "en": "Each step shows how many people reached it and how many carried on.",
+    "ar": "كل خطوة بتوريك كام واحد وصل لها وكام كمّل بعدها."
+  },
+  "auto_preview": {
+    "en": "Preview runs the real engine as a WhatsApp chat — and sends nothing.",
+    "ar": "المعاينة بتشغّل المحرك الحقيقي كأنها محادثة واتساب — ومن غير ما تبعت أي حاجة."
+  },
+  "auto_preview_type": {
+    "en": "You answer as if you were the customer, and watch where it branches.",
+    "ar": "بترد كأنك العميل، وتشوف المحادثة بتروح فين."
+  },
+  "auto_check": {
+    "en": "Before it goes live, it looks for the mistakes that kill a conversation quietly.",
+    "ar": "قبل ما تفعّلها، بيدوّر على الأخطاء اللي بتوقّف المحادثة في صمت."
+  },
+
+  "ch_qual": {
+    "en": "The Lead Qualifier",
+    "ar": "مؤهِّل العملاء",
+    "sub": {
+      "en": "Built for property — every enquiry comes back scored",
+      "ar": "معمول للعقارات — كل استفسار بيرجع لك بدرجة"
+    }
+  },
+  "qual": {
+    "en": "It talks to every enquiry, asks what an agent would ask, and scores the answer.",
+    "ar": "بيكلّم كل استفسار، ويسأل اللي المندوب بيسأله، ويدّي درجة للإجابة."
+  },
+  "qual_grades": {
+    "en": "Hot, warm or cold — so your team calls the right person first.",
+    "ar": "مهتم جدًا، أو مهتم، أو بارد — عشان فريقك يكلّم الصح الأول."
+  },
+  "qual_transcript": {
+    "en": "And the whole conversation is there behind every score.",
+    "ar": "والمحادثة كلها موجودة ورا كل درجة."
+  },
+
+  "ch_help": {
+    "en": "And if you get stuck",
+    "ar": "ولو وقفت في حاجة",
+    "sub": {
+      "en": "Every page explains itself",
+      "ar": "كل صفحة بتشرح نفسها"
+    }
+  },
+  "help_guide": {
+    "en": "Every page has a How to use button with the steps for that page.",
+    "ar": "كل صفحة فيها زرار «How to use» بخطوات الصفحة دي بالذات."
+  },
+
+  "end_tour": {
+    "en": "That is the whole product. Help is a button on every page.",
+    "ar": "ده المنتج كله. وزرار المساعدة موجود في كل صفحة."
+  },
+  "end_promo": {
+    "en": "Revenect — ask us for access and we set it up with you in an hour.",
+    "ar": "Revenect — اطلب حسابك وإحنا بنظبّطه معاك في ساعة."
+  }
+}

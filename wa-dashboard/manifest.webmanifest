@@ -1,0 +1,33 @@
+{
+  "name": "Revenect",
+  "short_name": "Revenect",
+  "description": "Connect every interaction to revenue \u2014 campaigns, chatbots and a live inbox.",
+  "start_url": "./login.php",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#F3F4F6",
+  "theme_color": "#0D1321",
+  "lang": "en",
+  "dir": "ltr",
+  "icons": [
+    {
+      "src": "assets/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/icons/maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

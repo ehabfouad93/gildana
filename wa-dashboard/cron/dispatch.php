@@ -6,7 +6,8 @@ declare(strict_types=1);
  *
  *   * * * * * php /path/wa-dashboard/cron/dispatch.php
  *
- * Or over HTTP: https://app.example.com/wa-dashboard/cron/dispatch.php?token=<webhook_verify_token>
+ * Or over HTTP, with the token in a header (not the URL — access logs keep those):
+ *   curl -H "X-Cron-Token: <webhook_verify_token>" https://app.example.com/cron/dispatch.php
  *
  * Does three things under a single-runner MySQL lock:
  *   1. Sends campaign messages IN PARALLEL (fast bulk).
@@ -22,15 +23,26 @@ require __DIR__ . '/../includes/crypto.php';
 require __DIR__ . '/../includes/db.php';
 require __DIR__ . '/../includes/whatsapp.php';
 require __DIR__ . '/../includes/credits.php';
+require __DIR__ . '/../includes/billing.php';
 require __DIR__ . '/../includes/campaign.php';
 require __DIR__ . '/../includes/notify.php';
 require __DIR__ . '/../includes/ai.php';
 require __DIR__ . '/../includes/automation.php';
+require_once __DIR__ . '/../includes/push.php';
 
 if (PHP_SAPI !== 'cli') {
-    if (!hash_equals((string) config('webhook_verify_token'), (string) ($_GET['token'] ?? ''))) {
+    /* Prefer the header. The ?token= form still works for one release so an existing cron
+       entry keeps running, but it leaks into access logs, proxy logs and Referer headers —
+       and anyone holding it can start the worker. */
+    $expected = (string) config('webhook_verify_token');
+    $header   = (string) ($_SERVER['HTTP_X_CRON_TOKEN'] ?? '');
+    $query    = (string) ($_GET['token'] ?? '');
+    if ($header !== '' ? !hash_equals($expected, $header) : !hash_equals($expected, $query)) {
         http_response_code(403);
         exit('Forbidden');
+    }
+    if ($header === '' && $query !== '') {
+        error_log('dispatch: token passed in the URL is deprecated — send it as the X-Cron-Token header instead.');
     }
     header('Content-Type: text/plain; charset=UTF-8');
     // Keep running even if the triggering (fire-and-forget) request disconnects,
@@ -41,17 +53,62 @@ if (PHP_SAPI !== 'cli') {
 
 function out(string $msg): void { echo '[' . date('H:i:s') . '] ' . $msg . "\n"; }
 
+/* Retry policy for transient WhatsApp failures (rate limits, Meta 5xx, network blips).
+   Attempt 1 fails → retry in ~1m, then ~5m, then ~25m; after that the message is 'dead'
+   and waits for a human on the Needs attention page rather than disappearing silently. */
+const SEND_MAX_ATTEMPTS   = 4;
+const SEND_BACKOFF_BASE_SEC = 60;
+
+/* The ONLY tables the retention sweep may ever delete from, mapped to their timestamp
+   column. Both are raw debug logs duplicating data that is kept permanently elsewhere.
+   Everything a client would call "their data" — messages, campaigns, contacts, flows,
+   credits and payments — is absent here by design and unreachable by the sweep. */
+const RETENTION_TABLES = [
+    'webhook_events' => 'received_at',
+    'inbound_log'    => 'created_at',
+];
+
 $pdo = db();
-if ((int) $pdo->query("SELECT GET_LOCK('wa_dispatch', 0)")->fetchColumn() !== 1) {
-    out('Another worker is running — exiting.');
-    exit;
+
+/* This worker's identity. Rows are claimed under it so a worker only ever sends the
+   messages it actually won, even when several workers run at once. */
+$workerId = substr(bin2hex(random_bytes(8)) . '-' . getmypid(), 0, 40);
+
+/* The global lock now guards only the *claim* step. Sending happens under a per-client
+   lock further down, so one tenant stuck on a slow upload no longer stalls everyone
+   else — and a second worker can pick up other tenants in parallel. */
+function claim_lock(PDO $pdo): bool
+{
+    return (int) $pdo->query("SELECT GET_LOCK('wa_claim', 5)")->fetchColumn() === 1;
 }
+function claim_unlock(PDO $pdo): void { $pdo->query("SELECT RELEASE_LOCK('wa_claim')"); }
 
 try {
     /* ══ CAMPAIGNS (parallel) ══ */
-    // Reclaim messages orphaned by a worker that died mid-run (claimed but never sent).
-    db_run("UPDATE campaign_messages SET status='queued', updated_at=NOW()
-              WHERE status='sending' AND updated_at < (NOW() - INTERVAL 5 MINUTE)");
+    /* Reclaim messages orphaned by a worker that died mid-run.
+       Critically, this is now split by whether an attempt was ever recorded:
+
+         - no send_attempts row  → the process died BEFORE calling WhatsApp. Nothing was
+                                   sent and nothing was charged for it, so it is safe to
+                                   put back in the queue.
+         - an attempt row exists → the call was made and the outcome never came back. The
+                                   message may well have been delivered. Re-sending would
+                                   double-message the customer and double-charge the client,
+                                   which is exactly the bug this replaces, so it goes to
+                                   'review' for a human instead of back to 'queued'. */
+    db_run("UPDATE campaign_messages m
+              LEFT JOIN send_attempts a ON a.campaign_message_id = m.id
+               SET m.status='queued', m.claimed_at=NULL, m.claimed_by=NULL, m.updated_at=NOW()
+             WHERE m.status='sending' AND m.claimed_at < (NOW() - INTERVAL 5 MINUTE)
+               AND a.id IS NULL");
+
+    $stranded = db_run("UPDATE campaign_messages m
+                          JOIN send_attempts a ON a.campaign_message_id = m.id
+                           SET m.status='review', m.error_code='unknown_outcome',
+                               m.error_title='Send attempted, result never confirmed', m.updated_at=NOW()
+                         WHERE m.status='sending' AND m.claimed_at < (NOW() - INTERVAL 5 MINUTE)
+                           AND a.outcome='unknown'");
+    if ($stranded) out("{$stranded} message(s) with an unconfirmed send moved to review — not resent.");
 
     $promoted = db_run(
         "UPDATE campaigns SET status='sending', started_at=COALESCE(started_at,NOW())
@@ -80,61 +137,270 @@ try {
         $limit = max(0, min($perClientCap, $globalCap - ($sentTotal + $failedTotal)));
         if ($limit === 0) break;
 
-        $ids = array_column(db_all(
-            "SELECT m.id FROM campaign_messages m JOIN campaigns c ON c.id = m.campaign_id
-              WHERE m.client_id = ? AND m.status = 'queued' AND c.status = 'sending'
-              ORDER BY m.id ASC LIMIT {$limit}", [$cid]
-        ), 'id');
-        if (!$ids) continue;
+        // Personal numbers send in paced slots. slot_budget() is 0 while the client is in
+        // its cooldown, and the same budget is shared with qualifier/automation sends below
+        // so the three modules can't each burn a full slot.
+        $budget = slot_budget($client);
+        if ($budget <= 0) { out("Client {$cid}: personal slot cooling down — skipped."); continue; }
+        $limit = min($limit, $budget);
 
-        $ph = implode(',', array_fill(0, count($ids), '?'));
-        db_run("UPDATE campaign_messages SET status='sending', updated_at=NOW() WHERE id IN ($ph) AND status='queued'", $ids);
-        $messages = db_all("SELECT * FROM campaign_messages WHERE id IN ($ph)", $ids);
+        /* Take this tenant's lock. If another worker already has it, skip to the next
+           tenant instead of waiting — this is what stops one slow client blocking the
+           rest of the run. */
+        if ((int) $pdo->query("SELECT GET_LOCK('wa_dispatch_{$cid}', 0)")->fetchColumn() !== 1) {
+            out("Client {$cid}: already being sent by another worker — skipped.");
+            continue;
+        }
 
-        // Reserve credits + build the send items (keyed by message id).
+        try {
+        /* ── Claim, under the short global lock so two workers can't select the same rows ── */
+        if (!claim_lock($pdo)) { out("Client {$cid}: claim lock busy — skipped."); continue; }
+        try {
+            $ids = array_column(db_all(
+                "SELECT m.id FROM campaign_messages m JOIN campaigns c ON c.id = m.campaign_id
+                  WHERE m.client_id = ? AND m.status = 'queued' AND c.status = 'sending'
+                    AND (m.next_attempt_at IS NULL OR m.next_attempt_at <= NOW())
+                  ORDER BY m.id ASC LIMIT {$limit}", [$cid]
+            ), 'id');
+            if (!$ids) continue;
+
+            $ph = implode(',', array_fill(0, count($ids), '?'));
+            db_run("UPDATE campaign_messages
+                       SET status='sending', claimed_at=NOW(), claimed_by=?, updated_at=NOW()
+                     WHERE id IN ($ph) AND status='queued'", array_merge([$workerId], $ids));
+        } finally {
+            claim_unlock($pdo);
+        }
+
+        /* Read back ONLY the rows this worker actually won. The previous code re-selected
+           every id it had looked at, regardless of which ones the UPDATE managed to claim. */
+        $messages = db_all(
+            "SELECT * FROM campaign_messages WHERE id IN ($ph) AND claimed_by = ? ORDER BY id ASC",
+            array_merge($ids, [$workerId]));
+        if (!$messages) continue;
+
+        /* Load every contact for the batch in ONE query, keyed by id. This used to be a
+           separate SELECT per message — hundreds of extra round-trips on a 300-message run. */
+        $contactIds = array_values(array_filter(array_map(fn($m) => (int) $m['contact_id'], $messages)));
+        $contactsById = [];
+        if ($contactIds) {
+            $cph = implode(',', array_fill(0, count($contactIds), '?'));
+            foreach (db_all("SELECT * FROM contacts WHERE id IN ($cph)", $contactIds) as $c) {
+                $contactsById[(int) $c['id']] = $c;
+            }
+        }
+
+        /* What each message in this batch costs.
+           A client on their own WhatsApp account pays a flat 1 credit — Meta already billed
+           them directly, so there is no cost for us to price. A client on OUR account is
+           priced from the rate table by destination country and message category, because
+           that message is a real bill we have to cover. */
+        $msgCredits = [];
+        $catCache   = [];
+        foreach ($messages as $m) {
+            $campId = (int) $m['campaign_id'];
+            if (!array_key_exists($campId, $catCache)) {
+                $catCache[$campId] = strtolower((string) (db_val(
+                    "SELECT t.category FROM campaigns c LEFT JOIN templates t ON t.id=c.template_id WHERE c.id=?",
+                    [$campId]) ?: 'utility'));
+            }
+            $msgCredits[(int) $m['id']] = billing_message_credits($client, (string) $m['phone_e164'], $catCache[$campId]);
+        }
+
+        /* One reservation for the whole batch instead of a transaction per message. */
+        $reserve = credits_reserve($cid, array_sum($msgCredits), null);
+        $creditsLeft = (int) $reserve['granted'];
+        $reserveTxn  = $reserve['txn_id'];
+        if ($creditsLeft === 0) {
+            db_run("UPDATE campaign_messages SET status='failed', error_code='no_credits',
+                           error_title='Insufficient credits', claimed_by=NULL, updated_at=NOW()
+                     WHERE id IN ($ph) AND claimed_by=?", array_merge($ids, [$workerId]));
+            $failedTotal += count($messages);
+            $noCreditClients[$cid] = (string) $client['name'];
+            continue;
+        }
+        $reservedCount = $creditsLeft;   // remember what we took, to release the unspent part
+
+        // Build the send items (keyed by message id). Credits are already reserved above.
         $tplCache = [];
         $items = [];
+        $anyMedia = false;
         foreach ($messages as $m) {
             $campId = (int) $m['campaign_id'];
             $touchedCampaigns[$campId] = true;
             if (!isset($tplCache[$campId])) {
-                $tplCache[$campId] = db_row("SELECT t.wa_name, t.language FROM campaigns c JOIN templates t ON t.id=c.template_id WHERE c.id=?", [$campId]);
+                // LEFT JOIN: a personal-channel campaign has no template — it carries its
+                // own text in campaigns.body_text.
+                $row = db_row("SELECT t.wa_name, t.language, t.components, t.body_text,
+                                      c.variable_map, c.body_text AS campaign_text
+                                 FROM campaigns c LEFT JOIN templates t ON t.id=c.template_id
+                                WHERE c.id=?", [$campId]);
+                if ($row && !empty($row['wa_name'])) {
+                    $comps = json_decode((string) $row['components'], true) ?: [];
+                    $row['has_media'] = wa_template_has_media($comps);
+                    // Upload the header image ONCE per campaign and send by media id. Sending a
+                    // link made Meta re-download it for every recipient, which throttles on
+                    // shared hosting and shows up as #131053 on big sends. Resolved here (not at
+                    // creation) so a campaign scheduled weeks out can't ship an expired id.
+                    $row['media_id'] = null;
+                    // Meta media ids are a Cloud API concept. A personal-channel client has no
+                    // Meta credentials, so resolving one there just fails with an
+                    // "Authentication Error" on every campaign — skip it.
+                    if ($row['has_media'] && !channel_is_personal($client)) {
+                        $vm  = json_decode((string) $row['variable_map'], true) ?: [];
+                        $url = trim((string) (campaign_config($vm)['header_media'] ?? ''));
+                        if ($url !== '') $row['media_id'] = wa_resolve_media($client, $url);
+                    }
+                }
+                $tplCache[$campId] = $row;
             }
             $tpl = $tplCache[$campId];
-            if (!$tpl) { db_run("UPDATE campaign_messages SET status='failed', error_code='no_template', error_title='Template missing', updated_at=NOW() WHERE id=?", [(int) $m['id']]); $failedTotal++; continue; }
-            if (credits_adjust($cid, -1, 'send', $campId) === null) {
-                db_run("UPDATE campaign_messages SET status='failed', error_code='no_credits', error_title='Insufficient credits', updated_at=NOW() WHERE id=?", [(int) $m['id']]);
-                $failedTotal++; $noCreditClients[$cid] = (string) $client['name']; continue;
+            $plainText = trim((string) ($tpl['campaign_text'] ?? ''));
+            if (!$tpl || ($plainText === '' && empty($tpl['wa_name']))) {
+                db_run("UPDATE campaign_messages SET status='failed', error_code='no_template', error_title='Template missing', claimed_by=NULL, updated_at=NOW() WHERE id=?", [(int) $m['id']]);
+                $failedTotal++; continue;
+            }
+            // Draw from the batch reservation rather than opening a transaction per message.
+            $costCredits = $msgCredits[(int) $m['id']] ?? 1;
+            if ($creditsLeft < $costCredits) {
+                db_run("UPDATE campaign_messages SET status='queued', claimed_by=NULL, claimed_at=NULL, updated_at=NOW() WHERE id=?", [(int) $m['id']]);
+                $noCreditClients[$cid] = (string) $client['name']; continue;
+            }
+            $creditsLeft -= $costCredits;
+            if (!empty($tpl['has_media'])) $anyMedia = true;
+            $comps = json_decode((string) $m['rendered_components'], true) ?: [];
+            if (!isset($comps['text'])) {
+                $comps = wa_apply_media_id($comps, $tpl['media_id'] ?? null);   // no-op without an id
             }
             $items[(int) $m['id']] = [
-                'to' => (string) $m['phone_e164'], 'name' => (string) $tpl['wa_name'], 'lang' => (string) $tpl['language'],
-                'components' => json_decode((string) $m['rendered_components'], true) ?: [],
+                'to' => (string) $m['phone_e164'],
+                'name' => (string) ($tpl['wa_name'] ?: 'Message'), 'lang' => (string) ($tpl['language'] ?? 'en'),
+                // Set only for plain-text (personal channel) campaigns.
+                'text' => (string) ($comps['text'] ?? ''),
+                'image' => (string) ($comps['image'] ?? ''),
+                'components' => isset($comps['text']) ? [] : $comps,
                 'campId' => $campId, 'contact' => (int) $m['contact_id'],
+                // Meta prices by category, so the charge record needs it.
+                'category' => $catCache[$campId] ?? 'utility',
+                // Used only by the personal channel, which renders the template to text.
+                'tpl' => $tpl,
+                'cfg' => campaign_config(json_decode((string) $tpl['variable_map'], true) ?: []),
+                // From the single batched lookup above, not a query per message.
+                'contact_row' => $contactsById[(int) $m['contact_id']] ?? ['name' => ''],
             ];
         }
 
+        // Media templates get gentler concurrency — even by id, Meta is stricter about them.
+        // A personal number goes strictly one at a time (see the sequential sender below).
+        $isPersonal = channel_is_personal($client);
+        $chunkSize  = $isPersonal ? 1 : ($anyMedia ? max(1, (int) config('send_parallel_media', 10)) : $parallel);
+
         // Send in parallel chunks.
-        foreach (array_chunk($items, $parallel, true) as $chunk) {
-            $res = wa_send_template_batch($client, $chunk);
+        $firstChunk = true;
+        foreach (array_chunk($items, $chunkSize, true) as $chunk) {
+            /* Record the attempt BEFORE calling WhatsApp. If the process dies at any point
+               from here on, this row is the evidence that a call may have gone out — the
+               reclaim sweep reads it and sends the message to review instead of resending. */
+            $attemptNo = [];
+            foreach ($chunk as $mid => $it) {
+                $attemptNo[$mid] = (int) db_val("SELECT attempt_count FROM campaign_messages WHERE id=?", [(int) $mid]) + 1;
+                db_run("INSERT INTO send_attempts (campaign_message_id, client_id, attempt_no, outcome, started_at)
+                        VALUES (?,?,?,'unknown',NOW())
+                        ON DUPLICATE KEY UPDATE started_at=VALUES(started_at), outcome='unknown'",
+                    [(int) $mid, $cid, $attemptNo[$mid]]);
+                db_run("UPDATE campaign_messages SET attempt_count=? WHERE id=?", [$attemptNo[$mid], (int) $mid]);
+            }
+
+            if ($isPersonal) {
+                // Pace between messages, but don't pay the delay before the very first one.
+                if (!$firstChunk) slot_pace_sleep();
+                $firstChunk = false;
+                $res = [];
+                foreach ($chunk as $mid => $it) {
+                    // A plain-text campaign already has its text rendered per recipient at
+                    // creation; anything else is a template rendered to text. An image rides
+                    // with that text as its caption — one message, not two.
+                    if ($it['image'] !== '') {
+                        $res[$mid] = channel_send_image($client, (string) $it['to'], $it['image'], $it['text']);
+                    } elseif ($it['text'] !== '') {
+                        $res[$mid] = channel_send_text($client, (string) $it['to'], $it['text']);
+                    } else {
+                        $res[$mid] = channel_send_template($client, (string) $it['to'], $it['tpl'], $it['cfg'], $it['contact_row'], 'campaign_resolve_value');
+                    }
+                }
+            } else {
+                $res = wa_send_template_batch($client, $chunk);
+            }
+
             foreach ($res as $mid => $r) {
-                $it = $chunk[$mid];
+                $it   = $chunk[$mid];
+                $code = (string) ($r['error_code'] ?? '');
+                $ttl  = (string) ($r['error_title'] ?? '');
+
+                /* Close the attempt row with a definite outcome. Anything still 'unknown'
+                   after this point means the process died mid-call. */
+                db_run("UPDATE send_attempts SET outcome=?, wa_message_id=?, error_code=?, error_title=?, finished_at=NOW()
+                         WHERE campaign_message_id=? AND attempt_no=?",
+                    [$r['ok'] ? 'ok' : 'failed', $r['wamid'] ?? null,
+                     substr($code, 0, 32), substr($ttl, 0, 255), (int) $mid, $attemptNo[$mid]]);
+
                 if ($r['ok']) {
-                    db_run("UPDATE campaign_messages SET status='sent', wa_message_id=?, sent_at=NOW(), updated_at=NOW(), error_code=NULL, error_title=NULL WHERE id=?", [$r['wamid'], (int) $mid]);
+                    db_run("UPDATE campaign_messages SET status='sent', wa_message_id=?, sent_at=NOW(), updated_at=NOW(), error_code=NULL, error_title=NULL, claimed_by=NULL WHERE id=?", [$r['wamid'], (int) $mid]);
+                    // Keep the live progress moving without re-scanning the whole campaign;
+                    // campaign_refresh_counts() reconciles at the end of the run.
+                    campaign_bump_counts($it['campId'], 'sent_count');
+                    // What this message cost us and what we charged for it.
+                    billing_record_messages($client, (string) $it['to'], (string) ($it['category'] ?? 'utility'), 1,
+                        billing_message_cost($client, (string) $it['to'], (string) ($it['category'] ?? 'utility')),
+                        $msgCredits[(int) $mid] ?? 1);
                     $sentTotal++;
+                } elseif (wa_error_is_transient($code, $ttl) && $attemptNo[$mid] < SEND_MAX_ATTEMPTS) {
+                    /* Transient: schedule a later attempt instead of burning the message.
+                       One retry 0.5s later was never enough for a rate limit or a Meta 5xx —
+                       it just turned a blip into a permanent failure. Backoff with jitter so
+                       a whole batch doesn't come back in lockstep. */
+                    $delay = SEND_BACKOFF_BASE_SEC * (5 ** ($attemptNo[$mid] - 1));
+                    $delay = (int) ($delay * (0.8 + (random_int(0, 40) / 100)));
+                    db_run("UPDATE campaign_messages
+                               SET status='queued', next_attempt_at=(NOW() + INTERVAL ? SECOND),
+                                   error_code=?, error_title=?, claimed_by=NULL, claimed_at=NULL, updated_at=NOW()
+                             WHERE id=?",
+                        [$delay, substr($code, 0, 32), substr($ttl, 0, 255), (int) $mid]);
+                    /* Refund now. The retry re-enters the queue and will reserve its own
+                       credit when it is claimed again — keeping this one would bill twice. */
+                    credits_adjust($cid, $msgCredits[(int) $mid] ?? 1, 'refund_retry', $it['campId']);
                 } else {
-                    credits_adjust($cid, 1, 'refund_failed', $it['campId']);
-                    db_run("UPDATE campaign_messages SET status='failed', error_code=?, error_title=?, updated_at=NOW() WHERE id=?",
-                        [substr((string) $r['error_code'], 0, 32), substr((string) $r['error_title'], 0, 255), (int) $mid]);
+                    /* Permanent, or out of attempts. */
+                    $dead = $attemptNo[$mid] >= SEND_MAX_ATTEMPTS && wa_error_is_transient($code, $ttl);
+                    credits_adjust($cid, $msgCredits[(int) $mid] ?? 1, 'refund_failed', $it['campId']);
+                    db_run("UPDATE campaign_messages SET status=?, error_code=?, error_title=?, claimed_by=NULL, updated_at=NOW() WHERE id=?",
+                        [$dead ? 'dead' : 'failed', substr($code, 0, 32), substr($ttl, 0, 255), (int) $mid]);
                     $failedTotal++;
                 }
                 if ((int) $it['contact'] > 0) {
-                    msg_log($cid, (int) $it['contact'], 'out', '📄 Template: ' . $it['name'], [
-                        'type' => 'template', 'source' => 'campaign',
+                    $logText = $it['text'] !== '' ? $it['text'] : '📄 Template: ' . $it['name'];
+                    if ($it['image'] !== '') $logText = '🖼️ ' . ($it['text'] !== '' ? $it['text'] : 'Image');
+                    msg_log($cid, (int) $it['contact'], 'out', $logText, [
+                        'type' => $it['image'] !== '' ? 'image' : 'template', 'source' => 'campaign',
                         'status' => $r['ok'] ? 'sent' : 'failed', 'wamid' => $r['wamid'] ?? null,
                         'error' => $r['ok'] ? null : (string) $r['error_title'],
                     ]);
                 }
+                // A send attempt spends slot budget even when it fails: the number still
+                // reached out to WhatsApp, which is exactly what the pacing protects.
+                slot_consume($client, 1);
             }
+        }
+        if ($isPersonal) out("Client {$cid}: personal slot used " . count($items) . " message(s).");
+
+        } finally {
+            /* Give back whatever the batch reserved but never spent — messages that failed,
+               were skipped for a missing template, or never got sent at all. One ledger row. */
+            if (isset($reservedCount) && $creditsLeft > 0) {
+                credits_release($cid, $creditsLeft, null, 'refund_unused');
+            }
+            $reservedCount = null; $creditsLeft = 0;
+            $pdo->query("SELECT RELEASE_LOCK('wa_dispatch_{$cid}')");
         }
     }
 
@@ -157,16 +423,68 @@ try {
         try {
             $resumed  = automation_tick();
             $leads    = automation_ingest_sheets();
+            // Hand campaign recipients to their follow-up flow BEFORE the outreach sender
+            // runs, so anyone who became due this minute goes out in this same pass.
+            $followed = automation_campaign_followups();
             $outreach = automation_send_outreach();
             $noAns    = automation_sweep_no_answer((int) config('no_answer_hours', 24));
-            out("Automation: resumed={$resumed} sheet_leads={$leads} outreach_sent={$outreach} no_answer={$noAns}.");
+            // One push per client with pending inbound, however many messages arrived.
+            $pushes   = push_dispatch();
+            out("Automation: resumed={$resumed} sheet_leads={$leads} campaign_followups={$followed} outreach_sent={$outreach} no_answer={$noAns} pushes={$pushes}.");
         } finally {
             $pdo->query("SELECT RELEASE_LOCK('wa_automation')");
         }
     }
 
+    // Start the cooldown for every personal client that sent anything this run. Done once,
+    // at the end, so campaigns + qualifier + automation share a single slot.
+    foreach (db_all("SELECT * FROM clients WHERE channel='personal'") as $pc) slot_close($pc);
+
+    /* ══ PLANS ══ Grant this month's included credits to anyone whose renewal is due. */
+    $renewed = 0;
+    foreach (db_all("SELECT * FROM clients WHERE status='active' AND plan_id IS NOT NULL
+                       AND (plan_renews_at IS NULL OR plan_renews_at <= NOW())") as $pc) {
+        if (billing_renew($pc)) $renewed++;
+    }
+    if ($renewed) out("Plans: renewed {$renewed} subscription(s).");
+
+    /* ══ RETENTION ══
+       CLIENT DATA IS NEVER DELETED. Not their conversations (messages), not their campaigns
+       or the per-message send history, not their contacts or lists, not their flows, and not
+       their payments and balances (credit_transactions). No setting can reach any of those —
+       the sweep can only touch the tables named in RETENTION_TABLES below, so widening it is
+       a deliberate, reviewable edit rather than a one-word change to a query.
+
+       The two tables it does sweep are raw duplicates of data that IS kept forever:
+         webhook_events — the untouched JSON of a callback whose content became a `messages`
+                          row. Its event_key is also what webhook.php uses to ignore a
+                          re-delivered callback; 90 days is far beyond any window in which
+                          Meta re-delivers, so that protection is unaffected.
+         inbound_log    — why the bot answered a given message. The message itself is kept.
+
+       Set retention_days to 0 to keep even these two indefinitely. */
+    /* Distinguish "not configured" from an explicit 0. db_val() returns false when there is
+       no row, and `?:` would treat the string "0" as unset — either mistake silently flips
+       the behaviour, in opposite directions. */
+    $retentionRaw  = db_val("SELECT v FROM app_settings WHERE k='retention_days'");
+    $unset         = $retentionRaw === false || $retentionRaw === null || $retentionRaw === '';
+    $retentionDays = $unset ? 90 : (int) $retentionRaw;
+    if ($retentionDays > 0) {
+        $pruned = 0;
+        foreach (RETENTION_TABLES as $table => $tsColumn) {
+            // Chunked so a first run over a long-neglected table can't lock it for minutes.
+            do {
+                $n = db_run("DELETE FROM `{$table}` WHERE `{$tsColumn}` < (NOW() - INTERVAL ? DAY) LIMIT 5000",
+                    [$retentionDays]);
+                $pruned += $n;
+            } while ($n === 5000);
+        }
+        if ($pruned) out("Retention: pruned {$pruned} debug-log row(s) older than {$retentionDays} day(s). Client data untouched.");
+    }
+
     // Heartbeat — lets the Health Check page confirm the cron is actually running.
     @touch(__DIR__ . '/.heartbeat');
 } finally {
-    $pdo->query("SELECT RELEASE_LOCK('wa_dispatch')");
+    // Per-client locks are released inside the loop; nothing global is held here any more.
+    claim_unlock($pdo);
 }

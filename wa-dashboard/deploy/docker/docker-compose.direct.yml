@@ -1,0 +1,14 @@
+# TEMPORARY direct access — use only while DNS or the certificate is still pending.
+#
+#   docker compose -f docker-compose.revenect.yml -f docker-compose.direct.yml up -d
+#   → http://<server-ip>:8080
+#
+# ⚠️ This publishes the dashboard on plain HTTP with no certificate. Use it to confirm the
+# app runs, NOT to create the admin account or enter WhatsApp tokens — those would travel
+# unencrypted. Remove it as soon as the domain works:
+#
+#   docker compose -f docker-compose.revenect.yml up -d --force-recreate
+services:
+  revenect:
+    ports:
+      - "8080:80"

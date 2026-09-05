@@ -1,0 +1,101 @@
+# Revenect — add-on stack for a server that ALREADY runs n8n behind Traefik.
+#
+# Traefik holds :80 and :443, so the dashboard joins it as another router rather than
+# installing nginx (which would fight for the port and take n8n down).
+#
+# Before `docker compose up`, set these in the same folder's .env file:
+#   REVENECT_DOMAIN=app.yourdomain.com
+#   REVENECT_DB_PASS=<a long random password>
+#   TRAEFIK_NETWORK=root_default          (confirmed on this server)
+#   TRAEFIK_CERTRESOLVER=mytlschallenge    (confirmed on this server)
+
+services:
+  revenect:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    container_name: revenect
+    restart: unless-stopped
+    volumes:
+      # The app itself, so `git pull` on the host updates the container with no rebuild.
+      - ../..:/var/www/html
+    environment:
+      TZ: ${TZ:-Africa/Cairo}
+    depends_on:
+      revenect-db:
+        condition: service_healthy
+    networks:
+      - revenect
+      - traefik
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=${TRAEFIK_NETWORK}
+      - traefik.http.routers.revenect.rule=Host(`${REVENECT_DOMAIN}`)
+      # websecure = :443. No HTTP->HTTPS middleware here: this Traefik already redirects
+      # globally (--entrypoints.web.http.redirections.entryPoint.to=websecure), so adding
+      # our own would just duplicate it.
+      - traefik.http.routers.revenect.entrypoints=websecure
+      - traefik.http.routers.revenect.tls=true
+      - traefik.http.routers.revenect.tls.certresolver=${TRAEFIK_CERTRESOLVER}
+      - traefik.http.services.revenect.loadbalancer.server.port=80
+
+  # The send worker, as part of the stack rather than a host crontab entry.
+  #
+  # Host cron is a dependency that can silently not exist: this VPS image ships without
+  # the cron daemon, so the crontab line was accepted and never ran — and nothing sends
+  # without this worker. Running it here means it starts with the stack, restarts on
+  # failure, and survives a reboot.
+  #
+  # Runs as www-data so the files it touches (cron/.heartbeat) stay owned by the same
+  # user Apache runs as. Overlap is not a concern: dispatch.php takes a MySQL
+  # GET_LOCK('wa_dispatch') and exits immediately if another run holds it.
+  revenect-cron:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    container_name: revenect-cron
+    restart: unless-stopped
+    user: www-data
+    volumes:
+      - ../..:/var/www/html
+    environment:
+      TZ: ${TZ:-Africa/Cairo}
+    depends_on:
+      revenect-db:
+        condition: service_healthy
+    networks:
+      - revenect
+    command: >-
+      sh -c 'while true; do php /var/www/html/cron/dispatch.php >/dev/null 2>&1; sleep 60; done'
+
+  revenect-db:
+    image: mariadb:11
+    container_name: revenect-db
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: revenect
+      MARIADB_USER: revenect
+      MARIADB_PASSWORD: ${REVENECT_DB_PASS}
+      MARIADB_ROOT_PASSWORD: ${REVENECT_DB_PASS}
+    volumes:
+      - revenect-db:/var/lib/mysql
+    # KVM 1 has 1 CPU / 4 GB and already runs n8n — keep MariaDB modest.
+    command: >-
+      --innodb-buffer-pool-size=256M
+      --max-connections=50
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      - revenect
+
+volumes:
+  revenect-db:
+
+networks:
+  revenect:
+  traefik:
+    external: true
+    name: ${TRAEFIK_NETWORK}

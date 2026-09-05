@@ -1,6 +1,10 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/_init.php';
+require_once __DIR__ . '/../includes/campaign.php';
+require_once __DIR__ . '/../includes/inbox.php';
+require_once __DIR__ . '/../includes/ai.php';
+require_once __DIR__ . '/../includes/automation.php';
 
 $cid = (int) $CLIENT['id'];
 
@@ -24,8 +28,10 @@ $err = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'create') {
     verify_csrf();
     $name    = trim((string) ($_POST['name'] ?? ''));
+    // Must match the editor's own list (automation_edit.php), or a trigger you can choose
+    // here would be silently rewritten the moment the flow opens.
     $trigger = (string) ($_POST['trigger_type'] ?? 'keyword');
-    if (!in_array($trigger, ['keyword', 'welcome'], true)) $trigger = 'keyword';
+    if (!in_array($trigger, ['keyword', 'welcome', 'default', 'google_sheet'], true)) $trigger = 'keyword';
     if ($name === '') $err = 'Enter an automation name.';
     else {
         $newId = db_insert(
@@ -34,6 +40,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
         );
         redirect('automation_edit.php?id=' . $newId);
     }
+}
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'install') {
+    verify_csrf();
+    // Installed paused, so nobody's customers meet a half-edited flow the moment it lands.
+    $newId = automation_install_template($CLIENT, (string) ($_POST['code'] ?? ''));
+    if ($newId > 0) {
+        flash('Added — have a look through it, then switch it on when you are happy.');
+        redirect('automation_edit.php?id=' . $newId);
+    }
+    $err = 'That template could not be added.';
+}
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'duplicate') {
+    verify_csrf();
+    $newId = flow_duplicate((int) ($_POST['id'] ?? 0), $cid, 'bot');
+    if ($newId > 0) {
+        flash('Copied. This one is a draft — switch it on when you are happy with it.');
+        redirect('automation_edit.php?id=' . $newId);
+    }
+    $err = 'That automation could not be copied.';
 }
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delete') {
     verify_csrf();
@@ -47,6 +72,7 @@ $flows = db_all(
             (SELECT COUNT(*) FROM flow_messages m WHERE m.flow_id=f.id) AS sends
        FROM flows f WHERE f.client_id=? AND f.kind='bot' ORDER BY f.id DESC", [$cid]
 );
+$starters = automation_templates();
 
 $triggerLabel = ['keyword' => 'Keyword', 'welcome' => 'Welcome', 'google_sheet' => 'Google Sheet (AI leads)', 'button' => 'Button'];
 
@@ -61,6 +87,32 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
   Free-form replies only work within 24h of the contact's last message; each sent message costs 1 credit.
   <?php if (!($CLIENT['ai_provider'] ?? '')): ?><br><strong>Tip:</strong> to use AI steps, add your AI key in <a href="settings.php#ai">Settings</a>.<?php endif; ?>
 </div>
+
+<?php /* A blank canvas is where most people give up, so offer working flows to start from. */ ?>
+<?php if ($starters): ?>
+  <div class="card">
+    <div class="row-between" style="flex-wrap:wrap;gap:8px">
+      <h2 style="margin:0"><?= $flows ? 'Start from a ready-made one' : 'Start here' ?></h2>
+      <?php if ($flows): ?>
+        <button type="button" class="btn-link" onclick="document.getElementById('starters').classList.toggle('hidden')">Show / hide</button>
+      <?php endif; ?>
+    </div>
+    <p class="text-muted" style="margin:4px 0 0">Each one is a working automation you can read through
+      and change. Nothing goes live until you switch it on.</p>
+    <div id="starters" class="starter-grid <?= $flows ? 'hidden' : '' ?>">
+      <?php foreach ($starters as $t): ?>
+        <form method="post" class="starter">
+          <?= csrf_field() ?>
+          <input type="hidden" name="action" value="install">
+          <input type="hidden" name="code" value="<?= e((string) $t['code']) ?>">
+          <div class="starter-name"><?= e((string) $t['name']) ?></div>
+          <div class="starter-sum"><?= e((string) $t['summary']) ?></div>
+          <button class="btn btn-ghost btn-sm">Add this one</button>
+        </form>
+      <?php endforeach; ?>
+    </div>
+  </div>
+<?php endif; ?>
 
 <div class="card card-flush">
   <div class="table-wrap">
@@ -85,6 +137,10 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
           <td style="text-align:right;white-space:nowrap">
             <a class="btn btn-ghost btn-sm" href="automation_edit.php?id=<?= (int) $f['id'] ?>">Edit</a>
             <a class="btn btn-ghost btn-sm" href="automation_report.php?id=<?= (int) $f['id'] ?>">Report</a>
+            <form method="post" style="display:inline">
+              <?= csrf_field() ?><input type="hidden" name="action" value="duplicate"><input type="hidden" name="id" value="<?= (int) $f['id'] ?>">
+              <button class="btn btn-ghost btn-sm" title="Make a copy of this automation">Duplicate</button>
+            </form>
             <form method="post" style="display:inline" onsubmit="return confirm('Delete this automation and its runs?')">
               <?= csrf_field() ?><input type="hidden" name="action" value="delete"><input type="hidden" name="id" value="<?= (int) $f['id'] ?>">
               <button class="icon-btn" title="Delete">&#x2715;</button>
@@ -107,8 +163,13 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
       <select name="trigger_type">
         <option value="keyword">Keyword reply</option>
         <option value="welcome">Welcome (first message)</option>
+        <option value="default">Default reply (nothing else matched)</option>
+        <option value="google_sheet">New row in a Google Sheet</option>
       </select>
-      <div class="hint">For AI lead scoring from a Google Sheet, use the <strong>Lead Qualifier</strong> section instead.</div>
+      <div class="hint">All four can be changed later in the editor. Keywords, the sheet to watch and
+        the rest of the settings are set there once the flow opens.<br>
+        For AI lead <em>scoring</em> from a sheet, the <strong>Lead Qualifier</strong> section is the
+        better fit — this one runs a flow you build yourself.</div>
     </div>
     <div class="modal-actions">
       <button type="button" class="btn btn-ghost" onclick="document.getElementById('m-new').classList.remove('open')">Cancel</button>
