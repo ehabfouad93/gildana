@@ -9,6 +9,7 @@ declare(strict_types=1);
 require __DIR__ . '/includes/bootstrap.php';
 require __DIR__ . '/includes/view.php';
 require_once __DIR__ . '/includes/help.php';
+require_once __DIR__ . '/includes/video_view.php';
 require_once __DIR__ . '/includes/notify.php';
 
 $me = current_user_full();
@@ -54,17 +55,11 @@ page_head('Help & Support');
 <?php if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 
 <?php if (intro_video_on()): ?>
-<div class="card">
+<div class="card" id="tour">
   <h2>Getting started</h2>
   <p class="text-muted" style="font-size:12.5px;margin:-6px 0 12px">A short walkthrough of the dashboard.</p>
-  <div style="max-width:720px;aspect-ratio:16/9;background:#000;border-radius:10px;overflow:hidden">
-    <?php $v = trim(help_setting('intro_video_url', '')); ?>
-    <?php if (video_is_file($v)): ?>
-      <video src="<?= e($v) ?>" controls playsinline style="width:100%;height:100%"></video>
-    <?php else: ?>
-      <iframe src="<?= e(video_embed_url($v)) ?>" allow="encrypted-media; fullscreen" allowfullscreen style="width:100%;height:100%;border:0"></iframe>
-    <?php endif; ?>
-  </div>
+  <?php /* The same renderer the landing page uses, so the two can never drift apart. */ ?>
+  <?= video_player_html('intro', './', 'help-video') ?>
 </div>
 <?php endif; ?>
 

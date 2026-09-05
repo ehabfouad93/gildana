@@ -21,16 +21,72 @@ function help_setting(string $k, string $default = ''): string
     catch (Throwable $e) { return $default; }
 }
 
+/**
+ * The walkthrough videos, in two languages.
+ *
+ * There are two slots — `intro` (what clients see in Help) and `promo` (the public landing
+ * page) — and each can hold an Arabic file and an English one. The viewer picks; see
+ * includes/video_view.php.
+ *
+ * Keys are `<slot>_video_url_<lang>`. The ORIGINAL unsuffixed `<slot>_video_url` is still read
+ * as a last resort, because it is what is live on the server right now: adding languages must
+ * not blank a video an operator already uploaded.
+ */
+const VIDEO_LANGS = ['ar', 'en'];
+
+/** The file for one slot in one language, or the best available substitute. */
+function video_for(string $slot, string $lang): string
+{
+    $lang = in_array($lang, VIDEO_LANGS, true) ? $lang : 'ar';
+    $try  = [
+        "{$slot}_video_url_{$lang}",                                     // what was asked for
+        "{$slot}_video_url_" . ($lang === 'ar' ? 'en' : 'ar'),           // the other language
+        "{$slot}_video_url",                                             // pre-language uploads
+    ];
+    foreach ($try as $k) {
+        $v = trim(help_setting($k, ''));
+        if ($v !== '') return $v;
+    }
+    return '';
+}
+
+/**
+ * Which languages this slot actually has a file for.
+ *
+ * The toggle is only drawn when there are two. Offering a language switch that lands on the
+ * same video either way is worse than no switch: it reads as broken.
+ *
+ * @return array<int, string> in VIDEO_LANGS order
+ */
+function video_langs(string $slot): array
+{
+    $have = [];
+    foreach (VIDEO_LANGS as $l) {
+        if (trim(help_setting("{$slot}_video_url_{$l}", '')) !== '') $have[] = $l;
+    }
+    // A legacy upload has no language of its own; it counts as one option, not two.
+    if (!$have && trim(help_setting("{$slot}_video_url", '')) !== '') $have[] = 'ar';
+    return $have;
+}
+
+/** Which language to show first: what the visitor asked for, else Arabic, else what exists. */
+function video_default_lang(string $slot, ?string $wanted = null): string
+{
+    $have = video_langs($slot);
+    if ($wanted !== null && in_array($wanted, $have, true)) return $wanted;
+    return in_array('ar', $have, true) ? 'ar' : ($have[0] ?? 'ar');
+}
+
 /** Is the intro video switched on AND actually pointing somewhere? */
 function intro_video_on(): bool
 {
-    return help_setting('intro_video_on', '0') === '1' && trim(help_setting('intro_video_url', '')) !== '';
+    return help_setting('intro_video_on', '0') === '1' && video_for('intro', 'ar') !== '';
 }
 
 /** The same question for the public landing page's demo video. */
 function intro_promo_on(): bool
 {
-    return help_setting('promo_video_on', '0') === '1' && trim(help_setting('promo_video_url', '')) !== '';
+    return help_setting('promo_video_on', '0') === '1' && video_for('promo', 'ar') !== '';
 }
 
 /**

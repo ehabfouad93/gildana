@@ -13,7 +13,37 @@ their own history.
 
 ---
 
-## 1.6.0 — 5 September 2026 · *latest*
+## 1.6.1 — 5 September 2026 · *latest*
+
+### The walkthrough, in Arabic or English
+
+- **Both languages can be live at once.** Admin → Help Content now has an Arabic slot and an
+  English one for each video, and viewers get a switch above the player. Upload one language
+  and everyone sees that one, with no switch — a toggle that lands on the same video reads as
+  broken.
+- The switch works with JavaScript switched off (the buttons are ordinary links), and with it
+  the video swaps in place and the choice is remembered, so someone who picked Arabic once is
+  not asked again.
+- Anything you already uploaded keeps playing. The pre-language setting is still read as a
+  fallback rather than being quietly dropped on deploy.
+
+### A client can set up their own WhatsApp number
+
+- **Settings now has WhatsApp API Credentials** — App ID, Phone Number ID, WABA ID, Access
+  Token and App Secret, with **Test connection** so a client can tell "saved" from "working"
+  without asking you. Onboarding and an expired token no longer need you in the loop.
+- Secrets are encrypted before they are stored and never shown again; an empty box means
+  *leave it as it is*, not *erase it*.
+- It also puts the fix for an unverified webhook in the hands of the account it affects: a
+  client with no App Secret is told, in plain words, that anyone who finds their webhook URL
+  can trigger their automations and spend their credits.
+- **Accounts sending on the platform's WhatsApp number do not see it.** Sending is decided by
+  whether a client has their own token, so a client on your account pasting one would move
+  themselves onto their own Meta billing without a word — your cost-plus-markup charging for
+  them would simply stop matching reality. They see a line telling them who manages the number.
+  Hiding the card is not the guard; the save is refused server-side too.
+
+## 1.6.0 — 5 September 2026
 
 Two releases' worth of the same idea: the product now explains itself. Written guidance on
 every screen, and a recorded walkthrough you can produce again whenever the interface changes.

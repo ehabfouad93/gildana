@@ -98,6 +98,69 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
     }
 }
 
+/* ── AJAX: does the Cloud API actually answer with these credentials? ──
+   Saving credentials and knowing they work are different things, and a client should not have
+   to ask their operator which of the two just happened. Same check the admin screen runs. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'test_connection') {
+    verify_csrf();
+    $fresh = db_row("SELECT * FROM clients WHERE id=?", [$cid]) ?: [];
+    if (!client_may_edit_credentials($fresh)) json_out(['ok' => false, 'error' => 'Not available on this account.']);
+    $res = wa_fetch_templates($fresh);
+    if ($res['ok']) {
+        $approved = count(array_filter($res['templates'], fn($t) => strtoupper((string) ($t['status'] ?? '')) === 'APPROVED'));
+        json_out(['ok' => true, 'count' => count($res['templates']), 'approved' => $approved]);
+    }
+    json_out(['ok' => false, 'error' => $res['error']]);
+}
+
+/* ── Save this client's own WhatsApp credentials ──
+   A port of the admin screen's handler, scoped to the signed-in client so onboarding and an
+   expired token no longer need the operator in the loop. The rules are the same because the
+   column constraints are the same: a blank secret keeps the stored one (they are never shown
+   back, so an empty box means "unchanged", not "erase"), and phone_number_id is written NULL
+   rather than '' so the unique index still allows many clients without one. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_credentials') {
+    verify_csrf();
+    $fresh = db_row("SELECT * FROM clients WHERE id=?", [$cid]) ?: [];
+
+    // Hidden in the UI for platform-WABA accounts; refused here too. A control that is only
+    // hidden is not a control — the POST is what has to be rejected.
+    if (!client_may_edit_credentials($fresh)) {
+        $err = 'Your WhatsApp number is managed by ' . BRAND_PARENT . ' — contact them to change it.';
+    } else {
+        $token  = trim((string) ($_POST['access_token'] ?? ''));
+        $secret = trim((string) ($_POST['app_secret'] ?? ''));
+        $pnid   = trim((string) ($_POST['phone_number_id'] ?? ''));
+        $tokenEnc  = $token  !== '' ? encrypt_secret($token)  : $fresh['access_token_enc'];
+        $secretEnc = $secret !== '' ? encrypt_secret($secret) : $fresh['app_secret_enc'];
+        try {
+            db_run(
+                "UPDATE clients SET app_id=?, phone_number_id=?, waba_id=?, access_token_enc=?,
+                        app_secret_enc=?, require_signed_webhook=?, token_updated_at=NOW()
+                  WHERE id=?",
+                [
+                    trim((string) ($_POST['app_id'] ?? '')),
+                    $pnid !== '' ? $pnid : null,
+                    trim((string) ($_POST['waba_id'] ?? '')),
+                    $tokenEnc, $secretEnc,
+                    // Only enforceable once there is a secret to check the signature against.
+                    (!empty($secretEnc) && !empty($_POST['require_signed_webhook'])) ? 1 : 0,
+                    $cid,
+                ]
+            );
+            flash('WhatsApp credentials saved. Use "Test connection" to check they work.');
+            redirect('settings.php#credentials');
+        } catch (PDOException $ex) {
+            if (str_contains($ex->getMessage(), 'uq_phone_number_id')) {
+                $err = 'That Phone Number ID is already in use on another account.';
+            } else {
+                error_log('client save credentials failed: ' . $ex->getMessage());
+                $err = 'Could not save credentials. Please try again.';
+            }
+        }
+    }
+}
+
 /* ── Save AI settings ── */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_ai') {
     verify_csrf();
@@ -338,6 +401,100 @@ async function pwResync() {
   m.textContent = d.ok ? ' Done — replies should arrive now.' : ' Could not resync: ' + (d.error || 'unknown error');
 }
 </script>
+<?php endif; ?>
+
+<?php /* ── WhatsApp API credentials ──────────────────────────────────────────────
+   The client's own Meta app details. This used to be admin-only, which meant every
+   onboarding and every expired token needed the operator in the loop. Secrets go in
+   encrypted and are never rendered back — an empty box means "leave it alone". */
+$isPersonal = channel_is_personal($CLIENT); ?>
+
+<?php if (!client_may_edit_credentials($CLIENT)): ?>
+  <div class="card" id="credentials">
+    <h2>WhatsApp Number</h2>
+    <p class="text-muted" style="font-size:12.5px;margin:-6px 0 0">
+      Your messages go out on <?= e(BRAND_PARENT) ?>'s WhatsApp account, so there is nothing to
+      set up here and no Meta bill of your own. To move onto your own number instead, contact
+      <?= e(BRAND_PARENT) ?> — it changes how your sending is billed.
+    </p>
+  </div>
+<?php else: ?>
+  <div class="card" id="credentials" style="<?= $isPersonal ? 'opacity:.6' : '' ?>">
+    <h2>WhatsApp API Credentials</h2>
+    <?php if ($isPersonal): ?>
+      <div class="alert info" style="font-size:12.5px">Not used while you are sending from your
+        own number — kept in case you switch back to the WhatsApp Business API.</div>
+    <?php endif; ?>
+    <p class="text-muted" style="font-size:12.5px;margin:-6px 0 16px">
+      From your Meta app at <span class="mono">developers.facebook.com</span>. The token and the
+      secret are encrypted before they are stored and are never shown again.
+    </p>
+
+    <form method="post">
+      <?= csrf_field() ?><input type="hidden" name="action" value="save_credentials">
+      <div class="grid2">
+        <div class="field"><span class="lbl">App ID</span>
+          <input type="text" name="app_id" value="<?= e((string) $CLIENT['app_id']) ?>"></div>
+        <div class="field"><span class="lbl">Phone Number ID</span>
+          <input type="text" name="phone_number_id" value="<?= e((string) $CLIENT['phone_number_id']) ?>"></div>
+        <div class="field"><span class="lbl">WhatsApp Business Account ID</span>
+          <input type="text" name="waba_id" value="<?= e((string) $CLIENT['waba_id']) ?>"></div>
+        <div class="field"><span class="lbl">Access Token
+          <?= $CLIENT['access_token_enc'] ? '<span class="pill green" style="margin-inline-start:6px">••• set</span>' : '' ?></span>
+          <input type="text" name="access_token" autocomplete="off"
+                 placeholder="<?= $CLIENT['access_token_enc'] ? 'Leave blank to keep the current one' : 'Permanent / system-user token' ?>"></div>
+        <div class="field"><span class="lbl">App Secret
+          <?= $CLIENT['app_secret_enc'] ? '<span class="pill green" style="margin-inline-start:6px">••• set</span>'
+                                        : '<span class="pill red" style="margin-inline-start:6px">not set</span>' ?></span>
+          <input type="text" name="app_secret" autocomplete="off"
+                 placeholder="<?= $CLIENT['app_secret_enc'] ? 'Leave blank to keep the current one' : 'Meta app → Settings → Basic' ?>"></div>
+      </div>
+
+      <?php /* Every client has their own Meta app, so each callback is signed with THAT app's
+               secret — there is no platform-wide value that could verify them all. */ ?>
+      <div class="note mt10" style="font-size:13px">
+        <?php if (!$CLIENT['app_secret_enc']): ?>
+          <strong>Your WhatsApp callbacks are not being verified.</strong>
+          Without your App Secret, anyone who finds your webhook URL can forge delivery reports,
+          create contacts and set your automations running — which spends your credits. Paste the
+          App Secret from your Meta app (Settings → Basic) above.
+        <?php else: ?>
+          <label class="row" style="gap:8px;align-items:center">
+            <input type="checkbox" name="require_signed_webhook" value="1" <?= $CLIENT['require_signed_webhook'] ? 'checked' : '' ?>>
+            <span>Reject callbacks that aren't correctly signed by your Meta app.
+              <span class="text-muted">Leave this off and unsigned requests are still accepted.</span></span>
+          </label>
+        <?php endif; ?>
+      </div>
+
+      <div class="row-between mt10">
+        <button type="button" class="btn btn-ghost" id="btn-test-wa">Test connection</button>
+        <button type="submit" class="btn btn-primary">Save credentials</button>
+      </div>
+      <div id="wa-test-result" class="mt10"></div>
+    </form>
+  </div>
+
+  <script>
+  /* Its own token rather than the CSRF const further down the page: this block is parsed
+     before that one, and depending on declaration order across script tags is the kind of
+     thing that breaks silently the day someone moves a card. */
+  const WA_CSRF = <?= json_encode(csrf_token()) ?>;
+  document.getElementById('btn-test-wa').addEventListener('click', async function () {
+    const box = document.getElementById('wa-test-result');
+    this.disabled = true; this.textContent = 'Testing…'; box.innerHTML = '';
+    try {
+      const fd = new FormData();
+      fd.append('action', 'test_connection');
+      fd.append('csrf_token', WA_CSRF);
+      const d = await (await fetch('', { method: 'POST', body: fd })).json();
+      box.innerHTML = d.ok
+        ? '<div class="alert success">Connected — ' + d.count + ' template(s), ' + d.approved + ' approved.</div>'
+        : '<div class="alert error">Could not connect: ' + (d.error || 'unknown error') + '</div>';
+    } catch (e) { box.innerHTML = '<div class="alert error">Network error.</div>'; }
+    this.disabled = false; this.textContent = 'Test connection';
+  });
+  </script>
 <?php endif; ?>
 
 <div class="card" id="ai">

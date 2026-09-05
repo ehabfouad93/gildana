@@ -40,27 +40,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         flash('Question deleted.'); redirect('help_admin.php');
     }
 
-    /* Two video slots, saved by the same handler because they are the same three fields:
-       the walkthrough clients see in Help, and the demo a visitor sees on the public page.
-       A file, when one is attached, wins over whatever is in the link box — someone who
-       picked a file meant the file. */
-    if ($action === 'save_video' || $action === 'save_promo') {
-        $isPromo = $action === 'save_promo';
-        $keyUrl  = $isPromo ? 'promo_video_url' : 'intro_video_url';
-        $keyOn   = $isPromo ? 'promo_video_on'  : 'intro_video_on';
-        $url     = trim((string) ($_POST[$keyUrl] ?? ''));
+    /* Two video slots, saved by the same handler because they are the same fields: an Arabic
+       file or link and an English one, plus a switch. The slot is what differs, not the shape.
 
-        if (($_FILES['video_file']['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE) {
-            [$stored, $upErr] = video_store_upload($_FILES['video_file']);
-            if ($upErr !== '') { $err = $upErr; }
-            else               { $url = $stored; }
+       Per language, a file wins over the link box — someone who picked a file meant the file.
+       One bad upload fails the whole save rather than half-applying it: a card that reported
+       an error and silently saved the other language would be worse than either outcome. */
+    if ($action === 'save_video' || $action === 'save_promo') {
+        $slot  = $action === 'save_promo' ? 'promo' : 'intro';
+        $keyOn = "{$slot}_video_on";
+        $urls  = [];
+
+        foreach (VIDEO_LANGS as $lang) {
+            $key = "{$slot}_video_url_{$lang}";
+            $url = trim((string) ($_POST[$key] ?? ''));
+            $f   = $_FILES['video_file_' . $lang] ?? null;
+
+            if ($f && ($f['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE) {
+                [$stored, $upErr] = video_store_upload($f);
+                if ($upErr !== '') {
+                    $err = ($lang === 'ar' ? 'Arabic: ' : 'English: ') . $upErr;
+                    break;
+                }
+                $url = $stored;
+            }
+            $urls[$key] = $url;
         }
 
         if ($err === '') {
-            setting_set($keyUrl, $url);
+            foreach ($urls as $k => $v) setting_set($k, $v);
+            /* The pre-language key is cleared once either language is set, so video_for()
+               stops falling back to a file the operator has just replaced. */
+            if (array_filter($urls)) setting_set("{$slot}_video_url", '');
             setting_set($keyOn, empty($_POST[$keyOn]) ? '0' : '1');
-            flash($isPromo ? 'Landing page video updated.' : 'Intro video updated.');
-            redirect('help_admin.php#' . ($isPromo ? 'promo' : 'video'));
+            flash($slot === 'promo' ? 'Landing page video updated.' : 'Intro video updated.');
+            redirect('help_admin.php#' . ($slot === 'promo' ? 'promo' : 'video'));
         }
     }
 
@@ -78,9 +92,7 @@ $tickets = db_all("SELECT t.*, c.name AS client_name FROM support_tickets t
                     LEFT JOIN clients c ON c.id = t.client_id
                    ORDER BY t.status='closed', t.id DESC LIMIT 100");
 $openN   = (int) db_val("SELECT COUNT(*) FROM support_tickets WHERE status='open'");
-$vidUrl  = help_setting('intro_video_url', '');
 $vidOn   = help_setting('intro_video_on', '0') === '1';
-$proUrl  = help_setting('promo_video_url', '');
 $proOn   = help_setting('promo_video_on', '0') === '1';
 
 layout_header('Help Content', 'admin', 'help');
@@ -88,62 +100,93 @@ page_head('Help Content');
 if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 
 <?php
-/* The two video slots are the same three fields — a link or a file, a preview, and an on
-   switch — so they are rendered by one function rather than two near-identical blocks that
-   drift apart the first time one of them is edited. */
-function video_card(string $id, string $title, string $blurb, string $action,
-                    string $keyUrl, string $keyOn, string $url, bool $on, string $onLabel): void
+/* The two video slots are the same shape — an Arabic file and an English one, each uploadable
+   or linked, plus one on switch for the slot — so they are rendered by one function rather
+   than two near-identical blocks that drift apart the first time one of them is edited.
+
+   The language rows are also identical to each other, hence the inner function: three near
+   copies of the same markup is how the Arabic row ends up validated differently to the
+   English one. */
+function video_lang_row(string $slot, string $lang, string $label): void
+{
+    $key = "{$slot}_video_url_{$lang}";
+    $url = help_setting($key, '');
+    // Before languages existed there was one unsuffixed key. Show what is live under Arabic
+    // rather than pretending the slot is empty, so an operator can see what they already have.
+    $legacy = ($url === '' && $lang === 'ar') ? trim(help_setting("{$slot}_video_url", '')) : '';
+    $show   = $url !== '' ? $url : $legacy;
+    ?>
+    <fieldset class="vrow">
+      <legend><?= e($label) ?><?php if ($legacy !== ''): ?>
+        <span class="pill gray" style="margin-inline-start:8px">from before languages</span><?php endif; ?></legend>
+
+      <div class="field"><span class="lbl">Upload a file</span>
+        <input type="file" name="video_file_<?= e($lang) ?>" accept="video/mp4,video/webm"></div>
+
+      <div class="field"><span class="lbl">…or paste a link</span>
+        <input type="text" name="<?= e($key) ?>" value="<?= e($url) ?>"
+               placeholder="https://www.youtube.com/watch?v=…"></div>
+
+      <?php if ($show !== ''): ?>
+        <div class="vprev">
+          <?php if (video_is_file($show)): ?>
+            <video src="<?= e(video_src($show, '../')) ?>" controls playsinline preload="metadata"></video>
+          <?php else: ?>
+            <iframe src="<?= e(video_embed_url($show)) ?>" allowfullscreen></iframe>
+          <?php endif; ?>
+        </div>
+      <?php endif; ?>
+    </fieldset>
+<?php }
+
+function video_card(string $id, string $slot, string $title, string $blurb,
+                    string $action, string $keyOn, bool $on, string $onLabel): void
 { ?>
 <div class="card" id="<?= e($id) ?>">
   <h2><?= e($title) ?></h2>
   <p class="text-muted" style="font-size:12.5px;margin:-6px 0 14px"><?= $blurb ?></p>
-  <form method="post" enctype="multipart/form-data" style="max-width:620px">
+  <form method="post" enctype="multipart/form-data" style="max-width:660px">
     <?= csrf_field() ?><input type="hidden" name="action" value="<?= e($action) ?>">
 
-    <div class="field"><span class="lbl">Upload a video file</span>
-      <input type="file" name="video_file" accept="video/mp4,video/webm">
-      <span class="hint">MP4 or WebM, up to <?= (int) (video_max_bytes() / 1024 / 1024) ?> MB on this
-        server. Prefer MP4 — some older iPhones will not play WebM. Choosing a file replaces the
-        link below.<?php if (video_max_bytes() < VIDEO_MAX): ?> <em>PHP's
-        <span class="mono">upload_max_filesize</span> is what caps this; raise it in
-        <span class="mono">wa-dashboard/.user.ini</span> if you need more.</em><?php endif; ?></span></div>
+    <p class="text-muted" style="font-size:12.5px;margin:0 0 10px">
+      MP4 or WebM, up to <?= (int) (video_max_bytes() / 1024 / 1024) ?> MB on this server. Prefer
+      MP4 — some older iPhones will not play WebM. Choosing a file replaces that language's link.
+      <?php if (video_max_bytes() < VIDEO_MAX): ?><br><em>PHP's
+      <span class="mono">upload_max_filesize</span> is what caps this; raise it in
+      <span class="mono">wa-dashboard/.user.ini</span> if you need more.</em><?php endif; ?>
+    </p>
 
-    <div class="field"><span class="lbl">…or paste a link</span>
-      <input type="text" name="<?= e($keyUrl) ?>" value="<?= e($url) ?>"
-             placeholder="https://www.youtube.com/watch?v=…"></div>
+    <?php video_lang_row($slot, 'ar', 'العربية');
+          video_lang_row($slot, 'en', 'English'); ?>
+
+    <p class="text-muted" style="font-size:12.5px;margin:2px 0 10px">
+      Fill in both and viewers get a language switch above the video. Fill in one and everyone
+      sees that one, with no switch — a toggle that lands on the same video reads as broken.
+    </p>
 
     <label style="display:flex;gap:8px;align-items:center;font-weight:normal;margin:6px 0 14px">
       <input type="checkbox" name="<?= e($keyOn) ?>" value="1" <?= $on ? 'checked' : '' ?> style="width:auto">
       <?= e($onLabel) ?>
     </label>
 
-    <?php if ($url !== ''): ?>
-      <div style="max-width:420px;aspect-ratio:16/9;background:#000;border-radius:10px;overflow:hidden;margin-bottom:14px">
-        <?php if (video_is_file($url)): ?>
-          <video src="<?= e(video_src($url, '../')) ?>" controls playsinline style="width:100%;height:100%"></video>
-        <?php else: ?>
-          <iframe src="<?= e(video_embed_url($url)) ?>" allowfullscreen style="width:100%;height:100%;border:0"></iframe>
-        <?php endif; ?>
-      </div>
-    <?php endif; ?>
     <button class="btn btn-primary">Save</button>
   </form>
 </div>
 <?php }
 
-video_card('video', 'Intro video for clients',
+video_card('video', 'intro', 'Intro video for clients',
     'Shown behind the play button that floats on every signed-in page, at the top of Help, and '
   . 'linked from every <strong>How to use</strong> panel. Upload the walkthrough, or paste a '
   . 'YouTube or Vimeo link exactly as it appears in your browser — it is converted to an '
   . 'embeddable one automatically.',
-    'save_video', 'intro_video_url', 'intro_video_on', $vidUrl, $vidOn,
+    'save_video', 'intro_video_on', $vidOn,
     'Show the video button to clients');
 
-video_card('promo', 'Demo video on the public site',
+video_card('promo', 'promo', 'Demo video on the public site',
     'Shown on the landing page, under the headline. This is what someone who has not signed up '
   . 'sees, so it is usually the shorter cut. Leave it switched off and the section does not '
   . 'appear at all.',
-    'save_promo', 'promo_video_url', 'promo_video_on', $proUrl, $proOn,
+    'save_promo', 'promo_video_on', $proOn,
     'Show the video on the landing page');
 ?>
 
