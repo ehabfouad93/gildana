@@ -143,7 +143,12 @@ small { font-size: 12px; }
 .sb-link.active { background: var(--brand); color: #fff; }
 .sb-link.active svg { opacity: 1; }
 
-.content { flex: 1; padding: 26px 30px 60px; max-width: 1180px; width: 100%; }
+/* min-width:0 is load-bearing. A flex item defaults to min-width:auto, so it refuses to
+   shrink below its content's min-content width — and the flow editor's toolbar made that
+   1180px, which pushed the whole shell to 1412px and scrolled the ENTIRE dashboard
+   sideways on any 1280-wide laptop, logo and sidebar included. The things that legitimately
+   need to be wide (.canvas-wrap, .table-wrap) scroll inside themselves already. */
+.content { flex: 1; min-width: 0; padding: 26px 30px 60px; max-width: 1180px; width: 100%; }
 
 /* ── PAGE HEAD ── */
 .page-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 22px; flex-wrap: wrap; }

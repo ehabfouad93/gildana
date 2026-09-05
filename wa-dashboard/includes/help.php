@@ -27,6 +27,12 @@ function intro_video_on(): bool
     return help_setting('intro_video_on', '0') === '1' && trim(help_setting('intro_video_url', '')) !== '';
 }
 
+/** The same question for the public landing page's demo video. */
+function intro_promo_on(): bool
+{
+    return help_setting('promo_video_on', '0') === '1' && trim(help_setting('promo_video_url', '')) !== '';
+}
+
 /**
  * A YouTube/Vimeo watch link turned into its embeddable form.
  *
@@ -47,6 +53,116 @@ function video_embed_url(string $url): string
         return 'https://player.vimeo.com/video/' . $m[1];
     }
     return $url;
+}
+
+/**
+ * Where uploaded walkthrough videos live, and how one gets there.
+ *
+ * The intro video used to be a URL box and nothing else, which meant a self-hosted file had
+ * to be copied onto the server by hand before anyone could point at it. Uploading is the
+ * common case — the videos are produced by tools/tour/record.py and then need to get in —
+ * so it is a form field like every other asset.
+ *
+ * Validation follows the brand-logo upload in admin/settings.php: an extension allowlist, a
+ * size cap, and a writability check that says what is wrong rather than failing silently.
+ * The extra check here is the container magic, because "an mp4" is the one thing a caller
+ * cannot verify from the name alone and this file is served back to browsers.
+ */
+const VIDEO_EXT = ['mp4', 'webm'];
+const VIDEO_MAX = 120 * 1024 * 1024;    // 120 MB — a 4-minute 720p H.264 take is ~7 MB
+
+/**
+ * The largest video this server will really accept, in bytes.
+ *
+ * VIDEO_MAX is only our own ceiling. PHP ships with upload_max_filesize at 2M, which silently
+ * rejects a perfectly ordinary 7 MB screen recording before a single line of this file runs —
+ * so the number shown to the operator is the smallest of the three limits that actually apply,
+ * not the one we would like to enforce. Telling someone "up to 120 MB" on a server that stops
+ * at 2 MB is how you get a bug report that looks like a broken upload.
+ */
+function video_max_bytes(): int
+{
+    $ini = function (string $k): int {
+        $v = trim((string) ini_get($k));
+        if ($v === '') return PHP_INT_MAX;
+        $n = (int) $v;
+        return match (strtolower(substr($v, -1))) {
+            'g' => $n * 1024 * 1024 * 1024,
+            'm' => $n * 1024 * 1024,
+            'k' => $n * 1024,
+            default => $n,
+        };
+    };
+    return (int) min(VIDEO_MAX, $ini('upload_max_filesize'), $ini('post_max_size'));
+}
+
+function video_dir_path(): string { return dirname(__DIR__) . '/assets/media'; }
+function video_dir_url(): string  { return 'assets/media'; }
+
+/**
+ * Save an uploaded walkthrough video. Returns [url, error]; exactly one is non-empty.
+ *
+ * @param array $f one entry from $_FILES
+ */
+function video_store_upload(array $f): array
+{
+    if (($f['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_INI_SIZE
+     || ($f['error'] ?? 0) === UPLOAD_ERR_FORM_SIZE) {
+        return ['', 'That file is larger than this server accepts. Check upload_max_filesize in php.ini.'];
+    }
+    if (($f['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK || !is_uploaded_file((string) ($f['tmp_name'] ?? ''))) {
+        return ['', 'The upload did not complete. Please try again.'];
+    }
+
+    $ext = strtolower((string) pathinfo((string) ($f['name'] ?? ''), PATHINFO_EXTENSION));
+    if (!in_array($ext, VIDEO_EXT, true)) {
+        return ['', 'Use an MP4 or WebM file. MP4 is the safer choice — some older iPhones will not play WebM.'];
+    }
+    if ((int) ($f['size'] ?? 0) > video_max_bytes()) {
+        return ['', 'That file is over ' . (int) (video_max_bytes() / 1024 / 1024) . ' MB. Please use a smaller one.'];
+    }
+
+    /* The name says mp4; the bytes decide. Both containers are ISO/Matroska boxes with a
+       recognisable signature in the first few bytes, and checking it stops a script renamed
+       to .mp4 from being written into a web-served directory. */
+    $head = (string) file_get_contents((string) $f['tmp_name'], false, null, 0, 12);
+    $isMp4  = strlen($head) >= 12 && substr($head, 4, 4) === 'ftyp';
+    $isWebm = str_starts_with($head, "\x1A\x45\xDF\xA3");
+    if (($ext === 'mp4' && !$isMp4) || ($ext === 'webm' && !$isWebm)) {
+        return ['', 'That file is not a readable ' . strtoupper($ext) . ' video.'];
+    }
+
+    $dir = video_dir_path();
+    if (!is_dir($dir)) @mkdir($dir, 0755, true);
+    if (!is_dir($dir) || !is_writable($dir)) {
+        return ['', 'The folder wa-dashboard/assets/media is not writable. Create it and set its permissions to 755, then try again.'];
+    }
+
+    // A fresh name each time, so a browser that cached the old video does not keep showing it.
+    $file = 'tour-' . date('Ymd-His') . '.' . $ext;
+    if (!@move_uploaded_file((string) $f['tmp_name'], "$dir/$file")) {
+        return ['', 'Could not save the file.'];
+    }
+    @chmod("$dir/$file", 0644);
+
+    // Keep only the most recent few, so re-recording does not slowly fill the disk.
+    $old = glob("$dir/tour-*") ?: [];
+    if (count($old) > 4) {
+        usort($old, fn($a, $b) => filemtime($a) <=> filemtime($b));
+        foreach (array_slice($old, 0, count($old) - 4) as $stale) @unlink($stale);
+    }
+    return [video_dir_url() . '/' . $file, ''];
+}
+
+/**
+ * A stored video path is relative to the app root, so a page that is not AT the root has to
+ * say where the root is. External links (YouTube, or an absolute URL) are returned untouched.
+ */
+function video_src(string $url, string $base = ''): string
+{
+    $url = trim($url);
+    if ($url === '' || preg_match('~^(https?:)?//~i', $url) || str_starts_with($url, '/')) return $url;
+    return $base . $url;
 }
 
 /** True when the URL is a file we should render with <video> rather than an <iframe>. */

@@ -1843,7 +1843,10 @@ document.getElementById('flow-form').addEventListener('submit',()=>{
 });
 
 /* ── init ── */
-INIT_NODES.forEach(n=>{ nodes[n.id]={id:n.id,type:n.type,x:n.x,y:n.y,config:n.config||{},outputs:n.outputs||{}}; const m=n.id.match(/^s(\d+)$/); });
+/* stats is carried through deliberately: this rebuilds each node field by field, and
+   leaving it out meant the per-node reached/stopped counters never appeared on load —
+   only after an autosave round-trip, by which point you had already edited something. */
+INIT_NODES.forEach(n=>{ nodes[n.id]={id:n.id,type:n.type,x:n.x,y:n.y,config:n.config||{},outputs:n.outputs||{},stats:n.stats||null}; const m=n.id.match(/^s(\d+)$/); });
 onTrig(); render();
 // Open with the whole flow visible instead of scrolled off the right edge.
 zoomFit();

@@ -36,3 +36,12 @@ Thumbs.db
 wa-dashboard/assets/brand/*
 !wa-dashboard/assets/brand/.gitkeep
 !wa-dashboard/assets/brand/.htaccess
+
+# Uploaded walkthrough videos — per-install and large, produced by tools/tour/record.py
+wa-dashboard/assets/media/*
+!wa-dashboard/assets/media/.gitkeep
+!wa-dashboard/assets/media/.htaccess
+
+# Python bytecode (tools/tour)
+__pycache__/
+*.pyc

@@ -69,6 +69,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'acces
 $appName = brand_name();
 $faqs    = faq_live();
 
+/* The demo video, when the operator has set one up in Admin → Help Content. Off by default:
+   an empty <video> frame under the headline is worse than no section at all. */
+$promo   = intro_promo_on() ? trim(help_setting('promo_video_url', '')) : '';
+
 // Admin → Settings → Branding. Passed to CSS as a variable so one number drives the tag,
 // the bar height, the footer and the scroll offset together.
 $logoH = site_logo_height();
@@ -218,6 +222,30 @@ $steps = [
     </div>
   </div>
 </section>
+
+<?php if ($promo !== ''): ?>
+<!-- ── the product, moving ────────────────────────────────────────────────
+     Directly under the headline, because the sentence above it makes a claim about a canvas
+     builder and a lead scorer and this is the cheapest possible proof. Absent entirely when
+     no video is set, the same way the pricing section disappears with no active plans. -->
+<section class="section demo" id="demo">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>See it run</h2>
+      <p>Ninety seconds, no sign-up — a campaign going out, the replies coming back, and the
+         automation answering them.</p>
+    </div>
+    <div class="demo-frame" data-reveal>
+      <?php if (video_is_file($promo)): ?>
+        <video src="<?= e(video_src($promo)) ?>" controls playsinline preload="metadata"></video>
+      <?php else: ?>
+        <iframe src="<?= e(video_embed_url($promo)) ?>" title="Product walkthrough"
+                allow="encrypted-media; fullscreen" allowfullscreen loading="lazy"></iframe>
+      <?php endif; ?>
+    </div>
+  </div>
+</section>
+<?php endif; ?>
 
 <!-- ── the honest numbers: what the product has, not invented metrics ────── -->
 <section class="strip">

@@ -13,7 +13,51 @@ their own history.
 
 ---
 
-## 1.5.0 — 28 August 2026 · *latest*
+## 1.6.0 — 5 September 2026 · *latest*
+
+Two releases' worth of the same idea: the product now explains itself. Written guidance on
+every screen, and a recorded walkthrough you can produce again whenever the interface changes.
+
+### It tells you how to use it
+
+- **A "How to use" button on every page**, opening a short numbered walkthrough of *that*
+  screen — the shortest route from an empty page to a working one, not documentation of every
+  feature. Eighteen of them, one per page in both menus. It opens with no JavaScript at all, so
+  it works on the first paint and keeps working if a script fails.
+- **A getting-started checklist on the dashboard** that answers itself from your real data
+  rather than being ticked by hand, and removes itself once you are set up. An account sending
+  from a personal number is never asked to sync templates, because it has none.
+
+### A walkthrough video, and a way to make another one
+
+- **Four recorded videos** — a full tour and a shorter demo, each with Arabic or English
+  captions. The tour goes in Help; the demo goes on the public site.
+- **Admin → Help Content now takes a file**, not just a link. It was a URL box, which meant a
+  self-hosted video had to be copied onto the server by hand before anyone could point at it.
+- **The landing page has a "See it run" section** under the headline, off until you set it.
+  A page that claims a canvas builder and a lead scorer should show them moving.
+- The recording itself is `tools/tour/` — the choreography and every caption are data, so
+  re-recording after a redesign means editing a line, not rebuilding the tour from memory.
+
+### Fixes
+
+- **Needs attention was broken from the day it was written.** It called the page-header
+  function with one argument where three are required, so it fatalled on every request. It only
+  appears in the menu when something is actually waiting, which is why nobody hit it. Every
+  page is now opened by a test as both roles, so a page that merely fails to load cannot go
+  unnoticed again.
+- **Per-node automation statistics never appeared.** The canvas rebuilds each node field by
+  field on load and quietly dropped the figures, so reached/stopped counts only showed up after
+  an edit had already triggered a save. The numbers were being computed correctly all along.
+- **The whole dashboard scrolled sideways on a 1280-wide laptop** whenever the flow editor was
+  open — the layout could not shrink below the editor toolbar's width, pushing the logo and the
+  sidebar labels off screen. The canvas and the wide tables scroll inside themselves, as they
+  always did.
+- **The walkthrough-video link in each How to use panel pointed nowhere.** Help was loaded
+  after the panel had already rendered, so the check for a configured video always came back
+  false.
+
+## 1.5.0 — 28 August 2026
 
 The release that takes this from something you run to something many clients run at once:
 sending that cannot double-charge, billing that fits both ways of owning a WhatsApp number,
