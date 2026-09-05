@@ -4,11 +4,16 @@ require __DIR__ . '/_init.php';
 
 $cid = (int) $CLIENT['id'];
 $err = ''; $syncMsg = '';
+// Templates only exist on the Cloud API. A personal number sends ordinary messages, so this
+// page is informational there rather than an error about missing Meta credentials.
+$PERSONAL = channel_is_personal($CLIENT);
 
 /* ── Sync templates from the client's WABA ── */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'sync') {
     verify_csrf();
-    if (!client_ready($CLIENT) || !$CLIENT['waba_id']) {
+    if ($PERSONAL) {
+        $err = 'Your account sends from your own WhatsApp number, which has no approved templates to sync.';
+    } elseif (!client_ready($CLIENT) || !$CLIENT['waba_id']) {
         $err = 'Your WhatsApp account is not fully configured yet (WABA ID / token missing). Contact Gildana.';
     } else {
         $res = wa_fetch_templates($CLIENT);
@@ -58,17 +63,28 @@ $lastSync  = db_val("SELECT MAX(synced_at) FROM templates WHERE client_id=?", [$
 
 $syncForm = '<form method="post" style="display:inline">' . csrf_field()
           . '<input type="hidden" name="action" value="sync">'
-          . '<button class="btn btn-primary btn-sm" ' . (client_ready($CLIENT) ? '' : 'disabled') . '>&#8635; Sync Templates</button></form>';
+          . '<button class="btn btn-primary btn-sm" ' . (client_ready($CLIENT) && !$PERSONAL ? '' : 'disabled') . '>&#8635; Sync Templates</button></form>';
 
 client_header('Templates', 'templates', $CLIENT);
 page_head('Message Templates', $syncForm);
 
 if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 
+<?php if ($PERSONAL): ?>
+<div class="alert info" style="font-size:12.5px">
+  <strong>You don't need templates.</strong> Your account sends from your own WhatsApp number, so
+  there is nothing to submit to Meta and nothing to wait for approval on — write the message
+  directly in <a href="campaign_new.php">Campaigns</a> or in your
+  <a href="qualifiers.php">Lead Qualifier</a> and it goes out as an ordinary WhatsApp message.
+  <?php if ($templates): ?><br>The templates below are left over from a Cloud API setup and aren't used on this channel.<?php endif; ?>
+</div>
+<?php if (!$templates) { layout_footer(); exit; } ?>
+<?php else: ?>
 <div class="alert info" style="font-size:12.5px">
   Campaigns can only use templates that Meta has <strong>approved</strong>. Create &amp; submit templates in your Meta / WhatsApp Manager, then click <strong>Sync Templates</strong> here to pull them in.
   <?php if ($lastSync): ?><br>Last synced: <?= e(date('d M Y, H:i', strtotime((string) $lastSync))) ?>.<?php endif; ?>
 </div>
+<?php endif; ?>
 
 <div class="card card-flush">
   <div class="table-wrap">

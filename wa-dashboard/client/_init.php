@@ -4,6 +4,7 @@ declare(strict_types=1);
 require __DIR__ . '/../includes/bootstrap.php';
 require __DIR__ . '/../includes/view.php';
 require __DIR__ . '/../includes/whatsapp.php';
+require_once __DIR__ . '/../includes/channel.php';
 require __DIR__ . '/../includes/credits.php';
 
 /** @var array $ME, array $CLIENT */
@@ -29,8 +30,14 @@ function client_header(string $title, string $active, array $client): void
     }
 }
 
-/** True once the client has the minimum credentials to send. */
+/** True once the client can actually send — which depends on their channel. */
 function client_ready(array $client): bool
 {
+    // A personal-number client has no Cloud credentials at all; readiness is whether they
+    // have linked their phone. Checking the Cloud fields here used to lock them out of
+    // creating campaigns entirely.
+    if (function_exists('channel_is_personal') && channel_is_personal($client)) {
+        return ($client['personal_status'] ?? '') === 'connected';
+    }
     return $client['access_token_enc'] && $client['phone_number_id'];
 }

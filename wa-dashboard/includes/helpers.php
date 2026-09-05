@@ -266,29 +266,219 @@ function check_captcha(string $input): bool
  * the worker keeps running server-side (ignore_user_abort). The cron remains the
  * reliable heartbeat for scheduled campaigns + automations.
  */
+/**
+ * The app's public base URL, with no trailing slash — e.g. https://app.gildana.net.
+ * Prefers config('base_url'); otherwise derives it from the request, stripping a trailing
+ * /client or /admin so we always land on the app root.
+ */
+/**
+ * Send the response now and keep working after the caller has hung up.
+ *
+ * Webhook senders time out on a slow response and retry, and a retry means handling the same
+ * message twice. Answering an inbound can take seconds — an AI reply plus a send — so the
+ * response has to be released before that work starts.
+ *
+ * fastcgi_finish_request() does this on PHP-FPM, but this app runs on Apache with mod_php,
+ * where that function does not exist: the `if (function_exists(...))` guard around it silently
+ * did nothing and the gateway waited for the whole AI round trip. On Apache the connection is
+ * closed by declaring the length and finishing the buffer instead.
+ */
+function respond_and_continue(string $body = 'ok', string $contentType = 'text/plain'): void
+{
+    ignore_user_abort(true);                 // keep running once the caller disconnects
+    if (!headers_sent()) {
+        header('Content-Type: ' . $contentType);
+        header('Content-Length: ' . strlen($body));
+        header('Connection: close');
+    }
+    // Drop any buffering that would otherwise hold the bytes back (mod_deflate included).
+    while (ob_get_level() > 0) @ob_end_clean();
+    echo $body;
+
+    if (function_exists('fastcgi_finish_request')) { @fastcgi_finish_request(); return; }
+    @ob_flush();
+    @flush();
+}
+
+/**
+ * Fetch a URL supplied by a client, safely.
+ *
+ * Campaign header media is a URL the tenant types in, and the server fetches it. Without
+ * these guards that turns the server into a proxy for anything it can reach: cloud metadata
+ * endpoints (169.254.169.254), the gateway on the internal Docker network, a database admin
+ * port on localhost. A redirect is enough to reach them even if the typed URL looks public,
+ * which is why redirects are followed manually with a fresh check at every hop.
+ *
+ * Returns the body, or null if the URL is not safe to fetch or the fetch failed.
+ */
+function safe_http_get(string $url, int $maxBytes = 33554432, int $maxRedirects = 3): ?string
+{
+    for ($hop = 0; $hop <= $maxRedirects; $hop++) {
+        if (!safe_http_url_ok($url)) return null;
+
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => false,   // every hop is re-checked above, never blindly followed
+            CURLOPT_PROTOCOLS      => CURLPROTO_HTTPS,
+            CURLOPT_TIMEOUT        => 60,
+            CURLOPT_CONNECTTIMEOUT => 10,
+            CURLOPT_USERAGENT      => 'RevenectWA/1.0',
+            // Stop the transfer as soon as it exceeds the cap, rather than buffering a
+            // multi-gigabyte body into memory first.
+            CURLOPT_NOPROGRESS     => false,
+            CURLOPT_PROGRESSFUNCTION => function ($ch, $dlTotal, $dlNow) use ($maxBytes) {
+                return ($dlTotal > $maxBytes || $dlNow > $maxBytes) ? 1 : 0;
+            },
+        ]);
+        $body = curl_exec($ch);
+        $http = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $type = (string) curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
+        $loc  = (string) curl_getinfo($ch, CURLINFO_REDIRECT_URL);
+        curl_close($ch);
+
+        if ($http >= 300 && $http < 400 && $loc !== '') { $url = $loc; continue; }
+        if ($body === false || $http < 200 || $http >= 300) return null;
+        if (strlen((string) $body) > $maxBytes) return null;
+
+        // Media only. An HTML error page is not something we should be uploading to Meta.
+        $mime = strtolower(trim(explode(';', $type)[0] ?? ''));
+        if ($mime !== '' && !preg_match('~^(image|video|audio|application/pdf)~', $mime)) return null;
+
+        return (string) $body;
+    }
+    return null;   // too many redirects
+}
+
+/**
+ * Call an outside URL from a flow, with the same guards as safe_http_get().
+ *
+ * An automation's HTTP step lets a client type any address, so it is exactly the hole the
+ * media fetcher was: without these checks it would reach cloud metadata, the WhatsApp gateway
+ * on the internal network, or a database port on localhost. Same guard, different verb.
+ *
+ * Returns ['ok'=>bool,'status'=>int,'body'=>string,'json'=>?array,'error'=>string].
+ */
+function safe_http_request(string $method, string $url, ?string $body = null, array $headers = [], int $maxBytes = 262144): array
+{
+    $method = strtoupper($method) === 'POST' ? 'POST' : 'GET';
+    if (!safe_http_url_ok($url)) {
+        return ['ok' => false, 'status' => 0, 'body' => '', 'json' => null,
+                'error' => 'That address is not allowed — use a public https:// URL.'];
+    }
+
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => false,          // a redirect could land somewhere private
+        CURLOPT_PROTOCOLS      => CURLPROTO_HTTPS,
+        CURLOPT_TIMEOUT        => 15,
+        CURLOPT_CONNECTTIMEOUT => 8,
+        CURLOPT_USERAGENT      => 'RevenectWA/1.0',
+        CURLOPT_HTTPHEADER     => array_merge(['Accept: application/json'], $headers),
+        CURLOPT_NOPROGRESS     => false,
+        CURLOPT_PROGRESSFUNCTION => fn($c, $dt, $dn) => ($dt > $maxBytes || $dn > $maxBytes) ? 1 : 0,
+    ]);
+    if ($method === 'POST') {
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, (string) $body);
+    }
+    $raw    = curl_exec($ch);
+    $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $cerr   = curl_error($ch);
+    curl_close($ch);
+
+    if ($raw === false) {
+        return ['ok' => false, 'status' => $status, 'body' => '', 'json' => null,
+                'error' => $cerr ?: 'Could not reach that address.'];
+    }
+    $text = substr((string) $raw, 0, $maxBytes);
+    $json = json_decode($text, true);
+    return [
+        'ok'     => $status >= 200 && $status < 300,
+        'status' => $status,
+        'body'   => $text,
+        'json'   => is_array($json) ? $json : null,
+        'error'  => ($status >= 200 && $status < 300) ? '' : 'The server answered ' . $status . '.',
+    ];
+}
+
+/** True when a URL is a public HTTPS address we are willing to fetch. */
+function safe_http_url_ok(string $url): bool
+{
+    $p = parse_url($url);
+    if (!$p || strtolower((string) ($p['scheme'] ?? '')) !== 'https') return false;
+
+    $host = (string) ($p['host'] ?? '');
+    if ($host === '') return false;
+
+    // Resolve first: a public-looking hostname can still point at 127.0.0.1.
+    $ips = [];
+    if (filter_var($host, FILTER_VALIDATE_IP)) {
+        $ips = [$host];
+    } else {
+        foreach ([DNS_A, DNS_AAAA] as $t) {
+            foreach (@dns_get_record($host, $t) ?: [] as $rec) {
+                $ips[] = (string) ($rec['ip'] ?? $rec['ipv6'] ?? '');
+            }
+        }
+        // Fall back to the resolver gethostbyname uses if dns_get_record found nothing.
+        if (!$ips) { $r = gethostbyname($host); if ($r !== $host) $ips = [$r]; }
+    }
+    if (!$ips) return false;
+
+    foreach ($ips as $ip) {
+        if ($ip === '') continue;
+        // NO_PRIV_RANGE covers 10/8, 172.16/12, 192.168/16, fc00::/7;
+        // NO_RES_RANGE covers loopback, link-local (incl. 169.254.169.254) and 0.0.0.0/8.
+        if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+            return false;
+        }
+        // Carrier-grade NAT, which the filter above does not treat as private.
+        if (preg_match('~^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.~', $ip)) return false;
+    }
+    return true;
+}
+
+function app_base_url(): string
+{
+    $base = rtrim((string) config('base_url', ''), '/');
+    if ($base !== '') return $base;
+
+    $https = (!empty($_SERVER['HTTPS']) && strtolower((string) $_SERVER['HTTPS']) !== 'off')
+          || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https')
+          || ((int) ($_SERVER['SERVER_PORT'] ?? 0) === 443);
+    $host = (string) ($_SERVER['HTTP_HOST'] ?? 'localhost');
+    $dir  = str_replace('\\', '/', dirname((string) ($_SERVER['SCRIPT_NAME'] ?? '/')));
+    $root = (string) preg_replace('#/(client|admin)$#', '', $dir);
+    // dirname() returns '/' at the web root, which would otherwise yield a double slash.
+    if ($root === '/' || $root === '.' || $root === '\\') $root = '';
+    return ($https ? 'https' : 'http') . '://' . $host . rtrim($root, '/');
+}
+
 function trigger_worker(): void
 {
-    // Resolve the app's base URL.
+    /* Must use the CONFIGURED base url, never one derived from the request.
+       app_base_url() falls back to the Host header when base_url is unset, and this call
+       carries the cron token — so a forged Host would post the token straight to an
+       attacker's server. Skip the kick rather than take that risk; the cron still runs the
+       work a minute later. */
     $base = rtrim((string) config('base_url', ''), '/');
     if ($base === '') {
-        $https  = (!empty($_SERVER['HTTPS']) && strtolower((string) $_SERVER['HTTPS']) !== 'off')
-               || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https')
-               || ((int) ($_SERVER['SERVER_PORT'] ?? 0) === 443);
-        $host   = (string) ($_SERVER['HTTP_HOST'] ?? 'localhost');
-        $dir    = str_replace('\\', '/', dirname((string) ($_SERVER['SCRIPT_NAME'] ?? '/')));
-        // strip a trailing /client or /admin so we land on the app root
-        $root   = preg_replace('#/(client|admin)$#', '', $dir);
-        $base   = ($https ? 'https' : 'http') . '://' . $host . ($root === '/' ? '' : $root);
+        error_log('trigger_worker: base_url is not set in config.php — skipping the instant send kick.');
+        return;
     }
-    $url = $base . '/cron/dispatch.php?token=' . urlencode((string) config('webhook_verify_token'));
 
     try {
-        $ch = curl_init($url);
+        $ch = curl_init($base . '/cron/dispatch.php');
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER    => true,
             CURLOPT_NOSIGNAL          => true,
             CURLOPT_TIMEOUT_MS        => 400,   // fire and forget
             CURLOPT_CONNECTTIMEOUT_MS => 400,
+            // In a header rather than the query string: URLs end up in access logs, proxy
+            // logs and Referer headers, and this token starts the worker for everyone.
+            CURLOPT_HTTPHEADER        => ['X-Cron-Token: ' . (string) config('webhook_verify_token')],
         ]);
         @curl_exec($ch);
         @curl_close($ch);
@@ -339,4 +529,35 @@ function extract_text_from_upload(string $tmpPath, string $name): string
     }
 
     return '';
+}
+
+/**
+ * PWA <head> tags: manifest, theme colour, icons and iOS standalone hints.
+ * $base is the path prefix back to the app root ('./' from the root, '../' from client/
+ * and admin/). Emitted by every page so the app is installable from wherever the user
+ * happens to land.
+ */
+function pwa_head(string $base = './'): string
+{
+    $b = rtrim($base, '/') . '/';
+    $v = @filemtime(__DIR__ . '/../manifest.webmanifest') ?: '1';
+    return
+        '<link rel="manifest" href="' . $b . 'manifest.webmanifest?v=' . $v . '">' . "\n"
+      . '<meta name="theme-color" content="#0D1321">' . "\n"
+      . '<link rel="icon" type="image/png" href="' . $b . 'assets/icons/favicon.png">' . "\n"
+      . '<link rel="apple-touch-icon" href="' . $b . 'assets/icons/apple-touch-icon.png">' . "\n"
+      // iOS ignores the manifest: these are what make an added-to-home-screen app run
+      // full-screen with the right status bar.
+      . '<meta name="apple-mobile-web-app-capable" content="yes">' . "\n"
+      . '<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">' . "\n"
+      . '<meta name="apple-mobile-web-app-title" content="Revenect">' . "\n"
+      . '<meta name="mobile-web-app-capable" content="yes">';
+}
+
+/** Registers the service worker. $base as per pwa_head(). */
+function pwa_script(string $base = './'): string
+{
+    $b = rtrim($base, '/') . '/';
+    return '<script>if("serviceWorker" in navigator){window.addEventListener("load",function(){'
+         . 'navigator.serviceWorker.register("' . $b . 'sw.js").catch(function(e){console.warn("SW failed",e);});});}</script>';
 }

@@ -1,0 +1,12 @@
+# Nothing in deploy/ is meant to be reachable over HTTP. These are operator scripts run
+# from a shell, and this folder also holds the docker .env — the gateway API key and the
+# database password.
+#
+# The nginx template already denies /deploy/ (deploy/nginx-site.conf.template). The Docker
+# image is Apache, whose stock config denies only .ht*, so without this file the whole tree
+# — .env included — was served to anyone who asked for it.
+Require all denied
+<IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+</IfModule>

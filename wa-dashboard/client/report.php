@@ -59,7 +59,7 @@ client_header('Report · ' . $camp['name'], 'campaigns', $CLIENT);
 ?>
 <div class="page-head">
   <h1><?= e((string) $camp['name']) ?> <span id="status-pill"><?= status_pill((string) $camp['status']) ?></span></h1>
-  <div class="page-actions"><?= $actions ?></div>
+  <div class="page-actions"><?= guide_button('campaigns') . $actions ?></div>
 </div>
 
 <p class="text-muted" style="margin:-10px 0 20px;font-size:13px">
@@ -75,6 +75,51 @@ client_header('Report · ' . $camp['name'], 'campaigns', $CLIENT);
   <div class="stat-tile"><span class="lbl">Read</span><span class="val" id="s-read"><?= $counts['read'] ?></span></div>
   <div class="stat-tile"><span class="lbl">Failed</span><span class="val danger" id="s-failed"><?= $counts['failed'] ?></span></div>
 </div>
+
+<?php
+/* Why did messages fail? Group the top reasons so "0 sent / N failed" is never a mystery. */
+$failReasons = db_all(
+    "SELECT COALESCE(NULLIF(error_title,''),'Unknown error') AS reason, error_code, COUNT(*) AS n
+       FROM campaign_messages WHERE campaign_id=? AND status='failed'
+      GROUP BY reason, error_code ORDER BY n DESC LIMIT 5", [$id]
+);
+if ($failReasons): ?>
+  <div class="alert error" style="margin-bottom:16px">
+    <strong>Why messages failed</strong>
+    <ul style="margin:8px 0 0;padding-left:18px;font-size:13px">
+      <?php foreach ($failReasons as $fr): ?>
+        <li><strong><?= number_format((int) $fr['n']) ?>×</strong> <?= e((string) $fr['reason']) ?><?php
+          $code = trim((string) $fr['error_code']);
+          if ($code !== '') echo ' <span class="text-muted">(#' . e($code) . ')</span>';
+          // Plain-language cause + what to actually do about it.
+          $hint = '';
+          if ($code === '131049' || stripos((string) $fr['reason'], 'healthy ecosystem') !== false) {
+              $hint = 'Not a fault in your setup. WhatsApp caps how many <em>marketing</em> messages one person receives '
+                    . 'from all businesses in a period, and drops the extras. It is per-recipient and temporary — the same '
+                    . 'number usually works again after 24h. To reduce it: message less often, keep your audience to people '
+                    . 'who actually engage, and send order/booking updates as a <strong>Utility</strong> template '
+                    . '(utility templates are not capped this way).';
+          } elseif ($code === '130472') {
+              $hint = 'This recipient is in a Meta experiment group for marketing messages. Resending will not get through — skip this number for now.';
+          } elseif ($code === '131026') {
+              $hint = 'Undeliverable — the number may not be on WhatsApp, may have blocked you, or is in a restricted region. Verify the number.';
+          } elseif ($code === '131047' || stripos((string) $fr['reason'], 're-engagement') !== false) {
+              $hint = 'More than 24 hours have passed since this contact last messaged you, so only an approved template can reach them.';
+          } elseif ($code === '132012' || stripos((string) $fr['reason'], 'parameter') !== false) {
+              $hint = 'The template needs fields this campaign did not send — re-create it and fill every template field (including the header image).';
+          } elseif ($code === '131053' || stripos((string) $fr['reason'], 'media') !== false) {
+              $hint = 'WhatsApp could not read the header media. Re-upload it with the Upload button so it is sent as an uploaded file rather than a link.';
+          } elseif ($code === '200' || stripos((string) $fr['reason'], 'permission') !== false) {
+              $hint = 'The access token cannot send for this WhatsApp Business Account — check the token and phone number in Settings.';
+          } elseif ($code === '133010') {
+              $hint = 'This phone number is not registered on the WhatsApp Business Platform — check it in Settings.';
+          }
+          if ($hint !== '') echo '<div class="text-muted" style="font-size:12px;margin-top:2px">' . $hint . '</div>';
+        ?></li>
+      <?php endforeach; ?>
+    </ul>
+  </div>
+<?php endif; ?>
 
 <div class="card card-flush">
   <div style="padding:14px 18px" class="row-between">

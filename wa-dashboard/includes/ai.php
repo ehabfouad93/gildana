@@ -17,15 +17,31 @@ const AI_ANTHROPIC_VERSION    = '2023-06-01';
 /** Resolve a client's AI config: ['provider','key','model'] or null if unset. */
 function ai_config(array $client): ?array
 {
+    /* The client's own key comes first, always. It costs the platform nothing, so it is
+       never metered and never charged — which is also why it stays the cheaper option for
+       them and the free option for us. */
     $provider = strtolower((string) ($client['ai_provider'] ?? ''));
-    if (!in_array($provider, ['claude', 'openai'], true)) return null;
-    $key = decrypt_secret((string) ($client['ai_api_key_enc'] ?? ''));
-    if ($key === '') return null;
-    $model = trim((string) ($client['ai_model'] ?? ''));
-    if ($model === '') {
-        $model = $provider === 'claude' ? AI_DEFAULT_CLAUDE_MODEL : AI_DEFAULT_OPENAI_MODEL;
+    $key      = decrypt_secret((string) ($client['ai_api_key_enc'] ?? ''));
+    if (in_array($provider, ['claude', 'openai'], true) && $key !== '') {
+        $model = trim((string) ($client['ai_model'] ?? ''));
+        if ($model === '') $model = $provider === 'claude' ? AI_DEFAULT_CLAUDE_MODEL : AI_DEFAULT_OPENAI_MODEL;
+        return ['provider' => $provider, 'key' => $key, 'model' => $model, 'billed' => false];
     }
-    return ['provider' => $provider, 'key' => $key, 'model' => $model];
+
+    /* No key of their own. If their plan includes AI, they use the platform key and their
+       tokens are metered against the plan's allowance. Running past the allowance does not
+       produce a surprise bill — the caller falls back to the step's own text instead. */
+    if (function_exists('billing_ai_included') && billing_ai_included($client)) {
+        $left = billing_ai_remaining($client);
+        if ($left !== null && $left <= 0) return null;      // allowance spent — fall back
+        $pf = billing_platform_ai();
+        if ($pf) {
+            $model = $pf['model'] !== '' ? $pf['model']
+                   : ($pf['provider'] === 'claude' ? AI_DEFAULT_CLAUDE_MODEL : AI_DEFAULT_OPENAI_MODEL);
+            return ['provider' => $pf['provider'], 'key' => $pf['key'], 'model' => $model, 'billed' => true];
+        }
+    }
+    return null;
 }
 
 function ai_configured(array $client): bool
@@ -87,6 +103,7 @@ function ai_complete(array $client, string $system, array $messages, int $maxTok
         foreach (($res['json']['content'] ?? []) as $block) {
             if (($block['type'] ?? '') === 'text') $text .= (string) ($block['text'] ?? '');
         }
+        ai_meter($client, $cfg, $res['json']['usage'] ?? [], 'input_tokens', 'output_tokens');
         return ['ok' => true, 'text' => trim($text), 'error' => ''];
     }
 
@@ -101,7 +118,32 @@ function ai_complete(array $client, string $system, array $messages, int $maxTok
         return ['ok' => false, 'text' => '', 'error' => $res['error'] ?: 'No response'];
     }
     $text = (string) ($res['json']['choices'][0]['message']['content'] ?? '');
+    ai_meter($client, $cfg, $res['json']['usage'] ?? [], 'prompt_tokens', 'completion_tokens');
     return ['ok' => true, 'text' => trim($text), 'error' => ''];
+}
+
+/**
+ * Bill one completion, if it was ours to pay for.
+ *
+ * Both providers report token counts on the response, under different names. A client using
+ * their own key is skipped entirely — nothing recorded, nothing charged.
+ */
+function ai_meter(array $client, array $cfg, array $usage, string $inKey, string $outKey): void
+{
+    if (empty($cfg['billed']) || !function_exists('billing_charge_ai')) return;
+    billing_charge_ai(
+        $client, (string) $cfg['provider'], (string) $cfg['model'],
+        (int) ($usage[$inKey] ?? 0), (int) ($usage[$outKey] ?? 0),
+        (string) (ai_usage_source() ?: '')
+    );
+}
+
+/** Which part of the product asked for this completion — for the usage breakdown. */
+function ai_usage_source(?string $set = null): string
+{
+    static $src = '';
+    if ($set !== null) $src = $set;
+    return $src;
 }
 
 /** Extract the first JSON object from a model reply, defensively. */

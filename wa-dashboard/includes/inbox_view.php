@@ -8,32 +8,50 @@ $IB_ENDPOINT = $IB_ENDPOINT ?? 'inbox.php';
 $IB_SEP = strpos($IB_ENDPOINT, '?') === false ? '?' : '&';
 ?>
 <style>
-  .ib-wrap{display:flex;gap:0;height:72vh;min-height:460px;border:1px solid var(--line,#e5e2dc);border-radius:12px;overflow:hidden;background:var(--card,#fff)}
-  .ib-list{width:320px;min-width:260px;border-right:1px solid var(--line,#e5e2dc);display:flex;flex-direction:column;background:var(--card,#fff)}
-  .ib-search{padding:10px;border-bottom:1px solid var(--line,#e5e2dc)}
-  .ib-search input{width:100%;padding:8px 10px;border:1px solid var(--line,#e5e2dc);border-radius:8px;font-size:13px}
+  .ib-wrap{display:flex;gap:0;height:72vh;min-height:460px;border:1px solid var(--line,rgba(13,19,33,.10));border-radius:12px;overflow:hidden;background:var(--surface,#fff)}
+  .ib-list{width:320px;min-width:260px;border-right:1px solid var(--line,rgba(13,19,33,.10));display:flex;flex-direction:column;background:var(--surface,#fff)}
+  .ib-search{padding:10px;border-bottom:1px solid var(--line,rgba(13,19,33,.10))}
+  .ib-search input{width:100%;padding:8px 10px;border:1px solid var(--line,rgba(13,19,33,.10));border-radius:8px;font-size:13px}
   .ib-threads{overflow-y:auto;flex:1}
   .ib-th{display:flex;gap:10px;align-items:center;padding:11px 12px;cursor:pointer;border-bottom:1px solid var(--line,#f0eee9)}
-  .ib-th:hover{background:var(--paper,#f7f5f1)} .ib-th.active{background:var(--paper,#eef2f0)}
-  .ib-av{width:38px;height:38px;border-radius:50%;background:#25623c;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:15px;flex-shrink:0}
-  .ib-th .nm{font-weight:600;font-size:13.5px} .ib-th .pv{color:var(--muted,#8a857c);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px}
+  .ib-th:hover{background:var(--brand-tint,rgba(124,58,237,.06))} .ib-th.active{background:var(--brand-tint,rgba(124,58,237,.10))}
+  .ib-av{width:38px;height:38px;border-radius:50%;background:var(--brand,#7C3AED);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:15px;flex-shrink:0}
+  .ib-th .nm{font-weight:600;font-size:13.5px} .ib-th .pv{color:var(--muted,rgba(13,19,33,.55));font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px}
   .ib-th .meta{margin-left:auto;text-align:right;display:flex;flex-direction:column;gap:3px;align-items:flex-end}
-  .ib-th .tm{color:var(--muted,#8a857c);font-size:11px}
-  .ib-badge{background:#25d366;color:#fff;border-radius:10px;font-size:11px;padding:1px 7px;font-weight:600}
+  .ib-th .tm{color:var(--muted,rgba(13,19,33,.55));font-size:11px}
+  .ib-badge{background:var(--brand,#7C3AED);color:#fff;border-radius:10px;font-size:11px;padding:1px 7px;font-weight:600}
   .ib-chat{flex:1;display:flex;flex-direction:column;background:#efe7dd;background-image:linear-gradient(rgba(255,255,255,.55),rgba(255,255,255,.55))}
-  .ib-chat-h{padding:12px 16px;background:var(--card,#fff);border-bottom:1px solid var(--line,#e5e2dc);display:flex;align-items:center;gap:10px}
+  .ib-chat-h{padding:12px 16px;background:var(--surface,#fff);border-bottom:1px solid var(--line,rgba(13,19,33,.10));display:flex;align-items:center;gap:10px}
   .ib-body{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:6px}
   .ib-b{max-width:74%;padding:7px 11px;border-radius:9px;font-size:13.5px;line-height:1.35;white-space:pre-wrap;word-wrap:break-word;box-shadow:0 1px .5px rgba(0,0,0,.08)}
   .ib-in{align-self:flex-start;background:#fff}
   .ib-out{align-self:flex-end;background:#d9fdd3}
   .ib-b .st{display:block;text-align:right;font-size:10.5px;color:#667;margin-top:2px}
   .ib-b .st.failed{color:#c0392b}
-  .ib-foot{padding:10px 12px;background:var(--card,#fff);border-top:1px solid var(--line,#e5e2dc)}
+  .ib-foot{padding:10px 12px;background:var(--surface,#fff);border-top:1px solid var(--line,rgba(13,19,33,.10))}
   .ib-foot form{display:flex;gap:8px;align-items:flex-end}
-  .ib-foot textarea{flex:1;resize:none;border:1px solid var(--line,#e5e2dc);border-radius:20px;padding:9px 14px;font-size:13.5px;max-height:120px}
-  .ib-note{font-size:12px;color:var(--muted,#8a857c);text-align:center;padding:8px}
-  .ib-empty{margin:auto;color:var(--muted,#8a857c);text-align:center;font-size:13px}
-  @media(max-width:720px){.ib-list{width:44%;min-width:0}.ib-th .pv{max-width:110px}}
+  .ib-foot textarea{flex:1;resize:none;border:1px solid var(--line,rgba(13,19,33,.10));border-radius:20px;padding:9px 14px;font-size:13.5px;max-height:120px}
+  .ib-note{font-size:12px;color:var(--muted,rgba(13,19,33,.55));text-align:center;padding:8px}
+  .ib-empty{margin:auto;color:var(--muted,rgba(13,19,33,.55));text-align:center;font-size:13px}
+  .ib-bot{font-size:11.5px;padding:3px 9px;border-radius:11px;white-space:nowrap;font-weight:600}
+  .ib-bot.on{background:#e8f5ea;color:#1e7a3c}
+  .ib-bot.off{background:#fdf0e3;color:#a9631a}
+  .ib-back{display:none;background:0;border:0;cursor:pointer;color:var(--ink,#2a221a);padding:2px 6px 2px 0;font-size:19px;line-height:1}
+  /* Phones: one pane at a time — the thread list fills the screen, and opening a chat
+     swaps to the conversation with a back arrow (the two-pane desktop view is unusable
+     at this width). */
+  @media(max-width:720px){
+    .ib-wrap{height:calc(100vh - 190px);min-height:0;border-radius:10px}
+    .ib-list{width:100%;min-width:0;border-right:0}
+    .ib-chat{display:none}
+    .ib-th .pv{max-width:60vw}
+    .ib-wrap.chatting .ib-list{display:none}
+    .ib-wrap.chatting .ib-chat{display:flex}
+    .ib-back{display:inline-block}
+    /* Both of these are scoped rules that would otherwise beat the global 16px rule,
+       and anything under 16px makes iOS Safari zoom the page on focus. */
+    .ib-foot textarea, .ib-search input{font-size:16px}
+  }
 </style>
 
 <div class="ib-wrap">
@@ -42,7 +60,15 @@ $IB_SEP = strpos($IB_ENDPOINT, '?') === false ? '?' : '&';
     <div class="ib-threads" id="ib-threads"><div class="ib-empty" style="padding:20px">Loading…</div></div>
   </div>
   <div class="ib-chat">
-    <div class="ib-chat-h" id="ib-head" style="display:none"><div class="ib-av" id="ib-hav"></div><div><div class="nm" id="ib-hname"></div><div class="pv" id="ib-hphone"></div></div></div>
+    <div class="ib-chat-h" id="ib-head" style="display:none">
+      <button type="button" class="ib-back" id="ib-back" aria-label="Back to conversations">&#8592;</button>
+      <div class="ib-av" id="ib-hav"></div>
+      <div><div class="nm" id="ib-hname"></div><div class="pv" id="ib-hphone"></div></div>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+        <span class="ib-bot" id="ib-bot"></span>
+        <button type="button" class="btn btn-ghost btn-sm" id="ib-bot-btn"></button>
+      </div>
+    </div>
     <div class="ib-body" id="ib-body"><div class="ib-empty">Select a conversation to view messages.</div></div>
     <div class="ib-foot" id="ib-foot" style="display:none">
       <form id="ib-form"><textarea id="ib-text" rows="1" placeholder="Type a reply…"></textarea><button class="btn btn-primary" type="submit">Send</button></form>
@@ -79,6 +105,7 @@ async function loadThreads(){
 }
 function openThread(id,name,phone){
   ibCur=id; ibLast=0; el('ib-body').innerHTML='';
+  document.querySelector('.ib-wrap').classList.add('chatting');   // phones: show the chat pane
   el('ib-head').style.display='flex'; el('ib-foot').style.display='block';
   el('ib-hav').textContent=initials(name||phone); el('ib-hname').textContent=name||('+'+phone); el('ib-hphone').textContent='+'+phone;
   document.querySelectorAll('.ib-th').forEach(e=>e.classList.remove('active'));
@@ -103,7 +130,31 @@ async function pollThread(){
   ibOpen=!!d.window_open;
   el('ib-form').style.display = ibOpen?'flex':'none';
   el('ib-closed').style.display = ibOpen?'none':'block';
+  setBotState(!!d.bot_paused);
 }
+/* ── live takeover: while paused the bot won't reply to this contact ── */
+let ibPaused=false;
+function setBotState(paused){
+  ibPaused=paused;
+  const pill=el('ib-bot'), btn=el('ib-bot-btn');
+  pill.className='ib-bot '+(paused?'off':'on');
+  pill.textContent = paused ? "🙋 You're handling this" : '🤖 Bot active';
+  btn.textContent  = paused ? 'Resume bot' : 'Take over';
+  btn.title = paused ? 'Hand the conversation back to the bot'
+                     : 'Pause the bot so you can reply by hand';
+}
+el('ib-bot-btn').addEventListener('click', async ()=>{
+  if(!ibCur) return;
+  const btn=el('ib-bot-btn'); btn.disabled=true;
+  const fd=new FormData();
+  fd.append('ajax', ibPaused?'resume':'takeover');
+  fd.append('csrf_token',IB_CSRF); fd.append('contact',ibCur);
+  try{
+    const r=await fetch(IB_URL,{method:'POST',body:fd}); const d=await r.json();
+    if(d.ok) setBotState(!!d.bot_paused);
+  }catch(e){ /* leave the pill as-is */ }
+  btn.disabled=false;
+});
 el('ib-form').addEventListener('submit', async e=>{
   e.preventDefault(); const ta=el('ib-text'); const body=ta.value.trim(); if(!body||!ibCur) return;
   const btn=e.target.querySelector('button'); btn.disabled=true;
@@ -114,6 +165,10 @@ el('ib-form').addEventListener('submit', async e=>{
   else { alert(d.error||'Could not send.'); }
 });
 el('ib-text').addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); el('ib-form').requestSubmit(); }});
+el('ib-back').addEventListener('click',()=>{
+  document.querySelector('.ib-wrap').classList.remove('chatting');
+  ibCur=0; loadThreads();
+});
 el('ib-q').addEventListener('input',()=>{ clearTimeout(window._ibq); window._ibq=setTimeout(loadThreads,300); });
 loadThreads(); setInterval(loadThreads,5000); setInterval(pollThread,3500);
 </script>

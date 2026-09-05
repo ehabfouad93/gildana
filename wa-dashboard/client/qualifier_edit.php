@@ -11,6 +11,8 @@ $flow = db_row("SELECT * FROM flows WHERE id=? AND client_id=? AND kind='qualifi
 if (!$flow) { http_response_code(404); exit('Qualifier not found.'); }
 
 $err = '';
+// A personal number has no approved templates, so the cold first message is written here.
+$PERSONAL = channel_is_personal($CLIENT);
 
 /* ── Send now: import new leads + send outreach + retry stuck ones ── */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'send_now') {
@@ -70,7 +72,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save'
 
         // Compile a linear flow: template → questions → ai_chat → ai_score → collect → End.
         $chain = [];
-        if ($templateId) {
+        if ($PERSONAL) {
+            // Same 'template' step type so the outreach sender still finds it, but carrying
+            // its own text instead of a template id.
+            $outText  = trim((string) ($_POST['outreach_text'] ?? ''));
+            $outMedia = trim((string) ($_POST['outreach_media'] ?? ''));
+            if ($outText !== '' || $outMedia !== '') {
+                $chain[] = ['type' => 'template', 'config' => ['text' => $outText, 'media' => $outMedia]];
+            }
+        } elseif ($templateId) {
             // Collect ALL template parameters (header media/location/text, body vars, dynamic buttons)
             // so any approved template sends correctly (avoids Meta #132012).
             $tRow  = db_row("SELECT components FROM templates WHERE id=? AND client_id=?", [$templateId, $cid]);
@@ -151,11 +161,17 @@ foreach ($templates as $t) {
 $sc = json_decode((string) $flow['source_config'], true) ?: [];
 $steps = db_all("SELECT * FROM flow_steps WHERE flow_id=? ORDER BY sort, id", [$id]);
 $outreachId = 0; $outreachCfg = []; $questions = []; $criterion = ''; $maxPoints = 50;
+$outreachText = ''; $outreachMedia = '';
 $knowledge = ''; $chatIntro = ''; $chatPersona = ''; $chatInstructions = ''; $chatMaxTurns = 6;
 $chatGoals = []; $chatCaptures = [];
 foreach ($steps as $s) {
     $c = json_decode((string) $s['config'], true) ?: [];
-    if ($s['type'] === 'template') { $outreachId = (int) ($c['template_id'] ?? 0); $outreachCfg = $c; }
+    if ($s['type'] === 'template') {
+        $outreachId    = (int) ($c['template_id'] ?? 0);
+        $outreachCfg   = $c;
+        $outreachText  = (string) ($c['text'] ?? '');
+        $outreachMedia = (string) ($c['media'] ?? '');
+    }
     elseif ($s['type'] === 'question') $questions[] = (string) ($c['body'] ?? '');
     elseif ($s['type'] === 'ai_score') { $criterion = (string) ($c['criterion'] ?? ''); $maxPoints = (int) ($c['max_points'] ?? 50); }
     elseif ($s['type'] === 'ai_chat') {
@@ -177,6 +193,7 @@ client_header('Qualifier · ' . $flow['name'], 'qualifier', $CLIENT);
 ?>
 <div class="page-head"><h1><?= e((string) $flow['name']) ?></h1>
   <div class="page-actions">
+    <?= guide_button('qualifier') ?>
     <a class="btn btn-ghost btn-sm" href="qualifiers.php">← All</a>
     <form method="post" style="display:inline" onsubmit="return confirm('Import new leads from the sheet and send them the outreach now?')">
       <?= csrf_field() ?><input type="hidden" name="action" value="send_now">
@@ -186,7 +203,7 @@ client_header('Qualifier · ' . $flow['name'], 'qualifier', $CLIENT);
   </div>
 </div>
 <?php if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
-<?php if (!$templates): ?><div class="alert info">You have no <strong>approved</strong> templates yet — sync them in <a href="templates.php">Templates</a> before the qualifier can send cold outreach.</div><?php endif; ?>
+<?php if (!$PERSONAL && !$templates): ?><div class="alert info">You have no <strong>approved</strong> templates yet — sync them in <a href="templates.php">Templates</a> before the qualifier can send cold outreach.</div><?php endif; ?>
 
 <form method="post" enctype="multipart/form-data">
   <?= csrf_field() ?><input type="hidden" name="action" value="save">
@@ -208,6 +225,29 @@ client_header('Qualifier · ' . $flow['name'], 'qualifier', $CLIENT);
     </div>
   </div>
 
+  <?php if ($PERSONAL): ?>
+  <div class="card">
+    <h2>2 · Outreach message (cold first message)</h2>
+    <div class="field"><span class="lbl">Message</span>
+      <textarea name="outreach_text" rows="5" placeholder="أهلاً {{name}} 👋&#10;معاك أحمد من …"><?= e($outreachText) ?></textarea>
+      <div class="hint">Personalise with <code>{{name}}</code> or <code>{{phone}}</code>. Sent to each new lead; after they reply, the AI takes over.</div>
+    </div>
+    <div class="field"><span class="lbl">Image <span class="text-muted">(optional)</span></span>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <input type="text" id="om-url" name="outreach_media" value="<?= e($outreachMedia) ?>" placeholder="https://… or click Upload" style="flex:1;min-width:220px">
+        <input type="file" id="om-file" accept=".jpg,.jpeg,.png,.webp" style="display:none" onchange="uploadOutreachMedia(this)">
+        <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('om-file').click()">&#8593; Upload</button>
+        <span id="om-status" class="text-muted" style="font-size:12px"></span>
+      </div>
+      <div class="hint">Sent as a photo with the message above as its caption.</div>
+    </div>
+    <div class="alert info" style="font-size:12.5px">
+      Sending from <strong>your own number</strong> — no template approval and no 24-hour window.
+      Outreach goes out <strong><?= (int) ($CLIENT['slot_size'] ?: 15) ?> at a time</strong>, then pauses
+      <strong><?= round((int) ($CLIENT['slot_pause_sec'] ?: 180) / 60, 1) ?> minutes</strong>, sharing one batch with your campaigns and automations.
+    </div>
+  </div>
+  <?php else: ?>
   <div class="card">
     <h2>2 · Outreach template (cold first message)</h2>
     <div class="field"><span class="lbl">Approved template</span>
@@ -221,6 +261,7 @@ client_header('Qualifier · ' . $flow['name'], 'qualifier', $CLIENT);
     </div>
     <div id="tvars"></div>
   </div>
+  <?php endif; ?>
 
   <div class="card">
     <div class="row-between" style="margin-bottom:12px"><h2 style="border:0;padding:0;margin:0">3 · Qualifying questions</h2>
@@ -322,8 +363,20 @@ function varRow(pfx, i, saved){
     +'<div class="field tv-val" style="display:'+(isName?'none':'block')+'"><span class="lbl">Value</span>'+inp(pfx+'_value['+i+']', saved.value, 'e.g. 20% off')+'</div>'
     +'<div class="field"><span class="lbl">Fallback</span>'+inp(pfx+'_fallback['+i+']', saved.fallback, 'e.g. there')+'</div></div>';
 }
+async function uploadOutreachMedia(input){
+  if(!input.files || !input.files[0]) return;
+  const st=document.getElementById('om-status'); st.textContent='Uploading…';
+  const fd=new FormData(); fd.append('csrf_token',CSRF); fd.append('media',input.files[0]);
+  try{
+    const r=await fetch('upload_media.php',{method:'POST',body:fd}); const d=await r.json();
+    if(d.ok){ document.getElementById('om-url').value=d.url; st.textContent='✓ uploaded'; st.style.color='#25623c'; }
+    else { st.textContent='✕ '+(d.error||'upload failed'); st.style.color='#c0392b'; }
+  }catch(e){ st.textContent='✕ network error'; st.style.color='#c0392b'; }
+  input.value='';
+}
 function renderTvars(){
-  const id=document.getElementById('tpl-select').value; const box=document.getElementById('tvars');
+  const sel=document.getElementById('tpl-select'); if(!sel) return;   // personal channel: no template picker
+  const id=sel.value; const box=document.getElementById('tvars');
   const spec=TPLSPEC[id]; if(!id||id==='0'||!spec){ box.innerHTML=''; return; }
   let h=''; const hf=String(spec.header&&spec.header.format||'').toUpperCase();
   const loc=OUTCFG.header_loc||{};

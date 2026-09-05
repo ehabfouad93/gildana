@@ -23,6 +23,10 @@ return [
     // ── Meta / WhatsApp Cloud API ──
     'graph_version' => 'v21.0',
 
+    // Graph API host. Leave this out in production — it defaults to the real endpoint.
+    // Only set it to point at a mock/staging Graph API when testing locally.
+    // 'graph_host' => 'http://127.0.0.1:8790',
+
     // Token that Meta must echo back when you configure the webhook (you choose it).
     'webhook_verify_token' => 'CHANGE_ME_pick_any_random_string',
 
@@ -36,13 +40,21 @@ return [
     'send_batch_per_run'    => 300,  // max messages per client per run
     'send_batch_global'     => 1000, // hard cap across all clients per run
     'send_parallel'         => 30,   // messages sent concurrently per HTTP burst
+    'send_parallel_media'   => 10,   // lower concurrency for templates with an image/video/document header
+
+    // ── Personal-number channel pacing ──
+    // A personal WhatsApp number is banned for sending fast and uniformly, so sends on that
+    // channel go one at a time with a random gap. Per-client slot size / pause live on the
+    // client record; these are the platform-wide gap bounds, in milliseconds.
+    'slot_gap_min_ms'       => 2000,
+    'slot_gap_max_ms'       => 6000,
     'no_answer_hours'       => 24,   // qualifier leads with no reply after N hours → "No answer"
 
     // ── Login CAPTCHA (needs the GD extension; auto-disables if GD is absent) ──
     'captcha_enabled' => true,
 
     // ── App ──
-    'app_name'      => 'Gildana WhatsApp',
+    'app_name'      => '',   // blank = use the built-in brand name (Revenect)
     'session_name'  => 'wa_dash',
     'admin_email'   => 'info@gildana.net', // where low-credit / completion alerts go
     'base_url'      => '', // e.g. https://app.gildana.net (used in emails). Empty = auto-detect.
