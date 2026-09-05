@@ -76,7 +76,7 @@ $hosted  = (int) db_val("SELECT COUNT(*) FROM clients WHERE waba_mode='platform'
 
 layout_header('Message rates', 'admin', 'rates');
 ?>
-<div class="page-head"><h1>Message rates</h1>
+<div class="page-head"><h1>Message rates</h1><div class="page-actions"><?= guide_button('rates') ?></div>
   <p class="text-muted">What WhatsApp charges you per message. Used to price the
     <strong><?= $hosted ?></strong> client<?= $hosted === 1 ? '' : 's' ?> sending under your account.</p></div>
 <?php if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>

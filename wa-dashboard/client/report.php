@@ -59,7 +59,7 @@ client_header('Report · ' . $camp['name'], 'campaigns', $CLIENT);
 ?>
 <div class="page-head">
   <h1><?= e((string) $camp['name']) ?> <span id="status-pill"><?= status_pill((string) $camp['status']) ?></span></h1>
-  <div class="page-actions"><?= $actions ?></div>
+  <div class="page-actions"><?= guide_button('campaigns') . $actions ?></div>
 </div>
 
 <p class="text-muted" style="margin:-10px 0 20px;font-size:13px">

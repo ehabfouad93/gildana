@@ -101,6 +101,7 @@ if ($detailId) {
     <div class="page-head">
       <h1><?= e($list['name']) ?> <span class="text-muted" style="font-size:15px">· <?= $memberCount ?> members</span></h1>
       <div class="page-actions">
+        <?= guide_button('lists') ?>
         <a class="btn btn-ghost btn-sm" href="lists.php">← All lists</a>
         <button class="btn btn-dark btn-sm" onclick="addAll()">Add all opted-in contacts</button>
       </div>

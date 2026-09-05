@@ -30,7 +30,7 @@ $catName = ['marketing' => 'Promotions', 'utility' => 'Updates & confirmations',
 
 layout_header('Billing', 'client', 'billing');
 ?>
-<div class="page-head"><h1>Billing</h1>
+<div class="page-head"><h1>Billing</h1><div class="page-actions"><?= guide_button('billing') ?></div>
   <p class="text-muted">Your plan and what you have used since <?= e(date('j F', strtotime($period))) ?>.</p></div>
 
 <div class="grid2">

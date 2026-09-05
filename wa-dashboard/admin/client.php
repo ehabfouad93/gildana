@@ -219,6 +219,7 @@ layout_header('Client · ' . $client['name'], 'admin', 'clients');
 <div class="page-head">
   <h1><?= e($client['name']) ?></h1>
   <div class="page-actions" style="align-items:center">
+    <?= guide_button('clients') ?>
     <span class="text-muted" style="font-size:12.5px">Account</span>
     <label class="switch"><input type="checkbox" id="status-switch" <?= $client['status'] === 'active' ? 'checked' : '' ?> onchange="toggleStatus(this)"><span class="slider"></span></label>
     <span id="status-text" class="pill <?= $client['status'] === 'active' ? 'green' : 'gray' ?> dot"><?= $client['status'] === 'active' ? 'Enabled' : 'Disabled' ?></span>

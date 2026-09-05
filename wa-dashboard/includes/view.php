@@ -384,10 +384,19 @@ function showToast(msg, err){
 }
 
 /** Small page-title/header block with an optional action button on the right. */
+require_once __DIR__ . '/guide.php';
+
 function page_head(string $title, string $actionHtml = ''): void
 {
+    /* Every page gets its walkthrough here rather than each page remembering to ask for one.
+       The nav key the page already declared to layout_header() is enough to find it, so a
+       screen earns its guide by existing. */
+    $guide = '';
+    if (function_exists('guide_html')) $guide = guide_html(layout_active());
+
     echo '<div class="page-head"><h1>' . e($title) . '</h1>'
-       . ($actionHtml !== '' ? '<div class="page-actions">' . $actionHtml . '</div>' : '')
+       . ($guide !== '' || $actionHtml !== ''
+            ? '<div class="page-actions">' . $guide . $actionHtml . '</div>' : '')
        . '</div>';
 }
 

@@ -84,7 +84,7 @@ $get   = fn(string $k, string $d = '') => (string) (db_val("SELECT v FROM app_se
 
 layout_header('Plans & pricing', 'admin', 'plans');
 ?>
-<div class="page-head"><h1>Plans &amp; pricing</h1>
+<div class="page-head"><h1>Plans &amp; pricing</h1><div class="page-actions"><?= guide_button('plans') ?></div>
   <p class="text-muted">What each tier includes, and how usage converts to money.</p></div>
 <?php if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 

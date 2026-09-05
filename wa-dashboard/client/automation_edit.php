@@ -396,6 +396,7 @@ client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
 <div class="page-head">
   <h1><?= e((string) $flow['name']) ?></h1>
   <div class="page-actions">
+    <?= guide_button('automations') ?>
     <a class="btn btn-ghost btn-sm" href="automations.php">← All</a>
     <button type="submit" form="flow-form" class="btn btn-primary btn-sm">Save</button>
   </div>

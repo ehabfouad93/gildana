@@ -57,11 +57,12 @@ $deadCount   = 0;
 $reviewCount = 0;
 foreach ($rows as $r) { $r['status'] === 'dead' ? $deadCount++ : $reviewCount++; }
 
-layout_header('Needs attention');
+client_header('Needs attention', 'attention', $CLIENT);
 ?>
 <div class="page-head">
   <h1>Needs attention</h1>
   <p class="text-muted">Messages that stopped and need you to decide what happens next.</p>
+  <div class="page-actions"><?= guide_button('failed') ?></div>
 </div>
 
 <?php if (!$rows): ?>

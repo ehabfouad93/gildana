@@ -23,6 +23,35 @@ if (!client_ready($CLIENT)): ?>
       : 'Your WhatsApp number isn\'t connected yet. ' . e(BRAND_PARENT) . ' needs to add your API credentials before you can send campaigns.' ?></div>
 <?php endif; ?>
 
+<?php
+/* The first-run walkthrough, answered from real data rather than a list someone ticks by
+   hand. It disappears the moment everything is done — a checklist of six ticks is clutter. */
+$gs = guide_checklist($CLIENT);
+if ($gs['done'] < $gs['total']): ?>
+  <div class="card">
+    <div class="gs-head">
+      <h2 style="margin:0;border:0;padding:0">Getting started</h2>
+      <span class="gs-count"><?= $gs['done'] ?> of <?= $gs['total'] ?> done</span>
+    </div>
+    <p class="text-muted" style="font-size:12.5px;margin:0">
+      In this order, and each one takes a few minutes. This card goes away once you are set up.
+    </p>
+    <div class="gs-bar"><span style="width:<?= (int) round(100 * $gs['done'] / max(1, $gs['total'])) ?>%"></span></div>
+    <div class="gs-list">
+      <?php foreach ($gs['items'] as $i): ?>
+        <div class="gs-item <?= $i['done'] ? 'done' : '' ?>">
+          <span class="gs-tick" aria-hidden="true">✓</span>
+          <span class="gs-text">
+            <b><?= e($i['label']) ?></b>
+            <span><?= e($i['help']) ?></span>
+          </span>
+          <a class="btn btn-ghost btn-sm" href="<?= e($i['url']) ?>"><?= e($i['cta']) ?></a>
+        </div>
+      <?php endforeach; ?>
+    </div>
+  </div>
+<?php endif; ?>
+
 <div class="stats-row">
   <div class="stat-tile"><span class="lbl">Credits</span><span class="val accent"><?= number_format((int) $CLIENT['credits_balance']) ?></span><span class="sub">1 credit / message</span></div>
   <div class="stat-tile"><span class="lbl">Opted-in Contacts</span><span class="val"><?= number_format($contacts) ?></span><span class="sub"><?= $optedOut ?> opted out</span></div>

@@ -193,6 +193,7 @@ client_header('Qualifier · ' . $flow['name'], 'qualifier', $CLIENT);
 ?>
 <div class="page-head"><h1><?= e((string) $flow['name']) ?></h1>
   <div class="page-actions">
+    <?= guide_button('qualifier') ?>
     <a class="btn btn-ghost btn-sm" href="qualifiers.php">← All</a>
     <form method="post" style="display:inline" onsubmit="return confirm('Import new leads from the sheet and send them the outreach now?')">
       <?= csrf_field() ?><input type="hidden" name="action" value="send_now">
