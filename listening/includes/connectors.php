@@ -206,3 +206,111 @@ function source_label(array $source): string
     $c = listen_connector((string) $source['connector']);
     return $c['label'] ?? (string) $source['connector'];
 }
+
+/* ── setup guidance ──────────────────────────────────────────────────────
+   The copy lives in lang/, not here, so the Arabic UI does not drop back to
+   English on the Sources page. The registry keeps only structure. */
+
+/** Translated label for a connector, falling back to the registry's own. */
+function connector_label(string $id): string
+{
+    $t = t('conn.' . $id . '.label');
+    if ($t !== 'conn.' . $id . '.label') return $t;
+    $c = listen_connector($id);
+    return $c['label'] ?? $id;
+}
+
+/** Why you would enable this source, and what its limits are. */
+function connector_why(string $id): string
+{
+    $t = t('conn.' . $id . '.why');
+    return $t === 'conn.' . $id . '.why' ? (listen_connector($id)['why'] ?? '') : $t;
+}
+
+function connector_caveat(string $id): string
+{
+    $t = t('conn.' . $id . '.caveat');
+    return $t === 'conn.' . $id . '.caveat' ? (listen_connector($id)['caveat'] ?? '') : $t;
+}
+
+/**
+ * Numbered setup steps, read from lang as conn.<id>.step1, step2, …
+ * Stops at the first missing key, so adding a step is a lang edit only.
+ */
+function connector_steps(string $id): array
+{
+    $out = [];
+    for ($i = 1; $i <= 9; $i++) {
+        $key = 'conn.' . $id . '.step' . $i;
+        $val = t($key);
+        if ($val === $key) break;
+        $out[] = $val;
+    }
+    return $out;
+}
+
+/** Where to go to get the credential, when there is such a place. */
+function connector_help(string $id): array
+{
+    $urls = [
+        'youtube'   => 'https://console.cloud.google.com/apis/library/youtube.googleapis.com',
+        'serpapi'   => 'https://serpapi.com/manage-api-key',
+        'meta_page' => 'https://developers.facebook.com/tools/explorer/',
+        'meta_ig'   => 'https://developers.facebook.com/tools/explorer/',
+    ];
+    if (!isset($urls[$id])) return [];
+    $label = t('conn.' . $id . '.help');
+    return ['url' => $urls[$id], 'label' => $label === 'conn.' . $id . '.help' ? $urls[$id] : $label];
+}
+
+/** Human names for the missing credentials, for the "Needs: …" line. */
+function connector_missing_labels(string $id, array $client): array
+{
+    $out = [];
+    foreach (listen_connector_missing($id, $client) as $column) {
+        $key = 'cred.' . $column;
+        $val = t($key);
+        $out[] = $val === $key ? $column : $val;
+    }
+    return $out;
+}
+
+/**
+ * Ready-made feeds, so a client picks a masthead instead of hunting for a URL.
+ * Verified as RSS at the time of writing; a dead one simply shows an error on
+ * its first check rather than failing silently.
+ */
+function rss_presets(): array
+{
+    return [
+        'مصر' => [
+            'اليوم السابع'      => 'https://www.youm7.com/rss/SectionRss?SectionID=65',
+            'مصراوي'            => 'https://www.masrawy.com/rss/rssfeeds',
+            'الأهرام'           => 'https://gate.ahram.org.eg/rss/22.aspx',
+            'الشروق'            => 'https://www.shorouknews.com/rss/RssFeed/Egypt',
+            'الوطن'             => 'https://www.elwatannews.com/RSSFeed',
+            'المصري اليوم'      => 'https://www.almasryalyoum.com/rss/rssfeeds',
+        ],
+        'أعمال / اقتصاد' => [
+            'العربية بزنس'      => 'https://www.alarabiya.net/.mrss/ar/aswaq.xml',
+            'Enterprise Egypt'  => 'https://enterprise.press/feed/',
+            'Daily News Egypt'  => 'https://www.dailynewsegypt.com/feed/',
+        ],
+        'إقليمي / دولي' => [
+            'الجزيرة'           => 'https://www.aljazeera.net/aljazeerarss/a7c186be-1baa-4bd4-9d80-a84db769f779/73d0e1b4-532f-45ef-b135-bfdff8b8cab9',
+            'BBC Arabic'        => 'https://feeds.bbci.co.uk/arabic/rss.xml',
+            'CNN Arabic'        => 'https://arabic.cnn.com/api/v1/rss/rss.xml',
+            'Reuters Business'  => 'https://www.reutersagency.com/feed/?best-topics=business-finance',
+        ],
+    ];
+}
+
+/**
+ * Translated label for one of a connector's config fields.
+ * Falls back to the registry's English so a newly added field still renders.
+ */
+function connector_field_label(string $connector, string $key, string $fallback = ''): string
+{
+    $t = t('cfg.' . $connector . '.' . $key);
+    return $t === 'cfg.' . $connector . '.' . $key ? ($fallback ?: $key) : $t;
+}

@@ -168,6 +168,101 @@ return [
     'src.coverage_note'     => 'X/Twitter, TikTok and public Facebook/Instagram posts cannot be searched. Meta connectors only see pages and accounts you own.',
     'src.queued'            => 'Queued for the next worker run.',
 
+    /* ── connector copy: why / caveat / setup steps ──
+       Kept in the lang files rather than the registry so the Arabic UI does not
+       fall back to English the moment a client opens the Sources page. */
+    'conn.google_news.label'   => 'Google News',
+    'conn.google_news.why'     => 'The widest free news coverage, Arabic and English, with a separate edition per country.',
+    'conn.google_news.caveat'  => 'An undocumented Google endpoint. It can be throttled or changed without notice — keep a paid source for anything a client depends on.',
+    'conn.google_news.step1'   => 'Choose the language and the country edition to search.',
+    'conn.google_news.step2'   => 'Choose how far back each check looks — a day is right for most brands.',
+    'conn.google_news.step3'   => 'Save. Results arrive on the next worker run, or press "Check now".',
+
+    'conn.bing_news.label'     => 'Bing News',
+    'conn.bing_news.why'       => 'A second news index. Catches outlets Google misses, and returns the publisher\'s real link rather than a redirect.',
+    'conn.bing_news.caveat'    => 'Also an undocumented endpoint, with the same caveat as Google News.',
+    'conn.bing_news.step1'     => 'Choose the country edition.',
+    'conn.bing_news.step2'     => 'Save, then press "Check now" to confirm results come back.',
+
+    'conn.rss.label'           => 'RSS / Atom feed',
+    'conn.rss.why'             => 'Follow one specific site, blog or forum. The most reliable free source, because the site publishes the feed on purpose.',
+    'conn.rss.caveat'          => 'Only covers what that one site publishes. Add a feed per outlet you care about.',
+    'conn.rss.step1'           => 'Pick a site from the ready-made list below, or find its feed yourself — usually /feed or /rss at the end of the address.',
+    'conn.rss.step2'           => 'Paste the feed address into the field.',
+    'conn.rss.step3'           => 'Press "Check now" straight after saving. If the address is wrong you will see the error immediately rather than waiting.',
+
+    'conn.reddit.label'        => 'Reddit',
+    'conn.reddit.why'          => 'Unfiltered public discussion. Often where a complaint appears first, before any news outlet picks it up.',
+    'conn.reddit.caveat'       => 'Anonymous access is rate limited and can start refusing requests. If it does, the source is marked with an error and backs off on its own.',
+    'conn.reddit.step1'        => 'Leave the subreddit blank to search all of Reddit, or enter one (for example: egypt) to narrow it.',
+    'conn.reddit.step2'        => 'Choose the window — a week suits most brands.',
+
+    'conn.youtube.label'       => 'YouTube',
+    'conn.youtube.why'         => 'Video reviews and vlogs, with real view and like counts so you can see which ones actually matter.',
+    'conn.youtube.caveat'      => 'One search costs 100 of the 10,000 free daily units — about 100 checks a day. The minimum interval is held at 60 minutes for that reason.',
+    'conn.youtube.step1'       => 'Open the Google Cloud Console and create a project (or pick an existing one).',
+    'conn.youtube.step2'       => 'In the library, search for "YouTube Data API v3" and press Enable.',
+    'conn.youtube.step3'       => 'Go to Credentials → Create credentials → API key, and copy the key.',
+    'conn.youtube.step4'       => 'Paste it into Settings → Sources → YouTube Data API key, then press Test.',
+    'conn.youtube.help'        => 'Open the Google Cloud Console',
+
+    'conn.serpapi.label'       => 'SerpApi (paid)',
+    'conn.serpapi.why'         => 'A supported, paid index. This is the one to use when a client is paying for coverage and a free source breaking is not acceptable.',
+    'conn.serpapi.caveat'      => 'Every check spends one search credit. Watch the monthly total under Admin → Source Health.',
+    'conn.serpapi.step1'       => 'Create an account at serpapi.com.',
+    'conn.serpapi.step2'       => 'Copy the API key from your dashboard.',
+    'conn.serpapi.step3'       => 'Paste it into Settings → Sources → SerpApi key, then press Test.',
+    'conn.serpapi.step4'       => 'Choose which engine to search — Google News suits brand monitoring.',
+    'conn.serpapi.help'        => 'Get your SerpApi key',
+
+    'conn.meta_page.label'     => 'Facebook Page',
+    'conn.meta_page.why'       => 'Posts that tag your page, plus the comments people leave on your own posts.',
+    'conn.meta_page.caveat'    => 'Only the page you own. Facebook has no API that searches public posts — no tool can do that, at any price.',
+    'conn.meta_page.step1'     => 'At developers.facebook.com create an app of type Business, and add the Facebook Login product.',
+    'conn.meta_page.step2'     => 'Open the Graph API Explorer, pick your app, then pick your Page from the token dropdown.',
+    'conn.meta_page.step3'     => 'Request the permissions pages_read_engagement and pages_show_list, then generate the token.',
+    'conn.meta_page.step4'     => 'Exchange it for a long-lived token (the short one expires in an hour) using the Access Token Debugger.',
+    'conn.meta_page.step5'     => 'Your Page ID is on the Page under About. Paste the ID and the token into Settings → Sources.',
+    'conn.meta_page.help'      => 'Open the Graph API Explorer',
+
+    'conn.meta_ig.label'       => 'Instagram',
+    'conn.meta_ig.why'         => 'Posts that tag your account, plus the comments on your own media.',
+    'conn.meta_ig.caveat'      => 'Only the account you own, and it must be a Business or Creator account linked to a Facebook Page. Public Instagram cannot be searched.',
+    'conn.meta_ig.step1'       => 'Convert the Instagram account to Business or Creator, and link it to your Facebook Page.',
+    'conn.meta_ig.step2'       => 'Use the same long-lived token as the Facebook Page connector.',
+    'conn.meta_ig.step3'       => 'Find the Instagram user ID by calling /me/accounts?fields=instagram_business_account in the Graph API Explorer.',
+    'conn.meta_ig.step4'       => 'Paste that ID into Settings → Sources → Instagram User ID.',
+    'conn.meta_ig.help'        => 'Open the Graph API Explorer',
+
+    /* ── credential names, for "what is missing" ── */
+    'cred.youtube_key_enc'     => 'YouTube Data API key',
+    'cred.aggregator_key_enc'  => 'SerpApi key',
+    'cred.meta_token_enc'      => 'Meta access token',
+    'cred.meta_page_id'        => 'Facebook Page ID',
+    'cred.meta_ig_user_id'     => 'Instagram User ID',
+
+    /* ── sources page ── */
+    'src.setup'                => 'How to set this up',
+    'src.missing'              => 'Needs: {what}',
+    'src.missing_go'           => 'Add it in Settings →',
+    'src.no_setup'             => 'Nothing to set up — just add it and it works.',
+    'src.instances'            => 'Your sources',
+    'src.none_yet'             => 'Not added yet.',
+    'src.presets'              => 'Ready-made Egyptian and Arab feeds',
+    'src.presets_hint'         => 'Click one to fill the address in.',
+    'src.free_note'            => 'Free · no key needed',
+
+    /* ── connector field labels ── */
+    'cfg.google_news.hl'       => 'Language',
+    'cfg.google_news.gl'       => 'Country',
+    'cfg.google_news.when'     => 'How far back each check looks',
+    'cfg.bing_news.cc'         => 'Country',
+    'cfg.rss.feed_url'         => 'Feed address',
+    'cfg.reddit.subreddit'     => 'Limit to one subreddit (optional)',
+    'cfg.reddit.t'             => 'How far back each check looks',
+    'cfg.youtube.region'       => 'Region',
+    'cfg.serpapi.engine'       => 'Search engine',
+
     /* ── alerts ── */
     'al.title'              => 'Alerts',
     'al.rules'              => 'Alert rules',

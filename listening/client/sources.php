@@ -22,13 +22,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $interval = max((int) $meta['min_interval'], (int) ($_POST['fetch_interval_min'] ?? $meta['default_interval']));
             $status   = ($_POST['status'] ?? 'active') === 'paused' ? 'paused' : 'active';
 
-            // Only keys the registry declares are stored — a posted field that
-            // isn't part of this connector's schema is ignored, not persisted.
+            // Only keys this connector declares are read, so a field belonging to a
+            // different connector can never be posted in and stored.
             $cfg = [];
             foreach (($meta['config'] ?? []) as $key => $spec) {
                 $v = trim((string) ($_POST['cfg_' . $key] ?? ''));
                 if ($v === '' && !empty($spec['required'])) {
-                    $err = $spec['label'] . ' is required.';
+                    $err = connector_field_label($connector, (string) $key, (string) $spec['label'])
+                         . ' — ' . t('kw.need_term');
                 }
                 $cfg[$key] = $v !== '' ? $v : (string) ($spec['default'] ?? '');
             }
@@ -60,8 +61,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-$sources    = db_all("SELECT * FROM sources WHERE client_id = ? ORDER BY connector, id", [$cid]);
-$keywords   = keywords_active($cid);
+$sources     = db_all("SELECT * FROM sources WHERE client_id = ? ORDER BY connector, id", [$cid]);
+$keywords    = keywords_active($cid);
 $byConnector = [];
 foreach ($sources as $s) { $byConnector[(string) $s['connector']][] = $s; }
 
@@ -73,85 +74,129 @@ if (!$keywords) {
     echo '<div class="alert warn">' . e(t('kw.need_term'))
        . ' <a href="keywords.php">' . e(t('kw.add')) . ' →</a></div>';
 }
+
+/** The shared field rows for every connector's form. */
+function source_common_fields(array $keywords, array $meta): void
+{ ?>
+    <div class="field">
+      <span class="lbl"><?= e(t('ui.name')) ?></span>
+      <input type="text" name="label" placeholder="<?= e(connector_label((string) $meta['id'])) ?>">
+    </div>
+    <div class="grid2">
+      <div class="field">
+        <span class="lbl"><?= e(t('kw.term')) ?></span>
+        <select name="keyword_id">
+          <option value="0"><?= e(t('ui.all')) ?></option>
+          <?php foreach ($keywords as $k): ?>
+            <option value="<?= (int) $k['id'] ?>"><?= e((string) $k['term']) ?></option>
+          <?php endforeach; ?>
+        </select>
+      </div>
+      <div class="field">
+        <span class="lbl"><?= e(t('src.interval')) ?> (<?= e(t('src.minutes')) ?>)</span>
+        <input type="number" name="fetch_interval_min"
+               min="<?= (int) $meta['min_interval'] ?>" step="5"
+               value="<?= (int) $meta['default_interval'] ?>">
+        <span class="hint"><?= e(t('src.interval')) ?> ≥ <?= (int) $meta['min_interval'] ?> <?= e(t('src.minutes')) ?></span>
+      </div>
+    </div>
+<?php }
 ?>
 
 <div class="conn-grid">
 <?php foreach (listen_connectors() as $id => $meta):
+    $meta['id'] = $id;
     $ready   = listen_connector_ready($id, $CLIENT);
-    $missing = listen_connector_missing($id, $CLIENT);
+    $missing = connector_missing_labels($id, $CLIENT);
     $mine    = $byConnector[$id] ?? [];
+    $steps   = connector_steps($id);
+    $help    = connector_help($id);
     $tierCls = $meta['tier'] === 'paid' ? 'gold' : ($meta['tier'] === 'official' ? 'gray' : 'green');
     $tierLbl = $meta['tier'] === 'paid' ? t('src.paid') : ($meta['tier'] === 'official' ? t('src.official') : t('src.free'));
 ?>
-  <div class="card">
-    <div class="row-between" style="display:flex;align-items:flex-start;gap:10px;justify-content:space-between">
-      <div>
-        <h2 style="margin-bottom:4px"><?= e($meta['label']) ?></h2>
+  <div class="card conn-card">
+    <div class="conn-head">
+      <h2><?= e(connector_label($id)) ?></h2>
+      <div class="conn-pills">
         <span class="pill <?= $tierCls ?>"><?= e($tierLbl) ?></span>
-        <?= $ready ? status_pill('ready') : '<span class="pill gray">' . e(t('src.not_ready')) . '</span>' ?>
+        <?php if ($meta['needs']): ?>
+          <?= $ready ? status_pill('ready') : '<span class="pill red">' . e(t('src.not_ready')) . '</span>' ?>
+        <?php else: ?>
+          <span class="pill green"><?= e(t('src.free_note')) ?></span>
+        <?php endif; ?>
       </div>
     </div>
 
-    <p class="text-muted" style="font-size:12.5px;margin:10px 0"><?= e($meta['why']) ?></p>
-    <p class="text-muted" style="font-size:11.5px">⚠ <?= e($meta['caveat']) ?></p>
+    <p class="conn-why"><?= e(connector_why($id)) ?></p>
+    <p class="conn-caveat">⚠ <?= e(connector_caveat($id)) ?></p>
 
-    <?php if (!$ready): ?>
-      <p style="font-size:12px;margin-top:10px">
-        <a href="settings.php"><?= e(t('src.not_ready')) ?>: <?= e(implode(', ', $missing)) ?> →</a>
-      </p>
-    <?php endif; ?>
-
-    <?php if ($mine): ?>
-      <div class="table-wrap" style="margin-top:12px">
-        <table class="data">
-          <tbody>
-          <?php foreach ($mine as $s):
-            $cfg = source_config($s); ?>
-            <tr>
-              <td>
-                <strong><?= e(source_label($s)) ?></strong><br>
-                <span class="text-muted" style="font-size:11.5px">
-                  <?= e(t('src.interval')) ?> <?= (int) $s['fetch_interval_min'] ?> <?= e(t('src.minutes')) ?>
-                  · <?= e(t('src.last_fetch')) ?>: <?= e(time_ago((string) $s['last_ok_at'])) ?>
-                </span>
-                <?php if ((string) $s['last_error'] !== ''): ?>
-                  <br><span class="text-muted" style="font-size:11.5px;color:var(--danger)">
-                    <?= e(excerpt((string) $s['last_error'], 120)) ?></span>
-                <?php endif; ?>
-              </td>
-              <td class="nowrap"><?= status_pill((string) $s['status'] === 'active' ? (string) $s['last_status'] : (string) $s['status']) ?></td>
-              <td class="nowrap">
-                <button class="btn btn-sm btn-ghost" data-fetch-source="<?= (int) $s['id'] ?>"><?= e(t('src.fetch_now')) ?></button>
-                <button class="btn btn-sm btn-ghost"
-                  data-modal="m-src"
-                  data-modal-title="<?= e(t('ui.edit')) ?>"
-                  data-set-id="<?= (int) $s['id'] ?>"
-                  data-set-connector="<?= e($id) ?>"
-                  data-set-label="<?= e((string) $s['label']) ?>"
-                  data-set-keyword_id="<?= (int) ($s['keyword_id'] ?? 0) ?>"
-                  data-set-fetch_interval_min="<?= (int) $s['fetch_interval_min'] ?>"
-                  data-set-status="<?= e((string) $s['status']) ?>"
-                  <?php foreach ($cfg as $k => $v): ?>data-set-cfg_<?= e($k) ?>="<?= e((string) $v) ?>" <?php endforeach; ?>
-                ><?= e(t('ui.edit')) ?></button>
-                <form method="post" style="display:inline" onsubmit="return confirm('<?= e(t('ui.delete')) ?>?')">
-                  <?= csrf_field() ?>
-                  <input type="hidden" name="action" value="delete">
-                  <input type="hidden" name="id" value="<?= (int) $s['id'] ?>">
-                  <button class="btn btn-sm btn-ghost" type="submit">✕</button>
-                </form>
-              </td>
-            </tr>
-          <?php endforeach; ?>
-          </tbody>
-        </table>
+    <?php /* Say exactly what is missing, in words, with somewhere to go. */ ?>
+    <?php if (!$ready && $missing): ?>
+      <div class="alert error" style="margin:12px 0">
+        <?= e(t('src.missing', ['what' => implode('، ', $missing)])) ?>
+        <a href="settings.php#sources"><?= e(t('src.missing_go')) ?></a>
       </div>
     <?php endif; ?>
 
-    <button class="btn btn-sm" style="margin-top:12px"
-      data-modal="m-src"
-      data-modal-title="<?= e($meta['label']) ?>"
+    <?php if ($steps): ?>
+      <details class="conn-setup"<?= $ready ? '' : ' open' ?>>
+        <summary><?= e(t('src.setup')) ?></summary>
+        <ol>
+          <?php foreach ($steps as $stp): ?><li><?= e($stp) ?></li><?php endforeach; ?>
+        </ol>
+        <?php if ($help): ?>
+          <a class="btn btn-sm" href="<?= e($help['url']) ?>" target="_blank" rel="noopener noreferrer">
+            <?= e($help['label']) ?> ↗</a>
+        <?php endif; ?>
+      </details>
+    <?php endif; ?>
+
+    <div class="conn-instances">
+      <div class="conn-instances-head"><?= e(t('src.instances')) ?></div>
+      <?php if (!$mine): ?>
+        <p class="text-muted" style="font-size:12.5px"><?= e(t('src.none_yet')) ?></p>
+      <?php else: ?>
+        <?php foreach ($mine as $s): $cfg = source_config($s); ?>
+          <div class="conn-row">
+            <div>
+              <strong><?= e(source_label($s)) ?></strong>
+              <div class="text-muted" style="font-size:11.5px">
+                <?= e(t('src.interval')) ?> <?= (int) $s['fetch_interval_min'] ?> <?= e(t('src.minutes')) ?>
+                · <?= e(t('src.last_fetch')) ?>: <?= e(time_ago((string) $s['last_ok_at'])) ?>
+              </div>
+              <?php if ((string) $s['last_error'] !== ''): ?>
+                <div style="font-size:11.5px;color:var(--danger)"><?= e(excerpt((string) $s['last_error'], 140)) ?></div>
+              <?php endif; ?>
+            </div>
+            <div class="conn-row-actions">
+              <?= status_pill((string) $s['status'] === 'active' ? (string) $s['last_status'] : (string) $s['status']) ?>
+              <button class="btn btn-sm btn-ghost" data-fetch-source="<?= (int) $s['id'] ?>"><?= e(t('src.fetch_now')) ?></button>
+              <button class="btn btn-sm btn-ghost"
+                data-modal="m-src-<?= e($id) ?>"
+                data-modal-title="<?= e(t('ui.edit')) ?>"
+                data-set-id="<?= (int) $s['id'] ?>"
+                data-set-label="<?= e((string) $s['label']) ?>"
+                data-set-keyword_id="<?= (int) ($s['keyword_id'] ?? 0) ?>"
+                data-set-fetch_interval_min="<?= (int) $s['fetch_interval_min'] ?>"
+                data-set-status="<?= e((string) $s['status']) ?>"
+                <?php foreach ($cfg as $k => $v): ?>data-set-cfg_<?= e($k) ?>="<?= e((string) $v) ?>" <?php endforeach; ?>
+              ><?= e(t('ui.edit')) ?></button>
+              <form method="post" style="display:inline" onsubmit="return confirm('<?= e(t('ui.delete')) ?>?')">
+                <?= csrf_field() ?>
+                <input type="hidden" name="action" value="delete">
+                <input type="hidden" name="id" value="<?= (int) $s['id'] ?>">
+                <button class="btn btn-sm btn-ghost" type="submit">✕</button>
+              </form>
+            </div>
+          </div>
+        <?php endforeach; ?>
+      <?php endif; ?>
+    </div>
+
+    <button class="btn btn-sm <?= $ready ? 'btn-primary' : '' ?>" style="margin-top:12px"
+      data-modal="m-src-<?= e($id) ?>"
+      data-modal-title="<?= e(connector_label($id)) ?>"
       data-set-id="0"
-      data-set-connector="<?= e($id) ?>"
       data-set-label=""
       data-set-keyword_id="0"
       data-set-fetch_interval_min="<?= (int) $meta['default_interval'] ?>"
@@ -167,52 +212,28 @@ if (!$keywords) {
   <p class="text-muted" style="font-size:12.5px"><?= e(t('src.coverage_note')) ?></p>
 </div>
 
-<div class="modal-back" id="m-src">
+<?php
+/* ── One modal per connector.
+      The previous version rendered every connector's fields into a single modal
+      and hid the irrelevant ones with JavaScript, which meant the same edit window
+      for all eight sources and no way to tell which field belonged to what. Each
+      connector now owns its form and shows only its own fields. ── */
+foreach (listen_connectors() as $id => $meta):
+    $meta['id'] = $id; ?>
+<div class="modal-back" id="m-src-<?= e($id) ?>">
   <form class="modal" method="post">
     <button type="button" class="modal-x">&times;</button>
     <?= csrf_field() ?>
     <input type="hidden" name="action" value="save">
     <input type="hidden" name="id" value="0">
-    <input type="hidden" name="connector" value="">
-    <h2><?= e(t('src.add')) ?></h2>
+    <input type="hidden" name="connector" value="<?= e($id) ?>">
+    <h2><?= e(connector_label($id)) ?></h2>
 
-    <div class="field">
-      <span class="lbl"><?= e(t('ui.name')) ?></span>
-      <input type="text" name="label" placeholder="<?= e(t('src.connector')) ?>">
-    </div>
+    <?php source_common_fields($keywords, $meta); ?>
 
-    <div class="grid2">
+    <?php foreach (($meta['config'] ?? []) as $key => $spec): ?>
       <div class="field">
-        <span class="lbl"><?= e(t('kw.term')) ?></span>
-        <select name="keyword_id">
-          <option value="0"><?= e(t('ui.all')) ?></option>
-          <?php foreach ($keywords as $k): ?>
-            <option value="<?= (int) $k['id'] ?>"><?= e((string) $k['term']) ?></option>
-          <?php endforeach; ?>
-        </select>
-      </div>
-      <div class="field">
-        <span class="lbl"><?= e(t('src.interval')) ?> (<?= e(t('src.minutes')) ?>)</span>
-        <input type="number" name="fetch_interval_min" min="15" step="5" value="30">
-      </div>
-    </div>
-
-    <?php
-    /* One input per distinct config key, tagged with every connector that uses
-       it, so two connectors sharing a key name still both work. The JS shows
-       only the fields for the connector being edited; unknown keys are dropped
-       on save by the registry loop above. */
-    $fields = [];
-    foreach (listen_connectors() as $cid2 => $cmeta) {
-        foreach (($cmeta['config'] ?? []) as $key => $spec) {
-            if (!isset($fields[$key])) $fields[$key] = ['spec' => $spec, 'for' => []];
-            $fields[$key]['for'][] = $cid2;
-        }
-    }
-    foreach ($fields as $key => $f):
-        $spec = $f['spec']; ?>
-      <div class="field" data-cfg-for="<?= e(implode(' ', $f['for'])) ?>">
-        <span class="lbl"><?= e($spec['label']) ?></span>
+        <span class="lbl"><?= e(connector_field_label($id, (string) $key, (string) $spec['label'])) ?><?= !empty($spec['required']) ? ' *' : '' ?></span>
         <?php if (($spec['type'] ?? 'text') === 'select'): ?>
           <select name="cfg_<?= e($key) ?>">
             <?php foreach (($spec['options'] ?? []) as $ov => $ol): ?>
@@ -220,10 +241,29 @@ if (!$keywords) {
             <?php endforeach; ?>
           </select>
         <?php else: ?>
-          <input type="text" name="cfg_<?= e($key) ?>" placeholder="<?= e((string) ($spec['placeholder'] ?? '')) ?>">
+          <input type="text" name="cfg_<?= e($key) ?>"
+                 placeholder="<?= e((string) ($spec['placeholder'] ?? '')) ?>"
+                 <?= !empty($spec['required']) ? 'required' : '' ?>>
         <?php endif; ?>
       </div>
     <?php endforeach; ?>
+
+    <?php /* The RSS form is the one where people get stuck hunting for a URL. */ ?>
+    <?php if ($id === 'rss'): ?>
+      <div class="presets">
+        <div class="presets-head"><?= e(t('src.presets')) ?>
+          <span class="text-muted"><?= e(t('src.presets_hint')) ?></span></div>
+        <?php foreach (rss_presets() as $group => $feeds): ?>
+          <div class="presets-group"><?= e($group) ?></div>
+          <div class="presets-row">
+            <?php foreach ($feeds as $name => $url): ?>
+              <button type="button" class="chip" data-preset="<?= e($url) ?>"
+                      data-preset-name="<?= e($name) ?>"><?= e($name) ?></button>
+            <?php endforeach; ?>
+          </div>
+        <?php endforeach; ?>
+      </div>
+    <?php endif; ?>
 
     <div class="field">
       <span class="lbl"><?= e(t('ui.status')) ?></span>
@@ -239,17 +279,23 @@ if (!$keywords) {
     </div>
   </form>
 </div>
+<?php endforeach; ?>
 
 <script>
-/* Show only the config fields that belong to the connector being edited. */
+/* Clicking a ready-made feed fills the address in, and names the source after the
+   outlet so the list stays readable when a client adds six of them. */
 document.addEventListener('click', function (ev) {
-  var opener = ev.target.closest('[data-modal="m-src"]');
-  if (!opener) return;
-  var conn = opener.getAttribute('data-set-connector') || '';
-  document.querySelectorAll('#m-src [data-cfg-for]').forEach(function (el) {
-    var owners = (el.getAttribute('data-cfg-for') || '').split(' ');
-    el.hidden = owners.indexOf(conn) === -1;
-  });
+  var chip = ev.target.closest('[data-preset]');
+  if (!chip) return;
+  ev.preventDefault();
+  var form = chip.closest('form');
+  if (!form) return;
+  var url = form.querySelector('[name="cfg_feed_url"]');
+  if (url) url.value = chip.getAttribute('data-preset');
+  var label = form.querySelector('[name="label"]');
+  if (label && !label.value) label.value = chip.getAttribute('data-preset-name') || '';
+  form.querySelectorAll('[data-preset]').forEach(function (c) { c.classList.remove('on'); });
+  chip.classList.add('on');
 });
 </script>
 
