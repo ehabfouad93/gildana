@@ -37,10 +37,22 @@ function alert_evaluate(array $rule, bool $dryRun = false): array
     $minCon = (float) $rule['min_confidence'];
     $none   = ['fire' => false, 'level' => 'info', 'title' => '', 'body' => '', 'mention_ids' => [], 'count' => 0];
 
-    // Only consider mentions we have not already alerted on.
-    $since = $rule['last_fired_at'] && !$dryRun
-        ? (string) $rule['last_fired_at']
-        : gmdate('Y-m-d H:i:s', time() - $window * 60);
+    // Two different questions, two different lookbacks.
+    //
+    // A spike rule asks "how many in the last N minutes" — it must always use its
+    // own window, or a rule that last fired three days ago would count three days
+    // of mentions against a 60-minute threshold and fire on nothing.
+    //
+    // The per-mention rules ask "what is new since I last spoke", so they look
+    // back to last_fired_at and never repeat themselves.
+    $isSpike = in_array($type, ['negative_spike', 'volume_spike'], true);
+    $windowStart = gmdate('Y-m-d H:i:s', time() - $window * 60);
+
+    // A rule that has never fired starts from its window rather than from the
+    // whole archive, so switching one on does not alert about last year.
+    $since = ($isSpike || $dryRun || !$rule['last_fired_at'])
+        ? $windowStart
+        : (string) $rule['last_fired_at'];
 
     $where  = "m.client_id = ? AND m.is_hidden = 0 AND m.fetched_at >= ?";
     $params = [$cid, $since];

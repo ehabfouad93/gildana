@@ -16,7 +16,9 @@ if (in_array($sentiment, ['positive', 'negative', 'neutral', 'unknown'], true)) 
     $params[] = $sentiment;
 }
 if ($q !== '') {
-    $where .= ' AND (m.title LIKE ? OR m.content LIKE ?)';
+    $norm = sent_normalize($q);
+    $where .= ' AND (m.search_text LIKE ? OR m.title LIKE ? OR m.content LIKE ?)';
+    $params[] = '%' . $norm . '%';
     $params[] = '%' . $q . '%';
     $params[] = '%' . $q . '%';
 }

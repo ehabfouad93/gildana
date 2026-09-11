@@ -336,3 +336,11 @@ table.data tbody tr:hover { background: var(--gold-light); }
 }
 .pager a:hover { background: var(--gold-light); }
 .pager a.on { background: var(--gold); border-color: var(--gold); color: var(--black); font-weight: 600; }
+
+/* ───── INLINE PREVIEW PANEL (keyword match preview) ───── */
+.preview-out {
+  background: var(--gold-light); border: 1px solid var(--line);
+  border-radius: 8px; padding: 12px 14px; font-size: 12.5px; margin-bottom: 4px;
+}
+.preview-out ul { margin: 8px 0 0; padding-inline-start: 18px; }
+.preview-out li { margin-bottom: 4px; color: var(--muted); }

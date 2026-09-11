@@ -71,6 +71,7 @@ Key modules:
 | `includes/lexicon_ar.php` / `_en.php` | the sentiment word lists — tune these |
 | `includes/alerts.php` | rule evaluation and firing |
 | `includes/metrics.php` | the dashboard aggregates |
+| `migrations/` | numbered, applied in order, never edited once applied |
 | `includes/chart.php` | inline-SVG charts, no library |
 
 ---
@@ -117,7 +118,10 @@ top of the screen makes it obvious you are inside a client account.
 
 1. **Keywords** — the brand name first, in Arabic *and* English if both are
    used. Add competitors to get share-of-voice. Use "exclude if it contains"
-   to cut noise; a common word will otherwise pull in everything.
+   to cut noise; a common word will otherwise pull in everything. Hit
+   **Preview matches** before saving — it tests the term against the mentions
+   already collected and tells you how many of the last 300 it would match,
+   with examples. That is the fastest way to catch a term that is too broad.
 2. **Sources** — enable the connectors you want. Google News and an RSS feed
    or two are enough to see results immediately.
 3. **Settings** — optionally add an AI key (sentiment works without one, just
@@ -159,10 +163,19 @@ the terms that keep coming up are the ones to add to the lexicon.
 php tests/run.php
 ```
 
-71 checks covering feed parsing (RSS 2.0, Atom, RDF), the JSON connector
+77 checks covering feed parsing (RSS 2.0, Atom, RDF), the JSON connector
 shapes, Arabic normalization, negation (including the Egyptian ما...ش
-circumfix), the AI escalation threshold, keyword matching and dedupe hashing.
-No database and no API keys required.
+circumfix), the AI escalation threshold, keyword matching, dedupe hashing, and
+the mentions INSERT staying in step with the schema. No database and no API
+keys required.
+
+### A note on searching Arabic
+
+Mention text is stored twice: as written, and normalized into `search_text`
+(diacritics stripped, hamza and ta-marbuta folded). The feed searches the
+normalized copy and normalizes the query the same way, so "جيلدانا" also finds
+"جِيلدانا" and "الجيلدانا". Searching the raw text would silently miss most of
+them. Rows created before migration 002 are backfilled by the worker.
 
 Lint everything:
 

@@ -32,8 +32,12 @@ if ($fFrom !== '') { $where .= ' AND COALESCE(m.published_at, m.fetched_at) >= ?
 if ($fTo !== '')   { $where .= ' AND COALESCE(m.published_at, m.fetched_at) <= ?'; $params[] = $fTo . ' 23:59:59'; }
 
 if ($q !== '') {
-    // Search the normalized form so Arabic hamza/ta-marbuta variants still match.
-    $where .= ' AND (m.title LIKE ? OR m.content LIKE ?)';
+    // Search the normalized copy, and normalize the query the same way, so that
+    // "جيلدانا" also finds "جِيلدانا" and "الجيلدانا". Falling back to title/content
+    // covers rows stored before the search_text column existed.
+    $norm = sent_normalize($q);
+    $where .= ' AND (m.search_text LIKE ? OR m.title LIKE ? OR m.content LIKE ?)';
+    $params[] = '%' . $norm . '%';
     $params[] = '%' . $q . '%';
     $params[] = '%' . $q . '%';
 }

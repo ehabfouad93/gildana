@@ -17,6 +17,13 @@ function db(): PDO
                 PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
                 PDO::ATTR_EMULATE_PREPARES   => false,
             ]);
+
+            // Everything in this app is stored and compared in UTC: published_at
+            // comes from to_utc(), while fetched_at and the range filters come
+            // from NOW() and CURDATE(). Pinning the session zone is what keeps
+            // those two halves agreeing — on a host running local time they
+            // would otherwise be hours apart and every chart would be skewed.
+            $pdo->exec("SET time_zone = '+00:00'");
         } catch (PDOException $ex) {
             http_response_code(500);
             exit('Database connection failed. Check config.php and that MySQL is running.');

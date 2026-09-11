@@ -9,6 +9,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     verify_csrf();
     $action = (string) ($_POST['action'] ?? '');
 
+    /* Preview: how much would this term actually match?
+       Checked against the mentions already collected, so a client can see that a
+       term is too broad (or too narrow) before saving it and flooding the feed. */
+    if ($action === 'preview') {
+        $draft = [
+            'term'          => trim((string) ($_POST['term'] ?? '')),
+            'match_mode'    => (string) ($_POST['match_mode'] ?? 'phrase'),
+            'required_json' => keyword_list_encode((string) ($_POST['required'] ?? '')),
+            'excluded_json' => keyword_list_encode((string) ($_POST['excluded'] ?? '')),
+        ];
+        if ($draft['term'] === '') json_out(['ok' => false, 'error' => t('kw.need_term')]);
+
+        $sample = db_all(
+            "SELECT id, title, content, snippet FROM mentions
+              WHERE client_id = ? AND is_hidden = 0
+              ORDER BY id DESC LIMIT 300",
+            [$cid]
+        );
+
+        $hits = [];
+        foreach ($sample as $m) {
+            if (keyword_matches($draft, (string) $m['title'], (string) $m['content'])) {
+                $hits[] = trim((string) ($m['title'] ?: $m['snippet']));
+            }
+        }
+
+        if (!$sample) {
+            json_out(['ok' => true, 'message' => t('kw.preview_empty'), 'examples' => []]);
+        }
+        json_out([
+            'ok'       => true,
+            'message'  => t('kw.preview_result', ['n' => (string) count($hits), 'total' => (string) count($sample)]),
+            'examples' => array_slice(array_map(function ($h) { return excerpt($h, 90); }, $hits), 0, 5),
+        ]);
+    }
+
     if ($action === 'save') {
         $id       = (int) ($_POST['id'] ?? 0);
         $term     = trim((string) ($_POST['term'] ?? ''));
@@ -187,11 +223,40 @@ if ($err !== '') echo '<div class="alert error">' . e($err) . '</div>';
       </div>
     </div>
 
+    <div id="kw-preview" class="preview-out" hidden></div>
+
     <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" id="kw-preview-btn"><?= e(t('kw.preview')) ?></button>
       <button type="button" class="btn btn-ghost modal-x" style="position:static"><?= e(t('ui.cancel')) ?></button>
       <button class="btn btn-primary" type="submit"><?= e(t('ui.save')) ?></button>
     </div>
   </form>
 </div>
+
+<script>
+document.getElementById('kw-preview-btn').addEventListener('click', function (ev) {
+  var form = ev.target.closest('form');
+  var out  = document.getElementById('kw-preview');
+  var data = {};
+  new FormData(form).forEach(function (v, k) { data[k] = v; });
+  data.action = 'preview';
+
+  window.api('keywords.php', data, ev.target).then(function (d) {
+    var html = '<strong>' + d.message + '</strong>';
+    if (d.examples && d.examples.length) {
+      html += '<ul>';
+      d.examples.forEach(function (x) {
+        var li = document.createElement('li');
+        li.textContent = x;          // textContent, not innerHTML — this is mention text
+        li.setAttribute('dir', 'auto');
+        html += li.outerHTML;
+      });
+      html += '</ul>';
+    }
+    out.innerHTML = html;
+    out.hidden = false;
+  }).catch(function () {});
+});
+</script>
 
 <?php layout_footer(); ?>

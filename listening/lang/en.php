@@ -145,6 +145,9 @@ return [
     'kw.add'                => 'Add keyword',
     'kw.dupe'               => 'That term is already tracked.',
     'kw.need_term'          => 'Enter a term to track.',
+    'kw.preview'            => 'Preview matches',
+    'kw.preview_result'     => 'Would match {n} of your last {total} mentions.',
+    'kw.preview_empty'      => 'No mentions collected yet — add a source first, then preview.',
 
     /* ── sources ── */
     'src.title'             => 'Sources',

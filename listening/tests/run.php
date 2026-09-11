@@ -270,6 +270,63 @@ ok('The same URL from two connectors is kept separately (uq_dedupe is per connec
 
 is_same('An empty URL and id hashes to nothing', '', ingest_hash('rss', '', ''));
 
+/* ── the mentions INSERT ──────────────────────────────────────────────── */
+
+section('Schema / INSERT parity');
+
+// Adding a column to mentions means touching three places that must stay in
+// step. Getting it wrong shifts every value one column to the left, which MySQL
+// will happily accept for compatible types — so check it here rather than
+// discovering it in production data.
+$ingestSrc = (string) file_get_contents($root . '/includes/ingest.php');
+$start     = strpos($ingestSrc, 'INSERT IGNORE INTO mentions');
+ok('The mentions INSERT is present', $start !== false);
+
+if ($start !== false) {
+    preg_match('/\((.*?)\)\s*VALUES \((.*?)\)",/s', substr($ingestSrc, $start), $m);
+    $cols = array_filter(array_map('trim', explode(',', preg_replace('/\s+/', ' ', $m[1] ?? ''))));
+    $slots = array_filter(array_map('trim', explode(',',
+        preg_replace('/NOW\(\)/', 'NOW', preg_replace('/\s+/', ' ', $m[2] ?? '')))));
+
+    is_same('Column count matches value-slot count', count($cols), count($slots));
+
+    // Bound parameters must equal the number of ? placeholders.
+    $arrStart = strpos($ingestSrc, '[', strpos($ingestSrc, 'VALUES', $start));
+    $depth = 0;
+    for ($i = $arrStart; $i < strlen($ingestSrc); $i++) {
+        if ($ingestSrc[$i] === '[') $depth++;
+        elseif ($ingestSrc[$i] === ']') { $depth--; if ($depth === 0) break; }
+    }
+    $body  = substr($ingestSrc, $arrStart + 1, $i - $arrStart - 1);
+    $parts = [];
+    $d = 0; $cur = '';
+    foreach (str_split($body) as $ch) {
+        if ($ch === '(' || $ch === '[') $d++;
+        if ($ch === ')' || $ch === ']') $d--;
+        if ($ch === ',' && $d === 0) { $parts[] = trim($cur); $cur = ''; continue; }
+        $cur .= $ch;
+    }
+    if (trim($cur) !== '') $parts[] = trim($cur);
+    $parts = array_values(array_filter($parts, function ($p) { return $p !== '' && $p[0] !== '/'; }));
+
+    is_same('Bound parameters match ? placeholders',
+        substr_count(implode(',', $slots), '?'), count($parts));
+
+    ok('search_text is populated on insert', in_array('search_text', $cols, true));
+    ok('Sentiment columns are NOT written by ingest (they belong to the engine)',
+        !in_array('sentiment', $cols, true) && !in_array('is_manual', $cols, true));
+}
+
+// Every column the INSERT names must actually exist in the schema.
+$schema = (string) file_get_contents($root . '/migrations/001_init.sql')
+        . (string) file_get_contents($root . '/migrations/002_mention_search_text.sql');
+$missingCols = [];
+foreach ($cols ?? [] as $col) {
+    if (!preg_match('/\b' . preg_quote($col, '/') . '\b/', $schema)) $missingCols[] = $col;
+}
+ok('Every inserted column exists in the migrations',
+    count($missingCols) === 0, implode(', ', $missingCols));
+
 /* ── canonical URL ────────────────────────────────────────────────────── */
 
 section('URL canonicalisation');

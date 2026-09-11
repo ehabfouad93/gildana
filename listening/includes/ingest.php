@@ -86,13 +86,19 @@ function source_claim(int $sourceId, int $intervalMin): void
     );
 }
 
-/** Record the outcome, including exponential backoff on repeated failures. */
-function source_record(array $source, array $env, int $itemsNew): void
+/**
+ * Record the outcome, including exponential backoff on repeated failures.
+ *
+ * $itemsSeen is passed in rather than read from $env['items'] because a source
+ * may have run once per keyword, and what matters here is the whole run.
+ */
+function source_record(array $source, array $env, int $itemsNew, ?int $itemsSeen = null): void
 {
-    $id = (int) $source['id'];
+    $id   = (int) $source['id'];
+    $seen = $itemsSeen ?? count($env['items']);
 
     if ($env['ok']) {
-        $status = empty($env['items']) ? 'empty' : 'ok';
+        $status = $seen === 0 ? 'empty' : 'ok';
         db_run(
             "UPDATE sources
                 SET last_status = ?, last_error = '', last_ok_at = NOW(),
@@ -221,11 +227,17 @@ function source_run(array $source, ?array $client = null, bool $claim = true): a
         if (!empty($env['throttled'])) break;
     }
 
+    // Record the source's state once, for the run as a whole: only a run where
+    // every keyword failed counts as a failed source.
     if ($lastEnv !== null) {
-        source_record($source, $errors === count($runs) ? $lastEnv : ingest_envelope_ok(
-            $totalFetched ? array_fill(0, $totalFetched, true) : [],
-            ['etag' => (string) ($lastEnv['etag'] ?? ''), 'last_modified' => (string) ($lastEnv['last_modified'] ?? '')]
-        ), $totalNew);
+        $outcome = $errors === count($runs)
+            ? $lastEnv
+            : ingest_envelope_ok([], [
+                'items_seen'    => $totalFetched,
+                'etag'          => (string) ($lastEnv['etag'] ?? ''),
+                'last_modified' => (string) ($lastEnv['last_modified'] ?? ''),
+            ]);
+        source_record($source, $outcome, $totalNew, $totalFetched);
     }
 
     return ['fetched' => $totalFetched, 'new' => $totalNew, 'errors' => $errors];
@@ -292,10 +304,10 @@ function ingest_store(array $client, array $source, array $items, ?array $boundK
         $affected = db_run(
             "INSERT IGNORE INTO mentions
                 (client_id, source_id, keyword_id, connector, platform, external_id, url, url_hash,
-                 domain, title, content, snippet, image_url, author_name, author_handle, author_url,
-                 author_followers, lang, country, published_at, fetched_at, reach, likes,
+                 domain, title, content, snippet, search_text, image_url, author_name, author_handle,
+                 author_url, author_followers, lang, country, published_at, fetched_at, reach, likes,
                  comments_count, shares, views, engagement, classify_state, created_at)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),?,?,?,?,?,?, 'pending', NOW())",
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),?,?,?,?,?,?, 'pending', NOW())",
             [
                 $cid,
                 (int) $source['id'],
@@ -309,6 +321,7 @@ function ingest_store(array $client, array $source, array $items, ?array $boundK
                 mb_substr($title, 0, 500),
                 $content,
                 mb_substr(excerpt($body, 400), 0, 600),
+                sent_normalize($title . ' ' . $content),
                 mb_substr((string) ($raw['image_url'] ?? ''), 0, 1000),
                 mb_substr((string) ($raw['author_name'] ?? ''), 0, 190),
                 mb_substr((string) ($raw['author_handle'] ?? ''), 0, 190),
@@ -357,4 +370,24 @@ function ingest_hash(string $connector, string $url, string $externalId): string
     $canonical = canonical_url($url !== '' ? $url : $externalId);
     if ($canonical !== '') return sha1($canonical);
     return $externalId !== '' ? sha1($connector . ':' . $externalId) : '';
+}
+
+/**
+ * Fill search_text for rows stored before the column existed (migration 002).
+ * Normalization lives in PHP, not SQL, so this cannot be done in the migration.
+ * Runs as a bounded batch from the worker until nothing is left.
+ */
+function ingest_backfill_search(int $limit = 200): int
+{
+    $rows = db_all(
+        "SELECT id, title, content FROM mentions
+          WHERE search_text IS NULL ORDER BY id LIMIT " . (int) max(1, $limit)
+    );
+    foreach ($rows as $r) {
+        db_run("UPDATE mentions SET search_text = ? WHERE id = ?", [
+            sent_normalize((string) $r['title'] . ' ' . (string) $r['content']),
+            (int) $r['id'],
+        ]);
+    }
+    return count($rows);
 }

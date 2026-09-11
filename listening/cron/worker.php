@@ -96,6 +96,12 @@ try {
             count($sources), $fetched, $stored, $failed));
     }
 
+    /* ── Pass A2: backfill search_text for pre-migration-002 rows ────────── */
+    if ($runPass('classify') && time() < $deadline) {
+        $n = ingest_backfill_search(200);
+        if ($n > 0) out("backfill: {$n} mention(s) indexed for search");
+    }
+
     /* ── Pass B: lexicon classification (no network, cheap) ──────────────── */
     if ($runPass('classify') && time() < $deadline) {
         $n = sent_classify_lexicon((int) ($cfg['lexicon_per_run'] ?? 300));

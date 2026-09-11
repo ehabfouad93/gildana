@@ -127,6 +127,18 @@ already cache-busted by file mtime.
 
 Never edit a migration that has already been applied — add a new numbered file.
 
+Migration `002` adds a normalized `search_text` column to `mentions`. It is
+populated going forward at ingest, and existing rows are backfilled in batches
+of 200 by the worker, so there is nothing to run by hand — search accuracy for
+older mentions simply improves over the first few ticks after the upgrade.
+
+### Server time zone
+
+The app pins its MySQL session to UTC (`SET time_zone = '+00:00'` on connect)
+and stores every timestamp in UTC. You do not need to change the server's zone,
+and you should not: the app is self-consistent either way, and changing it
+would misalign timestamps already stored.
+
 ---
 
 ## Email deliverability — read this before relying on alerts
