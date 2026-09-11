@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Example Blog</title>
+  <entry>
+    <title>Working with Gildana</title>
+    <link rel="self" href="https://example.com/feed"/>
+    <link rel="alternate" href="https://example.com/posts/working-with-gildana"/>
+    <id>tag:example.com,2025:post-1</id>
+    <updated>2025-09-08T14:20:00Z</updated>
+    <summary>A great experience overall, highly recommend the team.</summary>
+    <author><name>Sara Ali</name></author>
+  </entry>
+  <entry>
+    <title>Second post</title>
+    <link href="https://example.com/posts/second"/>
+    <id>tag:example.com,2025:post-2</id>
+    <published>2025-09-07T09:00:00Z</published>
+    <content>Nothing much to report here.</content>
+  </entry>
+</feed>
