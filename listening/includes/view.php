@@ -157,6 +157,25 @@ function layout_footer(): void
     <?php
 }
 
+/**
+ * The 7/30/90-day range picker used by the dashboard and the report.
+ *
+ * Note the (string) casts on the keys: PHP turns numeric-string array keys into
+ * integers, so comparing $range['days'] against a raw key silently never matches
+ * and the current selection is never marked.
+ */
+function range_selector(int $days, string $name = 'range'): string
+{
+    $options = ['7' => t('ui.last_7'), '30' => t('ui.last_30'), '90' => t('ui.last_90')];
+    $out = '<form method="get" class="filter-row"><select name="' . e($name) . '" data-autosubmit>';
+    foreach ($options as $value => $label) {
+        $value = (string) $value;
+        $sel   = (string) $days === $value ? ' selected' : '';
+        $out  .= '<option value="' . e($value) . '"' . $sel . '>' . e($label) . '</option>';
+    }
+    return $out . '</select></form>';
+}
+
 function page_head(string $title, string $sub = '', string $actionHtml = ''): void
 {
     echo '<div class="page-head"><div><h1>' . e($title) . '</h1>'

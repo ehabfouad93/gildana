@@ -14,13 +14,7 @@ $lastFetch  = metrics_last_fetch($cid);
 $sourceCount = (int) db_val("SELECT COUNT(*) FROM sources WHERE client_id = ?", [$cid]);
 $terms      = array_column(keywords_active($cid), 'term');
 
-$rangeSelect = '<form method="get" class="filter-row">'
-    . '<select name="range" data-autosubmit>';
-foreach (['7' => t('ui.last_7'), '30' => t('ui.last_30'), '90' => t('ui.last_90')] as $v => $label) {
-    $sel = (string) $range['days'] === $v ? ' selected' : '';
-    $rangeSelect .= '<option value="' . e($v) . '"' . $sel . '>' . e($label) . '</option>';
-}
-$rangeSelect .= '</select></form>';
+$rangeSelect = range_selector((int) $range['days']);
 
 client_header(t('nav.dashboard'), 'dashboard', $CLIENT);
 page_head((string) ($CLIENT['brand_name'] ?: $CLIENT['name']), t('app.tagline'), $rangeSelect);

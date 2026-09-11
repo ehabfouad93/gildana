@@ -24,7 +24,16 @@ if (!function_exists('str_contains')) {
 }
 
 /* ── escaping ── */
-function e(?string $value): string
+/**
+ * Escape for HTML output.
+ *
+ * Takes a scalar rather than ?string on purpose. Under strict_types an int
+ * argument is a fatal TypeError, and ints arrive here more easily than you would
+ * expect — PHP silently converts numeric-string array keys to integers, so
+ * `foreach (['7' => …] as $k => $v)` hands you int 7, not '7'. An escaping
+ * helper refusing to escape a number is all cost and no benefit.
+ */
+function e($value): string
 {
     return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
 }

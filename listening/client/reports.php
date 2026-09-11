@@ -17,13 +17,7 @@ $byConn    = metrics_by_connector($cid, $range, 12);
 $byKeyword = metrics_by_keyword($cid, $range, 12);
 $byDomain  = metrics_top_domains($cid, $range, 10);
 
-$rangeForm = '<form method="get" class="filter-row">'
-    . '<select name="range" data-autosubmit>';
-foreach (['7' => t('ui.last_7'), '30' => t('ui.last_30'), '90' => t('ui.last_90')] as $v => $label) {
-    $sel = (string) $range['days'] === $v ? ' selected' : '';
-    $rangeForm .= '<option value="' . e($v) . '"' . $sel . '>' . e($label) . '</option>';
-}
-$rangeForm .= '</select></form>'
+$rangeForm = range_selector((int) $range['days'])
     . '<a class="btn btn-sm" href="mentions.php?export=1&amp;from=' . e(substr($range['from'], 0, 10))
     . '&amp;to=' . e(substr($range['to'], 0, 10)) . '">' . e(t('ui.export_csv')) . '</a>'
     . '<button class="btn btn-sm btn-primary" onclick="window.print()">' . e(t('ui.print')) . '</button>';

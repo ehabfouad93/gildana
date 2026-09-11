@@ -270,6 +270,26 @@ ok('The same URL from two connectors is kept separately (uq_dedupe is per connec
 
 is_same('An empty URL and id hashes to nothing', '', ingest_hash('rss', '', ''));
 
+/* ── escaping ─────────────────────────────────────────────────────────── */
+
+section('Escaping');
+
+// PHP silently converts numeric-string array keys to integers, so
+// foreach (['7' => …] as $k => $v) hands you int 7. Under strict_types an
+// e(?string) signature made that a fatal error — which took down the dashboard
+// and the report page. e() now accepts any scalar.
+is_same('e() handles an int (numeric-string array key)', '7', e(7));
+is_same('e() handles a float', '1.5', e(1.5));
+is_same('e() handles null', '', e(null));
+is_same('e() still escapes HTML', '&lt;script&gt;', e('<script>'));
+is_same('e() escapes quotes for attributes', '&quot;x&quot;', e('"x"'));
+is_same('e() leaves Arabic intact', 'خدمة', e('خدمة'));
+
+$numericKeys = ['7' => 'a', '30' => 'b'];
+$keyTypes = array_map(function ($k) { return gettype($k); }, array_keys($numericKeys));
+is_same('Numeric-string keys really do become integers',
+    ['integer', 'integer'], $keyTypes);
+
 /* ── the mentions INSERT ──────────────────────────────────────────────── */
 
 section('Schema / INSERT parity');
