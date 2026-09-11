@@ -308,6 +308,18 @@ is_same('Already absolute',     'https://y.example/f.xml',    lh_absolute_url('h
 is_same('Keeps a non-default port', 'http://x.example:8080/f', lh_absolute_url('/f', 'http://x.example:8080'));
 is_same('Empty href',           '',  lh_absolute_url('', 'https://x.example'));
 
+// A stored feed address that has gone 404 is searched from the site root, so the
+// homepage's <link> tag can name where the feed moved to.
+section('Site root');
+
+is_same('Strips a deep path',    'https://www.masrawy.com/', lh_site_root('https://www.masrawy.com/rss/all'));
+is_same('Already a root',        'https://x.example/',       lh_site_root('https://x.example/'));
+is_same('Keeps the scheme',      'http://x.example/',        lh_site_root('http://x.example/a/b'));
+is_same('Keeps a non-default port', 'https://x.example:8443/', lh_site_root('https://x.example:8443/feed'));
+is_same('Lowercases the host',   'https://x.example/',       lh_site_root('https://X.EXAMPLE/Feed'));
+is_same('Drops query and fragment', 'https://x.example/',    lh_site_root('https://x.example/f?a=1#b'));
+is_same('Not an address',        '',                          lh_site_root('nonsense'));
+
 /* ── escaping ─────────────────────────────────────────────────────────── */
 
 section('Escaping');

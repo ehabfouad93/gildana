@@ -196,16 +196,20 @@ function source_run(array $source, ?array $client = null, bool $claim = true): a
         }
         $lastEnv = $env;
 
-        // A source pointed at a site's homepage resolves to its real feed on the
-        // first run. Store that so every later check goes straight there instead
-        // of re-fetching and re-parsing the homepage each time.
-        if (!empty($env['resolved_feed_url'])) {
-            $cfg = source_config($source);
-            if (($cfg['feed_url'] ?? '') !== $env['resolved_feed_url']) {
-                $cfg['feed_url'] = (string) $env['resolved_feed_url'];
-                db_run("UPDATE sources SET config_json = ? WHERE id = ?",
-                    [json_encode($cfg, JSON_UNESCAPED_UNICODE), (int) $source['id']]);
-                $source['config_json'] = json_encode($cfg, JSON_UNESCAPED_UNICODE);
+        // A connector may learn something about its own source while running — an
+        // RSS source pointed at a homepage discovers the real feed address, for
+        // instance. Persist that so the next check starts from what was learned
+        // rather than repeating the work. A null value removes the key.
+        if (!empty($env['config_patch']) && is_array($env['config_patch'])) {
+            $cfg  = source_config($source);
+            $next = $cfg;
+            foreach ($env['config_patch'] as $k => $v) {
+                if ($v === null) unset($next[$k]); else $next[$k] = $v;
+            }
+            if ($next !== $cfg) {
+                $json = json_encode($next, JSON_UNESCAPED_UNICODE);
+                db_run("UPDATE sources SET config_json = ? WHERE id = ?", [$json, (int) $source['id']]);
+                $source['config_json'] = $json;
             }
         }
 

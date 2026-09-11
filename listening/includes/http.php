@@ -338,20 +338,28 @@ function lh_discover_feed(string $siteUrl): array
     if ($siteUrl === '') return ['ok' => false, 'url' => '', 'error' => 'No address given.', 'tried' => []];
     if (!preg_match('#^https?://#i', $siteUrl)) $siteUrl = 'https://' . $siteUrl;
 
+    // A feed address that has gone dead is worth as much as no address at all,
+    // so the homepage is always searched too — that is where the <link> tag
+    // naming the current feed lives.
+    $root  = lh_site_root($siteUrl);
+    $pages = $root !== '' && $root !== $siteUrl ? [$siteUrl, $root] : [$siteUrl];
     $tried = [];
 
     // 1. Ask the page. This is how a browser and every feed reader find a feed,
     //    and it keeps working when the publisher reorganises their feed paths.
-    $r = lh_http('GET', $siteUrl, [], null, ['timeout' => 20, 'tries' => 2, 'browser_ua' => true]);
-    $tried[] = $siteUrl;
+    foreach ($pages as $page) {
+        $r       = lh_http('GET', $page, [], null, ['timeout' => 20, 'tries' => 2, 'browser_ua' => true]);
+        $tried[] = $page;
+        if ($r['error'] !== '' || $r['raw'] === '') continue;
 
-    if ($r['error'] === '' && $r['raw'] !== '') {
-        $links = lh_feed_links_in_html($r['raw'], $siteUrl);
+        $links = lh_feed_links_in_html($r['raw'], $page);
         if ($links) return ['ok' => true, 'url' => $links[0], 'error' => '', 'tried' => $tried];
     }
 
-    // 2. The conventional paths, for sites that publish a feed without advertising it.
-    $base = rtrim($siteUrl, '/');
+    // 2. The conventional paths, for sites that publish a feed without advertising
+    //    it. These hang off the site root: appending /feed to a path that already
+    //    failed only invents another address nobody serves.
+    $base = rtrim($root !== '' ? $root : $siteUrl, '/');
     foreach (['/feed', '/rss', '/rss.xml', '/feed.xml', '/atom.xml', '/index.xml', '/?feed=rss2'] as $path) {
         $candidate = $base . $path;
         $tried[]   = $candidate;
@@ -368,6 +376,19 @@ function lh_discover_feed(string $siteUrl): array
         'error' => 'Could not find a feed on that site. Open it and look for an RSS link, then paste that address instead.',
         'tried' => $tried,
     ];
+}
+
+/** scheme://host[:port]/ for any address — the page a site's feed is advertised on. */
+function lh_site_root(string $url): string
+{
+    $p = @parse_url(trim($url));
+    if (!is_array($p) || empty($p['host'])) return '';
+
+    $scheme = strtolower((string) ($p['scheme'] ?? 'https'));
+    $root   = $scheme . '://' . strtolower((string) $p['host']);
+    if (!empty($p['port'])) $root .= ':' . (int) $p['port'];
+
+    return $root . '/';
 }
 
 /** Resolve a possibly-relative feed href against the page it was found on. */
