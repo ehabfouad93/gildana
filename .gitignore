@@ -25,3 +25,10 @@ data/newsletter.json
 Thumbs.db
 .DS_Store
 *.swp
+
+# Gildana Listening
+listening/config.php
+listening/cron/.heartbeat
+listening/storage/*
+!listening/storage/.htaccess
+!listening/storage/index.html

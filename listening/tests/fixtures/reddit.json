@@ -1,0 +1,10 @@
+{"kind":"Listing","data":{"children":[
+ {"kind":"t3","data":{"name":"t3_abc123","id":"abc123","title":"Anyone used Gildana?",
+  "selftext":"Their service was terrible, I would avoid them.","author":"someuser",
+  "permalink":"/r/egypt/comments/abc123/anyone_used_gildana/","subreddit":"egypt",
+  "created_utc":1757404800,"score":42,"num_comments":7}},
+ {"kind":"t3","data":{"name":"t3_def456","id":"def456","title":"Gildana did a great job",
+  "selftext":"Excellent work, highly recommend.","author":"otheruser",
+  "permalink":"/r/marketing/comments/def456/gildana_did_a_great_job/","subreddit":"marketing",
+  "created_utc":1757491200,"score":8,"num_comments":2}}
+]}}
