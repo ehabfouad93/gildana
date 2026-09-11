@@ -28,6 +28,7 @@ function src_google_news_fetch(array $client, array $source, array $keyword): ar
 
     $r = lh_http('GET', $url, [], null, [
         'timeout'       => 25,
+        'browser_ua'    => true,
         'etag'          => (string) ($source['etag'] ?? ''),
         'last_modified' => (string) ($source['last_modified'] ?? ''),
         'fixture'       => 'google_news.xml',

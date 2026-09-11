@@ -282,28 +282,34 @@ function connector_missing_labels(string $id, array $client): array
  */
 function rss_presets(): array
 {
+    // Deliberately site addresses, not feed paths. Publishers move their feed
+    // URLs and a hard-coded list goes stale silently — half of the first version
+    // of this list was already dead on arrival. The RSS connector asks the site
+    // where its feed is (lh_discover_feed) and stores what it finds, so these
+    // only have to be the address you would type into a browser.
     return [
         'مصر' => [
             'اليوم السابع'      => 'https://www.youm7.com/rss/SectionRss?SectionID=65',
-            'مصراوي'            => 'https://www.masrawy.com/rss/rssfeeds',
-            'الأهرام'           => 'https://gate.ahram.org.eg/rss/22.aspx',
-            'الشروق'            => 'https://www.shorouknews.com/rss/RssFeed/Egypt',
-            'الوطن'             => 'https://www.elwatannews.com/RSSFeed',
             'المصري اليوم'      => 'https://www.almasryalyoum.com/rss/rssfeeds',
+            'مصراوي'            => 'https://www.masrawy.com',
+            'الأهرام'           => 'https://gate.ahram.org.eg',
+            'الشروق'            => 'https://www.shorouknews.com',
+            'الوطن'             => 'https://www.elwatannews.com',
+            'صدى البلد'         => 'https://www.elbalad.news',
         ],
         'أعمال / اقتصاد' => [
-            'العربية بزنس'      => 'https://www.alarabiya.net/.mrss/ar/aswaq.xml',
-            'Enterprise Egypt'  => 'https://enterprise.press/feed/',
-            'Daily News Egypt'  => 'https://www.dailynewsegypt.com/feed/',
+            'Enterprise Egypt'  => 'https://enterprise.press',
+            'Daily News Egypt'  => 'https://www.dailynewsegypt.com',
+            'العربية بزنس'      => 'https://www.alarabiya.net/aswaq',
         ],
         'إقليمي / دولي' => [
-            'الجزيرة'           => 'https://www.aljazeera.net/aljazeerarss/a7c186be-1baa-4bd4-9d80-a84db769f779/73d0e1b4-532f-45ef-b135-bfdff8b8cab9',
             'BBC Arabic'        => 'https://feeds.bbci.co.uk/arabic/rss.xml',
-            'CNN Arabic'        => 'https://arabic.cnn.com/api/v1/rss/rss.xml',
-            'Reuters Business'  => 'https://www.reutersagency.com/feed/?best-topics=business-finance',
+            'الجزيرة'           => 'https://www.aljazeera.net',
+            'CNN Arabic'        => 'https://arabic.cnn.com',
         ],
     ];
 }
+
 
 /**
  * Translated label for one of a connector's config fields.

@@ -17,20 +17,43 @@ function src_rss_fetch(array $client, array $source, array $keyword): array
         return ingest_envelope_error('The feed URL must start with http:// or https://');
     }
 
-    $r = lh_http('GET', $url, [], null, [
-        'timeout'       => 25,
-        'etag'          => (string) ($source['etag'] ?? ''),
-        'last_modified' => (string) ($source['last_modified'] ?? ''),
-        'fixture'       => 'rss.xml',
-    ]);
+    $fetch = function (string $u) use ($source) {
+        return lh_http('GET', $u, [], null, [
+            'timeout'       => 25,
+            'browser_ua'    => true,
+            'etag'          => (string) ($source['etag'] ?? ''),
+            'last_modified' => (string) ($source['last_modified'] ?? ''),
+            'fixture'       => 'rss.xml',
+        ]);
+    };
+
+    $r = $fetch($url);
 
     $env = ingest_envelope_from_http($r, $url);
     if ($env !== null) return $env;
 
     $parsed = lh_parse_feed($r['raw']);
+
+    // Given a site's ordinary address rather than its feed — which is what people
+    // naturally paste — ask the page where its feed is and use that instead of
+    // failing. The resolved address is handed back so the caller can store it and
+    // skip the extra request next time.
+    $resolved = '';
+    if (!$parsed['ok']) {
+        $found = lh_discover_feed($url);
+        if ($found['ok']) {
+            $resolved = $found['url'];
+            $r        = $fetch($resolved);
+            $env      = ingest_envelope_from_http($r, $resolved);
+            if ($env !== null) return $env;
+            $parsed = lh_parse_feed($r['raw']);
+        }
+    }
+
     if (!$parsed['ok']) {
         return ingest_envelope_error($parsed['error'], ['http' => $r['http'], 'request_url' => $url]);
     }
+    if ($resolved !== '') $url = $resolved;
 
     $host = (string) (parse_url($url, PHP_URL_HOST) ?: '');
     $items = [];
@@ -48,6 +71,7 @@ function src_rss_fetch(array $client, array $source, array $keyword): array
     }
 
     return ingest_envelope_ok($items, ['http' => $r['http'], 'request_url' => $url,
+                                       'resolved_feed_url' => $resolved,
                                        'etag' => (string) ($r['headers']['etag'] ?? ''),
                                        'last_modified' => (string) ($r['headers']['last-modified'] ?? '')]);
 }

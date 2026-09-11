@@ -270,6 +270,44 @@ ok('The same URL from two connectors is kept separately (uq_dedupe is per connec
 
 is_same('An empty URL and id hashes to nothing', '', ingest_hash('rss', '', ''));
 
+/* ── feed discovery ───────────────────────────────────────────────────── */
+
+section('Feed discovery');
+
+// Publishers move their feed paths, so the app asks the page where its feed is
+// rather than relying on a hard-coded list. The first version of the Egyptian
+// preset list was half dead on arrival for exactly that reason.
+$page = '<!DOCTYPE html><html lang="ar"><head><meta charset="utf-8">'
+      . '<link rel="stylesheet" href="/s.css">'
+      . '<link rel="alternate" type="application/rss+xml" title="RSS" href="/news-feed.xml">'
+      . '</head><body>x</body></html>';
+is_same('Finds the feed a page advertises',
+    ['https://site.example/news-feed.xml'], lh_feed_links_in_html($page, 'https://site.example'));
+
+$atomPage = '<html><head><link type="application/atom+xml" rel="alternate" href="https://cdn.example/a.xml"></head></html>';
+is_same('Finds an Atom feed, and with attributes in the other order',
+    ['https://cdn.example/a.xml'], lh_feed_links_in_html($atomPage, 'https://site.example'));
+
+$single = "<html><head><link rel='alternate' type='application/rss+xml' href='/f.xml'></head></html>";
+is_same('Copes with single-quoted attributes',
+    ['https://site.example/f.xml'], lh_feed_links_in_html($single, 'https://site.example'));
+
+is_same('A page with no feed yields nothing',
+    [], lh_feed_links_in_html('<html><head><title>none</title></head></html>', 'https://site.example'));
+is_same('Empty input yields nothing', [], lh_feed_links_in_html('', 'https://site.example'));
+
+is_same('Ignores a stylesheet link',
+    [], lh_feed_links_in_html('<html><head><link rel="stylesheet" href="/a.css"></head></html>', 'https://x.example'));
+
+section('URL resolution');
+
+is_same('Root-relative href',   'https://x.example/feed.xml', lh_absolute_url('/feed.xml', 'https://x.example/news/'));
+is_same('Path-relative href',   'https://x.example/feed.xml', lh_absolute_url('feed.xml',  'https://x.example/news/'));
+is_same('Protocol-relative',    'https://cdn.example/f.xml',  lh_absolute_url('//cdn.example/f.xml', 'https://x.example/'));
+is_same('Already absolute',     'https://y.example/f.xml',    lh_absolute_url('https://y.example/f.xml', 'https://x.example/'));
+is_same('Keeps a non-default port', 'http://x.example:8080/f', lh_absolute_url('/f', 'http://x.example:8080'));
+is_same('Empty href',           '',  lh_absolute_url('', 'https://x.example'));
+
 /* ── escaping ─────────────────────────────────────────────────────────── */
 
 section('Escaping');

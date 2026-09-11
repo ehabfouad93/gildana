@@ -22,6 +22,14 @@ function lh_http(string $method, string $url, array $headers = [], $body = null,
     $backoffMs = (int) ($opts['backoff_ms'] ?? 400);
     $ua        = (string) ($opts['user_agent'] ?? config('user_agent', 'GildanaListening/1.0'));
 
+    // Several publishers (and anything behind Cloudflare) refuse a bare tool
+    // User-Agent outright — that is what the 403 "Just a moment…" pages are. This
+    // string still names the app and links to it, so we are not pretending to be
+    // someone else; it just leads with the token those filters expect.
+    if (!empty($opts['browser_ua'])) {
+        $ua = 'Mozilla/5.0 (compatible; GildanaListening/1.0; +https://listening.gildana.net)';
+    }
+
     // Offline fixture mode: serve a recorded response instead of hitting the network.
     if (!empty($opts['fixture'])) {
         $fix = lh_fixture_read((string) $opts['fixture']);
@@ -311,4 +319,100 @@ function lh_feed_item_atom(SimpleXMLElement $entry, string $ATOM): ?array
         'source_name'  => '',
         'source_url'   => '',
     ];
+}
+
+/**
+ * Find a site's feed when you only have its normal address.
+ *
+ * Publishers move their feed paths and there is no convention to rely on, so
+ * hard-coding a list of feed URLs goes stale the moment one of them changes.
+ * This asks the page itself: browsers and feed readers find a feed through the
+ * <link rel="alternate" type="application/rss+xml"> tag, and so do we, falling
+ * back to the handful of paths that are conventional enough to be worth a try.
+ *
+ * @return array{ok:bool,url:string,error:string,tried:array}
+ */
+function lh_discover_feed(string $siteUrl): array
+{
+    $siteUrl = trim($siteUrl);
+    if ($siteUrl === '') return ['ok' => false, 'url' => '', 'error' => 'No address given.', 'tried' => []];
+    if (!preg_match('#^https?://#i', $siteUrl)) $siteUrl = 'https://' . $siteUrl;
+
+    $tried = [];
+
+    // 1. Ask the page. This is how a browser and every feed reader find a feed,
+    //    and it keeps working when the publisher reorganises their feed paths.
+    $r = lh_http('GET', $siteUrl, [], null, ['timeout' => 20, 'tries' => 2, 'browser_ua' => true]);
+    $tried[] = $siteUrl;
+
+    if ($r['error'] === '' && $r['raw'] !== '') {
+        $links = lh_feed_links_in_html($r['raw'], $siteUrl);
+        if ($links) return ['ok' => true, 'url' => $links[0], 'error' => '', 'tried' => $tried];
+    }
+
+    // 2. The conventional paths, for sites that publish a feed without advertising it.
+    $base = rtrim($siteUrl, '/');
+    foreach (['/feed', '/rss', '/rss.xml', '/feed.xml', '/atom.xml', '/index.xml', '/?feed=rss2'] as $path) {
+        $candidate = $base . $path;
+        $tried[]   = $candidate;
+        $probe = lh_http('GET', $candidate, [], null, ['timeout' => 15, 'tries' => 1, 'browser_ua' => true]);
+        if ($probe['error'] !== '' || $probe['raw'] === '') continue;
+        if (lh_parse_feed($probe['raw'])['ok']) {
+            return ['ok' => true, 'url' => $candidate, 'error' => '', 'tried' => $tried];
+        }
+    }
+
+    return [
+        'ok'    => false,
+        'url'   => '',
+        'error' => 'Could not find a feed on that site. Open it and look for an RSS link, then paste that address instead.',
+        'tried' => $tried,
+    ];
+}
+
+/** Resolve a possibly-relative feed href against the page it was found on. */
+function lh_absolute_url(string $href, string $base): string
+{
+    $href = trim($href);
+    if ($href === '') return '';
+    if (preg_match('#^https?://#i', $href)) return $href;
+
+    $p = @parse_url($base);
+    if (!$p || empty($p['host'])) return '';
+    $root = ($p['scheme'] ?? 'https') . '://' . $p['host'] . (isset($p['port']) ? ':' . (int) $p['port'] : '');
+
+    if (str_starts_with($href, '//'))  return ($p['scheme'] ?? 'https') . ':' . $href;
+    if (str_starts_with($href, '/'))   return $root . $href;
+    return $root . '/' . ltrim($href, '/');
+}
+
+/**
+ * Every feed address a page advertises, resolved to absolute, in document order.
+ *
+ * Parsed with DOM rather than a regex: attribute order, quoting and stray
+ * whitespace vary wildly across real sites, and a regex that copes with all of
+ * it is far harder to read — and to trust — than this.
+ */
+function lh_feed_links_in_html(string $html, string $baseUrl): array
+{
+    if (trim($html) === '') return [];
+
+    $prev = libxml_use_internal_errors(true);
+    $doc  = new DOMDocument();
+    // The encoding hint stops DOMDocument mangling Arabic titles; LIBXML_NONET
+    // keeps it from fetching anything the page references.
+    $doc->loadHTML('<?xml encoding="UTF-8">' . $html, LIBXML_NONET);
+    libxml_clear_errors();
+    libxml_use_internal_errors($prev);
+
+    $out = [];
+    foreach ($doc->getElementsByTagName('link') as $link) {
+        $type = strtolower(trim($link->getAttribute('type')));
+        if ($type !== 'application/rss+xml' && $type !== 'application/atom+xml') continue;
+        $href = trim($link->getAttribute('href'));
+        if ($href === '') continue;
+        $abs = lh_absolute_url($href, $baseUrl);
+        if ($abs !== '') $out[] = $abs;
+    }
+    return $out;
 }

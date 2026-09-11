@@ -196,6 +196,19 @@ function source_run(array $source, ?array $client = null, bool $claim = true): a
         }
         $lastEnv = $env;
 
+        // A source pointed at a site's homepage resolves to its real feed on the
+        // first run. Store that so every later check goes straight there instead
+        // of re-fetching and re-parsing the homepage each time.
+        if (!empty($env['resolved_feed_url'])) {
+            $cfg = source_config($source);
+            if (($cfg['feed_url'] ?? '') !== $env['resolved_feed_url']) {
+                $cfg['feed_url'] = (string) $env['resolved_feed_url'];
+                db_run("UPDATE sources SET config_json = ? WHERE id = ?",
+                    [json_encode($cfg, JSON_UNESCAPED_UNICODE), (int) $source['id']]);
+                $source['config_json'] = json_encode($cfg, JSON_UNESCAPED_UNICODE);
+            }
+        }
+
         $stored = ['new' => 0, 'filtered' => 0];
         if ($env['ok']) {
             $stored = ingest_store($client, $source, $env['items'], $kw ?: null, $keywords);
