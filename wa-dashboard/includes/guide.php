@@ -104,7 +104,7 @@ function guide_all(): array
         'intro' => 'A conversation that runs itself: someone messages you, and the flow answers.',
         'steps' => [
             ['Start from a ready-made one', 'The starter flows at the top are complete and working. Install one, read through it, change the words to yours. Much faster than an empty canvas.'],
-            ['Or build your own', '+ New Automation, choose what starts it — a keyword, anyone’s first message, a default reply, or a new row in a Google Sheet.'],
+            ['Or build your own', '+ New Automation, choose what starts it — a keyword, anyone’s first message, someone arriving from an ad, a default reply, or a new row in a Google Sheet.'],
             ['Add steps', 'On the canvas, press the + on a step to add the next one, already connected. On a phone, use the ordered list below the canvas instead — no dragging.'],
             ['Try it before anyone sees it', 'Preview this flow plays the whole conversation on screen and lets you answer as the customer. Nothing is sent and no credits are spent.'],
             ['Check, then switch it on', 'Check for problems finds dead ends, questions with no way out and messages the 24-hour rule would block. Fix those, then use the toggle to go live.'],
@@ -112,6 +112,7 @@ function guide_all(): array
         'tips' => [
             'Your work saves itself. The toolbar says Saved when it has.',
             'Once it is running, each step shows how many people reached it and how many stopped there — that is where to look when a flow is losing people.',
+            'Starting from an ad: pick the ads by name — they appear in the list after their first click — and write {{ad_headline}} into your first message to answer the ad they actually tapped. Needs the WhatsApp Business API; it cannot work from a personal number.',
         ],
     ],
 

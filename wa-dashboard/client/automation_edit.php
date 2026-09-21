@@ -47,7 +47,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save'
     verify_csrf();
     $name    = trim((string) ($_POST['name'] ?? $flow['name']));
     $trigger = (string) ($_POST['trigger_type'] ?? $flow['trigger_type']);
-    if (!in_array($trigger, ['keyword', 'welcome', 'default'], true)) $trigger = 'keyword';
+    if (!in_array($trigger, ['keyword', 'welcome', 'default', 'ad'], true)) $trigger = 'keyword';
     $hotMin  = max(0, (int) ($_POST['hot_min'] ?? 70));
     $warmMin = max(0, (int) ($_POST['warm_min'] ?? 40));
 
@@ -55,6 +55,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save'
     if ($trigger === 'keyword') {
         $kws = array_values(array_filter(array_map('trim', preg_split('/[\n,]+/', (string) ($_POST['keywords'] ?? '')))));
         $tc  = ['keywords' => $kws, 'match_type' => (string) ($_POST['match_type'] ?? 'contains')];
+    } elseif ($trigger === 'ad') {
+        /* "Any ad" unless specific ones were ticked. The typed-in box is the escape hatch for
+           an ad that has had no clicks yet, so it is merged with the ticked list rather than
+           replacing it. */
+        $picked = array_map('trim', (array) ($_POST['ad_ids'] ?? []));
+        $typed  = array_filter(array_map('trim', preg_split('/[\s,]+/', (string) ($_POST['ad_id_manual'] ?? ''))));
+        $ids    = array_values(array_unique(array_filter(array_merge($picked, $typed))));
+        $tc = (($_POST['ad_mode'] ?? 'any') === 'ads' && $ids)
+            ? ['mode' => 'ads', 'source_ids' => $ids]
+            : ['mode' => 'any'];
     }
 
     $graph = json_decode((string) ($_POST['flow_json'] ?? '{}'), true);
@@ -416,6 +426,7 @@ client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
           <option value="keyword" <?= $flow['trigger_type'] === 'keyword' ? 'selected' : '' ?>>Keyword reply</option>
           <option value="welcome" <?= $flow['trigger_type'] === 'welcome' ? 'selected' : '' ?>>Welcome (first message)</option>
           <option value="default" <?= $flow['trigger_type'] === 'default' ? 'selected' : '' ?>>Default reply (nothing else matched)</option>
+          <option value="ad" <?= $flow['trigger_type'] === 'ad' ? 'selected' : '' ?>>Someone arrives from an ad</option>
           <option value="google_sheet" <?= $flow['trigger_type'] === 'google_sheet' ? 'selected' : '' ?>>New row in a Google Sheet</option>
         </select>
       </div>
@@ -431,6 +442,66 @@ client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
       </div>
       <div class="field"><span class="lbl">Hot score ≥</span><input type="number" name="hot_min" value="<?= (int) $flow['hot_min'] ?>"></div>
       <div class="field"><span class="lbl">Warm score ≥</span><input type="number" name="warm_min" value="<?= (int) $flow['warm_min'] ?>"></div>
+    </div>
+
+    <?php
+      /* ── the ad picker ──
+         Clients do not know their ad ids — source_id looks like 120210453847320123 — but the
+         referral payload carries each ad's OWN headline, so the app learns the list from real
+         clicks and can show words. The id box stays collapsed as the escape hatch for an ad
+         that has not been clicked yet. */
+      require_once __DIR__ . '/../includes/ads.php';
+      $adsKnown = ads_list($cid);
+      $adMode   = (string) ($tc['mode'] ?? 'any');
+      $adPicked = array_map('strval', (array) ($tc['source_ids'] ?? []));
+      $adIsPersonal = function_exists('channel_is_personal') && channel_is_personal($CLIENT);
+    ?>
+    <div id="ad-wrap" style="display:<?= $flow['trigger_type'] === 'ad' ? 'block' : 'none' ?>">
+      <?php if ($adIsPersonal): ?>
+        <div class="alert error" style="font-size:12.5px">
+          This trigger needs the WhatsApp Business API. Ads tell us which ad someone tapped
+          through Meta's own callback, and that does not exist on a personal number — an
+          automation on this trigger would never run for your account.
+        </div>
+      <?php endif; ?>
+
+      <label class="ad-opt">
+        <input type="radio" name="ad_mode" value="any" <?= $adMode !== 'ads' ? 'checked' : '' ?> onchange="onAdMode()">
+        <span><strong>Any ad</strong><br>
+          <span class="text-muted">Anyone who messages you by tapping any Facebook or Instagram ad.</span></span>
+      </label>
+
+      <label class="ad-opt">
+        <input type="radio" name="ad_mode" value="ads" <?= $adMode === 'ads' ? 'checked' : '' ?> onchange="onAdMode()">
+        <span><strong>Specific ads</strong><br>
+          <span class="text-muted">Only the campaigns you tick below.</span></span>
+      </label>
+
+      <div id="ad-list" style="display:<?= $adMode === 'ads' ? 'block' : 'none' ?>">
+        <?php if (!$adsKnown): ?>
+          <p class="text-muted" style="font-size:12.5px;margin:8px 0">
+            No ads yet. An ad appears here the first time someone messages you from it — until
+            then, use <strong>Any ad</strong> or paste its ID below.
+          </p>
+        <?php else: foreach ($adsKnown as $a): ?>
+          <label class="ad-row">
+            <input type="checkbox" name="ad_ids[]" value="<?= e((string) $a['source_id']) ?>"
+                   <?= in_array((string) $a['source_id'], $adPicked, true) ? 'checked' : '' ?>>
+            <span class="ad-name"><?= e(ads_label($a['headline'], (string) $a['source_id'])) ?></span>
+            <span class="ad-meta"><?= (int) $a['leads'] ?> lead<?= (int) $a['leads'] === 1 ? '' : 's' ?>
+              · last click <?= e(date('j M', strtotime((string) $a['last_seen_at']))) ?></span>
+          </label>
+        <?php endforeach; endif; ?>
+
+        <details class="ad-manual">
+          <summary>Don't see your ad?</summary>
+          <p class="text-muted" style="font-size:12.5px;margin:6px 0">
+            It appears above after its first click. To get ahead of that, paste the ad ID from
+            Meta Ads Manager — separate several with commas.
+          </p>
+          <input type="text" name="ad_id_manual" placeholder="120210453847320123">
+        </details>
+      </div>
     </div>
 
     <?php
@@ -1825,7 +1896,17 @@ async function loadSheetTabs(id, selected){
 }
 
 function onTrig(){ const v=document.getElementById('trigger_type').value; const k=v==='keyword'; document.getElementById('kw-wrap').style.display=k?'':'none'; document.getElementById('mt-wrap').style.display=k?'':'none';
-  const sw=document.getElementById('sheet-wrap'); if(sw) sw.style.display=v==='google_sheet'?'block':'none'; const s=canvas.querySelector('.node.start .node-body'); if(s)s.innerHTML=summary(start); }
+  const sw=document.getElementById('sheet-wrap'); if(sw) sw.style.display=v==='google_sheet'?'block':'none';
+  const aw=document.getElementById('ad-wrap');    if(aw) aw.style.display=v==='ad'?'block':'none';
+  const s=canvas.querySelector('.node.start .node-body'); if(s)s.innerHTML=summary(start); }
+
+/* The ad list only matters once "Specific ads" is chosen — showing a checklist under an
+   unselected radio invites people to tick things that will be ignored on save. */
+function onAdMode(){
+  const picked=document.querySelector('input[name="ad_mode"]:checked');
+  const list=document.getElementById('ad-list');
+  if(list) list.style.display = (picked && picked.value==='ads') ? 'block' : 'none';
+}
 
 /* ── serialize ── */
 /* The canvas as the server expects it. Shared by the Save button and the auto-save, so the

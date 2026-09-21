@@ -18,6 +18,7 @@ require __DIR__ . '/includes/campaign.php';
 require __DIR__ . '/includes/credits.php';
 require __DIR__ . '/includes/whatsapp.php';
 require __DIR__ . '/includes/ai.php';
+require_once __DIR__ . '/includes/ads.php';
 require __DIR__ . '/includes/notify.php';
 require __DIR__ . '/includes/automation.php';
 require_once __DIR__ . '/includes/push.php';
@@ -220,6 +221,14 @@ foreach (($data['entry'] ?? []) as $entry) {
                     $text = trim((string) ($in['button']['text'] ?? ''));
                 }
 
+                /* Click-to-WhatsApp: Meta attaches `referral` to the FIRST message of a
+                   conversation that began from an ad, and only the first. It names the ad and
+                   carries its own headline, which is what lets the automation editor list ads
+                   by their words instead of asking a client for a numeric id. Recorded below,
+                   once the contact exists, and passed to the engine so an ad flow can claim
+                   this message. */
+                $referral = is_array($in['referral'] ?? null) ? $in['referral'] : [];
+
                 // Upsert contact + open the 24h window.
                 $contact = db_row("SELECT * FROM contacts WHERE client_id=? AND phone_e164=?", [$cid, $from]);
                 if (!$contact) {
@@ -231,6 +240,12 @@ foreach (($data['entry'] ?? []) as $entry) {
                     db_run("UPDATE contacts SET last_inbound_at=NOW() WHERE id=?", [(int) $contact['id']]);
                     $contact['last_inbound_at'] = date('Y-m-d H:i:s');
                 }
+
+                /* Now that the contact exists, credit the ad. Deliberately before the STOP
+                   check below: someone who arrives from an ad and immediately opts out still
+                   came from that ad, and the client is entitled to know the ad produced a
+                   refusal rather than nothing at all. */
+                if ($referral) ads_record($cid, (int) ($contact['id'] ?? 0), $referral);
 
                 // Log the inbound message into the unified Inbox.
                 $logBody = $text !== '' ? $text : '[' . $mtype . ']';
@@ -251,7 +266,10 @@ foreach (($data['entry'] ?? []) as $entry) {
                 }
                 if (!$contact) continue;
 
-                automation_handle_inbound($client, $contact, ['type' => $mtype, 'text' => $text, 'button_id' => $buttonId]);
+                automation_handle_inbound($client, $contact, [
+                    'type' => $mtype, 'text' => $text, 'button_id' => $buttonId,
+                    'referral' => $referral,
+                ]);
             }
         }
     }

@@ -18,6 +18,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/inbox.php';    // unified message log (msg_log)
 require_once __DIR__ . '/channel.php';  // cloud vs personal-number dispatch
 require_once __DIR__ . '/billing.php'; // per-message pricing (BYO vs platform WABA)
+require_once __DIR__ . '/ads.php';     // Click-to-WhatsApp referrals (ad triggers)
 
 const AUTO_MAX_STEPS = 60; // safety cap per run invocation
 
@@ -631,6 +632,43 @@ function auto_match_keyword(int $clientId, string $text): ?array
     return null;
 }
 
+/**
+ * The flow that claims a Click-to-WhatsApp conversation from this ad, if any.
+ *
+ * Two shapes of trigger_config, and the specific one wins:
+ *
+ *   {"mode":"ads","source_ids":["120…","120…"]}   this ad in particular
+ *   {"mode":"any"}                                 anything arriving from an ad
+ *
+ * Specific beating general is what lets a client keep one catch-all ad flow as a safety net
+ * and still add a dedicated flow per campaign without the catch-all swallowing it.
+ *
+ * The id list is a list because Meta issues a different source_id PER CREATIVE — five images
+ * in one campaign is five ids that all want the same flow. A single-value field would force
+ * five identical flows.
+ */
+function auto_match_ad(int $clientId, string $sourceId): ?array
+{
+    $sourceId = trim($sourceId);
+    if ($sourceId === '') return null;
+
+    $flows = db_all("SELECT * FROM flows WHERE client_id=? AND status='active' AND trigger_type='ad'
+                     ORDER BY (kind='agent') DESC, id", [$clientId]);
+    $any = null;
+    foreach ($flows as $f) {
+        $tc   = json_decode((string) $f['trigger_config'], true) ?: [];
+        $mode = (string) ($tc['mode'] ?? 'any');
+        if ($mode === 'ads') {
+            foreach ((array) ($tc['source_ids'] ?? []) as $id) {
+                if (trim((string) $id) === $sourceId) return $f;      // specific: done
+            }
+            continue;
+        }
+        if ($any === null) $any = $f;                                  // remember the catch-all
+    }
+    return $any;
+}
+
 function auto_welcome_flow(int $clientId): ?array
 {
     // An AI Chat Agent welcome flow takes precedence over a chatbot welcome flow.
@@ -656,9 +694,15 @@ function auto_bot_paused(array $contact): bool
     return $until !== null && strtotime((string) $until) > time();
 }
 
-function auto_start(array $client, array $contact, array $flow, string $inboundText = ''): void
+/**
+ * @param array $seedFields values to put in the run's context before the first step runs.
+ *        auto_render() builds its {{variable}} map from the contact plus $ctx['fields'], so
+ *        seeding here is the whole mechanism behind {{ad_headline}} — the renderer needs no
+ *        knowledge of ads at all.
+ */
+function auto_start(array $client, array $contact, array $flow, string $inboundText = '', array $seedFields = []): void
 {
-    $ctx = ['fields' => [], 'transcript' => []];
+    $ctx = ['fields' => $seedFields, 'transcript' => []];
     if ($inboundText !== '') auto_log($ctx, 'user', $inboundText);
     $runId = db_insert(
         "INSERT INTO flow_runs (flow_id,client_id,contact_id,current_step_id,status,score,context,created_at)
@@ -730,6 +774,12 @@ function auto_inbound_decide(array $client, array $contact, array $message): str
 {
     $text     = (string) ($message['text'] ?? '');
     $buttonId = (string) ($message['button_id'] ?? '');
+
+    /* The ad this conversation came from, when it came from one. Present only on the first
+       message of a CTWA conversation — every later message arrives without it. */
+    $referral    = is_array($message['referral'] ?? null) ? $message['referral'] : [];
+    $adSource    = trim((string) ($referral['source_id'] ?? ''));
+    $seedFields  = $referral ? ads_seed_fields($referral) : [];
 
     // A human is handling this chat (they replied from the Inbox) — stay out of the way.
     // The inbound is still logged by webhook.php, so nothing is lost.
@@ -805,6 +855,21 @@ function auto_inbound_decide(array $client, array $contact, array $message): str
     }
     $flow = auto_match_keyword((int) $client['id'], $text);
     $how  = $flow ? 'keyword' : '';
+
+    /* Click-to-WhatsApp, below keyword and above welcome.
+         below keyword — a keyword is what the person actually TYPED; the referral is only
+           where they came from. Someone who taps a New Cairo ad but rewrites the prefilled
+           text to "anything in Zayed?" should get the Zayed flow. When the prefill is sent
+           unchanged, which is the common case, no keyword matches it and the ad flow wins.
+         above welcome — the ad trigger is strictly more specific: it knows WHY they are here,
+           welcome only knows they are new. Same reasoning that already puts keyword first.
+       Only the opening message of a conversation carries a referral, so this rung can only
+       ever fire once per conversation. */
+    if (!$flow && $adSource !== '') {
+        $flow = auto_match_ad((int) $client['id'], $adSource);
+        if ($flow) $how = 'ad';
+    }
+
     if (!$flow) {
         // welcome: first inbound and no prior run for this contact
         $prior = (int) db_val("SELECT COUNT(*) FROM flow_runs WHERE contact_id=?", [(int) $contact['id']]);
@@ -821,7 +886,7 @@ function auto_inbound_decide(array $client, array $contact, array $message): str
             ? 'no_flow|A conversation is already open (' . $run['status'] . ') but nothing matched this message, and there is no default flow'
             : 'no_flow|No keyword matched and no default (catch-all) flow is active';
     }
-    auto_start($client, $contact, $flow, $text);
+    auto_start($client, $contact, $flow, $text, $seedFields);
     return 'started|' . $how . ': ' . (string) $flow['name'];
 }
 
@@ -1197,6 +1262,54 @@ function automation_validate(array $flow, array $client = []): array
     }
 
     $isPersonal = $client && function_exists('channel_is_personal') && channel_is_personal($client);
+
+    /* ── trigger-level problems ──
+       Everything below this walks the steps INSIDE the flow. These two are about the flow's
+       relationship to the outside world, which is exactly why they were invisible: the graph
+       can be perfect and the flow still never run. */
+
+    $trigger = (string) ($flow['trigger_type'] ?? '');
+
+    // An ad trigger needs Meta's referral, which only exists on the Cloud API. On a personal
+    // number this flow can never fire at all — not "rarely", never.
+    if ($trigger === 'ad' && $isPersonal) {
+        $add('error', 0, 'This trigger needs the WhatsApp Business API',
+             'Ads tell us which ad someone tapped through Meta\'s own callback, and a personal '
+           . 'number never receives that. This automation will not run while you send from your '
+           . 'own number.');
+    }
+
+    /* Two Live flows on the same trigger: only one can ever win, and the loser sits there
+       marked Live looking healthy. auto_welcome_flow() / auto_default_flow() / auto_match_ad()
+       all resolve with `ORDER BY (kind='agent') DESC, id` and LIMIT 1, so the OLDER flow wins
+       and the newer one is silently dead. Keyword flows are exempt: several can coexist because
+       they are distinguished by their words, not by the trigger alone. */
+    if (in_array($trigger, ['welcome', 'default'], true)
+        || ($trigger === 'ad' && (string) ((json_decode((string) ($flow['trigger_config'] ?? ''), true) ?: [])['mode'] ?? 'any') === 'any')) {
+        try {
+            $rivals = db_all(
+                "SELECT id, name, trigger_config FROM flows
+                  WHERE client_id=? AND id<>? AND status='active' AND trigger_type=?
+                  ORDER BY (kind='agent') DESC, id",
+                [(int) ($flow['client_id'] ?? 0), $flowId, $trigger]);
+
+            // An "any ad" flow only competes with other "any ad" flows, not with ones pinned
+            // to specific ads — those are more specific and win on their own ads regardless.
+            if ($trigger === 'ad') {
+                $rivals = array_values(array_filter($rivals, function ($r) {
+                    $m = (json_decode((string) ($r['trigger_config'] ?? ''), true) ?: [])['mode'] ?? 'any';
+                    return $m !== 'ads';
+                }));
+            }
+
+            if ($rivals) {
+                $names = implode(', ', array_map(fn($r) => (string) $r['name'], array_slice($rivals, 0, 3)));
+                $add('warn', 0, 'Another Live automation already uses this trigger',
+                     'Only one can run: ' . $names . '. Whichever was created first wins, so this '
+                   . 'one may never fire. Switch the other off, or give one of them a different trigger.');
+            }
+        } catch (Throwable $e) { /* never block validation on this */ }
+    }
 
     foreach ($steps as $st) {
         $sid  = (int) $st['id'];

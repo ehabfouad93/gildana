@@ -31,7 +31,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
     // Must match the editor's own list (automation_edit.php), or a trigger you can choose
     // here would be silently rewritten the moment the flow opens.
     $trigger = (string) ($_POST['trigger_type'] ?? 'keyword');
-    if (!in_array($trigger, ['keyword', 'welcome', 'default', 'google_sheet'], true)) $trigger = 'keyword';
+    if (!in_array($trigger, ['keyword', 'welcome', 'default', 'ad', 'google_sheet'], true)) $trigger = 'keyword';
     if ($name === '') $err = 'Enter an automation name.';
     else {
         $newId = db_insert(
@@ -164,6 +164,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
         <option value="keyword">Keyword reply</option>
         <option value="welcome">Welcome (first message)</option>
         <option value="default">Default reply (nothing else matched)</option>
+        <option value="ad">Someone arrives from an ad</option>
         <option value="google_sheet">New row in a Google Sheet</option>
       </select>
       <div class="hint">All four can be changed later in the editor. Keywords, the sheet to watch and

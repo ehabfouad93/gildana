@@ -59,4 +59,39 @@ page_head('Reports');
   </div>
 </div>
 
+<?php
+/* ── which ads are actually sending people ──
+   Populated by Click-to-WhatsApp referrals as they arrive, so it fills itself with no setup.
+   Absent entirely until the first ad click, rather than showing an empty table to the many
+   clients who do not run ads at all. */
+require_once __DIR__ . '/../includes/ads.php';
+$ads = ads_list($cid);
+if ($ads): ?>
+<div class="card card-flush" id="ads">
+  <div class="page-head" style="padding:16px 18px 0;margin:0">
+    <h2 style="margin:0">Ads</h2>
+    <p class="text-muted" style="font-size:12.5px;margin:4px 0 0">
+      People who messaged you by tapping an ad, credited to the ad that first brought them.
+    </p>
+  </div>
+  <div class="table-wrap">
+    <table class="data">
+      <thead><tr><th>Ad</th><th>Leads</th><th>Hot</th><th>First click</th><th>Last click</th></tr></thead>
+      <tbody>
+      <?php foreach ($ads as $a): ?>
+        <tr>
+          <td><strong><?= e(ads_label($a['headline'], (string) $a['source_id'])) ?></strong>
+            <br><small class="text-muted mono"><?= e((string) $a['source_id']) ?></small></td>
+          <td><?= (int) $a['leads'] ?></td>
+          <td><?= (int) $a['hot'] ? '<span class="pill red">' . (int) $a['hot'] . '</span>' : '0' ?></td>
+          <td class="text-muted"><?= e(date('j M Y', strtotime((string) $a['first_seen_at']))) ?></td>
+          <td class="text-muted"><?= e(date('j M, H:i', strtotime((string) $a['last_seen_at']))) ?></td>
+        </tr>
+      <?php endforeach; ?>
+      </tbody>
+    </table>
+  </div>
+</div>
+<?php endif; ?>
+
 <?php layout_footer(); ?>
