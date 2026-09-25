@@ -156,8 +156,7 @@ php -r '$k=base64_encode(random_bytes(32)); $t=bin2hex(random_bytes(12));
 شغّل الجداول:
 
 ```
-php -r 'require "includes/config_loader.php";require "includes/helpers.php";
- require "includes/crypto.php";require "includes/db.php"; print_r(migrate());'
+php deploy/docker/migrate.php
 ```
 
 ```
@@ -225,8 +224,11 @@ cd /opt/gildana && git pull origin main-r0e4x9
 ```
 
 ```
-docker exec revenect php -r 'require "includes/config_loader.php";require "includes/helpers.php";require "includes/crypto.php";require "includes/db.php"; print_r(migrate());'
+docker exec revenect php deploy/docker/migrate.php
 ```
+
+لو الـ `git pull` جاب ملفات `.sql` جديدة لازم تشغّل ده بعده على طول — الكود الجديد بيبقى شغّال
+وبيدوّر على أعمدة لسه مش موجودة. الأمر آمن تكرّره: اللي اتطبّق قبل كده بيتعدّى.
 
 الملفات mounted من الهوست، فمش محتاج rebuild إلا لو الـ Dockerfile اتغيّر.
 
