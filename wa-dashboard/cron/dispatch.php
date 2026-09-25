@@ -17,17 +17,17 @@ declare(strict_types=1);
  * separate cron/automation.php is optional.
  */
 
-require __DIR__ . '/../includes/config_loader.php';
-require __DIR__ . '/../includes/helpers.php';
-require __DIR__ . '/../includes/crypto.php';
-require __DIR__ . '/../includes/db.php';
-require __DIR__ . '/../includes/whatsapp.php';
-require __DIR__ . '/../includes/credits.php';
-require __DIR__ . '/../includes/billing.php';
-require __DIR__ . '/../includes/campaign.php';
-require __DIR__ . '/../includes/notify.php';
-require __DIR__ . '/../includes/ai.php';
-require __DIR__ . '/../includes/automation.php';
+require_once __DIR__ . '/../includes/config_loader.php';
+require_once __DIR__ . '/../includes/helpers.php';
+require_once __DIR__ . '/../includes/crypto.php';
+require_once __DIR__ . '/../includes/db.php';
+require_once __DIR__ . '/../includes/whatsapp.php';
+require_once __DIR__ . '/../includes/credits.php';
+require_once __DIR__ . '/../includes/billing.php';
+require_once __DIR__ . '/../includes/campaign.php';
+require_once __DIR__ . '/../includes/notify.php';
+require_once __DIR__ . '/../includes/ai.php';
+require_once __DIR__ . '/../includes/automation.php';
 require_once __DIR__ . '/../includes/push.php';
 
 if (PHP_SAPI !== 'cli') {
@@ -378,12 +378,23 @@ try {
                     $failedTotal++;
                 }
                 if ((int) $it['contact'] > 0) {
-                    $logText = $it['text'] !== '' ? $it['text'] : '📄 Template: ' . $it['name'];
-                    if ($it['image'] !== '') $logText = '🖼️ ' . ($it['text'] !== '' ? $it['text'] : 'Image');
+                    /* What the Inbox shows. A Cloud template send carries components rather
+                       than text, so this used to log "Template: tbk_noanswer_leads" — the
+                       agent reading the thread could see that something went out but not what
+                       it said, which makes the thread useless for following a conversation.
+                       Render the template the same way the personal channel already does, with
+                       this recipient's own values, so the thread reads as the customer sees it. */
+                    $logText = $it['text'];
+                    if ($logText === '') {
+                        $logText = campaign_template_text($it['tpl'] ?? [], $it['cfg'] ?? [], $it['contact_row'] ?? []);
+                    }
+                    if ($logText === '') $logText = '📄 Template: ' . $it['name'];
+                    if ($it['image'] !== '') $logText = '🖼️ ' . ($logText !== '' ? $logText : 'Image');
                     msg_log($cid, (int) $it['contact'], 'out', $logText, [
                         'type' => $it['image'] !== '' ? 'image' : 'template', 'source' => 'campaign',
                         'status' => $r['ok'] ? 'sent' : 'failed', 'wamid' => $r['wamid'] ?? null,
                         'error' => $r['ok'] ? null : (string) $r['error_title'],
+                        'error_code' => $r['ok'] ? null : (string) ($r['error_code'] ?? ''),
                     ]);
                 }
                 // A send attempt spends slot budget even when it fails: the number still

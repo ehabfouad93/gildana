@@ -52,6 +52,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
     flash('Qualifier deleted.');
     redirect('qualifiers.php');
 }
+/* Resend just the outreach that failed.
+   "Send now" also does this, but it re-reads the Google Sheet first, so a client whose only
+   problem was a handful of capped sends had to run a full import to clear them — and nothing
+   on the page told them there were any failures to clear in the first place. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'resend_failed') {
+    verify_csrf();
+    $f = db_row("SELECT * FROM flows WHERE id=? AND client_id=? AND kind='qualifier'", [(int) ($_POST['id'] ?? 0), $cid]);
+    if (!$f) { flash('Qualifier not found.', 'error'); redirect('qualifiers.php'); }
+    // Same definition of "stuck outreach" that automation_send_now() uses: blocked before the
+    // lead was ever graded, i.e. the first message never landed.
+    $stuck = qualifier_stuck_runs((int) $f['id'], $cid);
+    $n     = count($stuck['retry']);
+    if ($n > 0) {
+        $ph = implode(',', array_fill(0, $n, '?'));
+        db_run("UPDATE flow_runs SET status='queued', updated_at=NOW()
+                 WHERE id IN ($ph) AND client_id=?", array_merge($stuck['retry'], [$cid]));
+        trigger_worker();
+    }
+    // Numbers that cannot receive the message are left where they are rather than silently
+    // resent, so the count here matches the advice printed next to it.
+    $skipped = count($stuck['never']);
+    flash($n > 0
+        ? "Queued {$n} message(s) to send again. They go out in the background."
+          . ($skipped ? " {$skipped} left alone — those numbers cannot receive the message." : '')
+        : ($skipped ? "Nothing to resend — those {$skipped} number(s) cannot receive the message."
+                    : 'Nothing to resend.'));
+    redirect('qualifiers.php');
+}
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'send_now') {
     verify_csrf();
     $f = db_row("SELECT * FROM flows WHERE id=? AND client_id=? AND kind='qualifier'", [(int) ($_POST['id'] ?? 0), $cid]);
@@ -65,9 +93,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'send_
 $flows = db_all(
     "SELECT f.*,
             (SELECT COUNT(*) FROM flow_runs r WHERE r.flow_id=f.id) AS leads,
-            (SELECT COUNT(*) FROM flow_runs r WHERE r.flow_id=f.id AND r.grade='hot') AS hot
+            (SELECT COUNT(*) FROM flow_runs r WHERE r.flow_id=f.id AND r.grade='hot') AS hot,
+            -- Outreach that never reached the lead. Counted here rather than left implicit,
+            -- because a qualifier with 40 leads and 40 failed sends looked identical to a
+            -- healthy one on this page.
+            (SELECT COUNT(*) FROM flow_runs r
+              WHERE r.flow_id=f.id AND r.status='blocked' AND r.grade IS NULL) AS failed
        FROM flows f WHERE f.client_id=? AND f.kind='qualifier' ORDER BY f.id DESC", [$cid]
 );
+
+/* Split each qualifier's stuck outreach into "worth resending" and "cannot be delivered",
+   so the button offers only the first and the count never promises more than it can do. */
+$stuckBy = [];
+foreach ($flows as $f) {
+    $stuckBy[(int) $f['id']] = (int) $f['failed']
+        ? qualifier_stuck_runs((int) $f['id'], $cid)
+        : ['retry' => [], 'never' => []];
+}
 
 $actions = '<a class="btn btn-ghost btn-sm" href="diagnostics.php">🩺 Health check</a>'
          . '<button class="btn btn-primary btn-sm" onclick="document.getElementById(\'m-new\').classList.add(\'open\')">+ New Qualifier</button>';
@@ -83,9 +125,9 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 <div class="card card-flush">
   <div class="table-wrap">
     <table class="data">
-      <thead><tr><th>Qualifier</th><th>Sheet</th><th>Leads</th><th>Hot</th><th>Active</th><th></th></tr></thead>
+      <thead><tr><th>Qualifier</th><th>Sheet</th><th>Leads</th><th>Hot</th><th>Not sent</th><th>Active</th><th></th></tr></thead>
       <tbody>
-      <?php if (!$flows): ?><tr><td colspan="6"><div class="empty">No qualifiers yet.</div></td></tr><?php endif; ?>
+      <?php if (!$flows): ?><tr><td colspan="7"><div class="empty">No qualifiers yet.</div></td></tr><?php endif; ?>
       <?php foreach ($flows as $f):
         $sc = json_decode((string) $f['source_config'], true) ?: [];
       ?>
@@ -94,12 +136,23 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
           <td><?= !empty($sc['csv_url']) ? '<span class="pill green">connected</span>' : '<span class="pill gray">not set</span>' ?></td>
           <td><?= (int) $f['leads'] ?></td>
           <td><?= (int) $f['hot'] ? '<span class="pill red">' . (int) $f['hot'] . '</span>' : '0' ?></td>
+          <td><?= (int) $f['failed']
+                ? '<a href="#fail-' . (int) $f['id'] . '" class="pill gold" title="Outreach that never reached the lead">'
+                  . (int) $f['failed'] . '</a>'
+                : '<span class="text-muted">0</span>' ?></td>
           <td><label class="switch"><input type="checkbox" <?= $f['status'] === 'active' ? 'checked' : '' ?> onchange="toggleQ(<?= (int) $f['id'] ?>,this)"><span class="slider"></span></label></td>
           <td style="text-align:right;white-space:nowrap">
             <form method="post" style="display:inline" onsubmit="return confirm('Import new leads from the sheet and send outreach now?')">
               <?= csrf_field() ?><input type="hidden" name="action" value="send_now"><input type="hidden" name="id" value="<?= (int) $f['id'] ?>">
               <button class="btn btn-primary btn-sm" title="Import new + send outreach + retry stuck">&#9658; Send now</button>
             </form>
+            <?php $canRetry = count($stuckBy[(int) $f['id']]['retry'] ?? []); ?>
+            <?php if ($canRetry): ?>
+            <form method="post" style="display:inline" onsubmit="return confirm('Send the <?= $canRetry ?> failed message(s) again?')">
+              <?= csrf_field() ?><input type="hidden" name="action" value="resend_failed"><input type="hidden" name="id" value="<?= (int) $f['id'] ?>">
+              <button class="btn btn-sm" title="Try the messages that did not reach the lead again — does not re-read the sheet">&#8635; Resend <?= $canRetry ?></button>
+            </form>
+            <?php endif; ?>
             <a class="btn btn-ghost btn-sm" href="qualifier_edit.php?id=<?= (int) $f['id'] ?>">Edit</a>
             <a class="btn btn-ghost btn-sm" href="leads.php?flow=<?= (int) $f['id'] ?>">Leads</a>
             <form method="post" style="display:inline">
@@ -117,6 +170,61 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
     </table>
   </div>
 </div>
+
+<?php
+/* Why the outreach did not arrive, per qualifier, grouped by cause.
+   The count in the table says how many; this says what to do about them — a client seeing
+   "12 not sent" with no reason has no way to tell a temporary WhatsApp cap (resend tomorrow)
+   from a wrong phone number (resending buys the same error). */
+foreach ($flows as $f):
+    if (!(int) $f['failed']) continue;
+    $reasons = db_all(
+        "SELECT COALESCE(NULLIF(fm.error_code,''),'') AS code,
+                COALESCE(NULLIF(fm.error_title,''),'Send failed') AS title,
+                COUNT(DISTINCT fm.run_id) AS n
+           FROM flow_messages fm
+           JOIN flow_runs r ON r.id = fm.run_id AND r.status='blocked' AND r.grade IS NULL
+          WHERE fm.flow_id=? AND fm.client_id=? AND fm.status='failed'
+          GROUP BY code, title
+          ORDER BY n DESC", [(int) $f['id'], $cid]);
+    if (!$reasons) continue;
+?>
+  <div class="card" id="fail-<?= (int) $f['id'] ?>" style="margin-top:14px">
+    <h2 style="margin:0 0 4px;font-size:15px">
+      <?= (int) $f['failed'] ?> message(s) never reached the lead — <?= e((string) $f['name']) ?>
+    </h2>
+    <p class="text-muted" style="font-size:12.5px;margin:0 0 10px">
+      These leads are still in the qualifier. Nothing was charged for a message that did not arrive.
+    </p>
+    <ul style="margin:0;padding-left:18px;font-size:13px">
+      <?php foreach ($reasons as $rr):
+        $ex = wa_error_explain((string) $rr['code'], (string) $rr['title']); ?>
+        <li style="margin-bottom:8px">
+          <strong><?= number_format((int) $rr['n']) ?>×</strong> <?= e($ex['label']) ?>
+          <?php if (trim((string) $rr['code']) !== ''): ?>
+            <span class="text-muted">(#<?= e((string) $rr['code']) ?>)</span>
+          <?php endif; ?>
+          <div class="text-muted" style="font-size:12px;margin-top:2px"><?= $ex['hint'] ?></div>
+        </li>
+      <?php endforeach; ?>
+    </ul>
+    <?php $canRetry = count($stuckBy[(int) $f['id']]['retry'] ?? []);
+          $cannot   = count($stuckBy[(int) $f['id']]['never'] ?? []); ?>
+    <form method="post" style="margin-top:10px">
+      <?= csrf_field() ?><input type="hidden" name="action" value="resend_failed"><input type="hidden" name="id" value="<?= (int) $f['id'] ?>">
+      <?php if ($canRetry): ?>
+        <button class="btn btn-primary btn-sm">&#8635; Send <?= $canRetry ?> again</button>
+        <span class="text-muted" style="font-size:12px;margin-left:8px">
+          Does not re-read the Google Sheet.<?= $cannot ? ' The other ' . $cannot . ' cannot be delivered and are left alone.' : '' ?>
+        </span>
+      <?php else: ?>
+        <span class="text-muted" style="font-size:12px">
+          None of these can be delivered by sending again — check the numbers instead.
+        </span>
+      <?php endif; ?>
+    </form>
+  </div>
+<?php endforeach; ?>
 
 <div class="modal-back" id="m-new">
   <form class="modal" method="post"><?= csrf_field() ?><input type="hidden" name="action" value="create">

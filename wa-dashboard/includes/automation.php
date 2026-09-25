@@ -332,9 +332,15 @@ function automation_run_steps(array $client, array $contact, array $run, array $
             // vars, dynamic buttons — sending [] used to break image headers with #132012),
             // or renders the template to plain text for a personal number, which has no
             // approved templates.
+            // Log the words the customer will read, not the template's internal name — an
+            // agent opening the thread needs to see what was said to them.
+            $tplText = channel_render_template_text(
+                json_decode((string) $tpl['components'], true) ?: [], $cfg, $contact,
+                null, (string) ($tpl['body_text'] ?? ''));
+            if ($tplText === '') $tplText = '📄 Template: ' . $tpl['wa_name'];
             if (!auto_send($client, $run, $step, $contact, 'template',
                 fn() => channel_send_template($client, $to, $tpl, $cfg, $contact),
-                '📄 Template: ' . $tpl['wa_name'])) break;
+                $tplText)) break;
             // A template is a message that needs a reply to continue (cold outreach /
             // re-engagement). Pause here; the lead's reply opens the 24h window and
             // resumes at this node's next step.
@@ -1856,8 +1862,14 @@ function automation_send_outreach(int $maxPerRun = 0, int $onlyFlowId = 0): int
                 // What the Inbox thread shows for this outreach.
                 $it     = $chunk[$runId];
                 $plain  = auto_render((string) $it['plain'], $it['contact_row'], ['fields' => []]);
-                $logTxt = $it['media'] !== '' ? '🖼️ ' . ($plain !== '' ? $plain : 'Image')
-                        : ($plain !== '' ? $plain : '📄 Template: ' . $it['name']);
+                // Same reason as the template step above: a thread showing only the template
+                // name cannot be followed by the person who has to take the conversation over.
+                $tplText = $plain !== '' ? $plain : channel_render_template_text(
+                    json_decode((string) ($it['tpl']['components'] ?? ''), true) ?: [],
+                    (array) ($it['cfg'] ?? []), $it['contact_row'],
+                    null, (string) ($it['tpl']['body_text'] ?? ''));
+                $logTxt = $it['media'] !== '' ? '🖼️ ' . ($tplText !== '' ? $tplText : 'Image')
+                        : ($tplText !== '' ? $tplText : '📄 Template: ' . $it['name']);
                 $logTyp = $it['media'] !== '' ? 'image' : ($plain !== '' ? 'text' : 'template');
                 if (!empty($rr['ok'])) {
                     db_run("UPDATE flow_runs SET status='waiting_input', current_step_id=?, updated_at=NOW() WHERE id=?", [$m['stepId'], $runId]);
@@ -1867,13 +1879,18 @@ function automation_send_outreach(int $maxPerRun = 0, int $onlyFlowId = 0): int
                     $sent++;
                 } else {
                     credits_adjust($cid, 1, 'automation_refund', null);
-                    $err = (string) ($rr['error_title'] ?? 'Send failed');
+                    $err  = (string) ($rr['error_title'] ?? 'Send failed');
+                    $ecode = (string) ($rr['error_code'] ?? '');
                     $ctx = json_decode((string) $m['context'], true) ?: [];
                     $ctx['send_error'] = $err;
+                    // Kept alongside the wording so the Lead Qualifier page can group failures
+                    // by cause and say which of them are worth resending.
+                    $ctx['send_error_code'] = $ecode;
                     db_run("UPDATE flow_runs SET status='blocked', context=?, updated_at=NOW() WHERE id=?", [json_encode($ctx, JSON_UNESCAPED_UNICODE), $runId]);
-                    db_run("INSERT INTO flow_messages (flow_id,step_id,run_id,client_id,contact_id,wa_message_id,status,error_title,created_at) VALUES (?,?,?,?,?,?, 'failed', ?, NOW())",
-                        [$m['flow_id'], $m['stepId'], $runId, $cid, $m['contact_id'], $rr['wamid'] ?? null, substr($err, 0, 255)]);
-                    if (function_exists('msg_log')) msg_log($cid, $m['contact_id'], 'out', $logTxt, ['type' => $logTyp, 'source' => 'qualifier', 'status' => 'failed', 'error' => $err]);
+                    db_run("INSERT INTO flow_messages (flow_id,step_id,run_id,client_id,contact_id,wa_message_id,status,error_code,error_title,created_at) VALUES (?,?,?,?,?,?, 'failed', ?, ?, NOW())",
+                        [$m['flow_id'], $m['stepId'], $runId, $cid, $m['contact_id'], $rr['wamid'] ?? null,
+                         $ecode !== '' ? substr($ecode, 0, 32) : null, substr($err, 0, 255)]);
+                    if (function_exists('msg_log')) msg_log($cid, $m['contact_id'], 'out', $logTxt, ['type' => $logTyp, 'source' => 'qualifier', 'status' => 'failed', 'error' => $err, 'error_code' => $ecode]);
                 }
             }
         }
@@ -2054,6 +2071,45 @@ function automation_ingest_rows(array $client, array $flow, string $csv, int $ma
     }
     fclose($fh);
     return $res;
+}
+
+/**
+ * A qualifier's stuck outreach, split by whether sending it again can actually succeed.
+ *
+ * "Blocked with no grade" means the first message never reached the lead, which is the whole
+ * set a client wants to act on. But that set mixes two very different things: a WhatsApp cap
+ * that lifts by itself (resend tomorrow and it works) and a number that cannot receive the
+ * message at all (resend and buy the identical error, minus a credit).
+ *
+ * Splitting them here keeps the page honest with itself — it would otherwise print "this
+ * number cannot receive messages, skip it" directly above a button that resends it.
+ *
+ * A run with no recorded error is treated as retryable: it blocked for a reason we never
+ * captured (out of credits is the common one), and those clear once the cause is fixed.
+ *
+ * @return array{retry:int[], never:int[]}
+ */
+function qualifier_stuck_runs(int $flowId, int $clientId): array
+{
+    $runs = db_all(
+        "SELECT r.id,
+                (SELECT fm.error_code  FROM flow_messages fm
+                  WHERE fm.run_id=r.id AND fm.status='failed' ORDER BY fm.id DESC LIMIT 1) AS code,
+                (SELECT fm.error_title FROM flow_messages fm
+                  WHERE fm.run_id=r.id AND fm.status='failed' ORDER BY fm.id DESC LIMIT 1) AS title
+           FROM flow_runs r
+          WHERE r.flow_id=? AND r.client_id=? AND r.status='blocked' AND r.grade IS NULL",
+        [$flowId, $clientId]);
+
+    $out = ['retry' => [], 'never' => []];
+    foreach ($runs as $r) {
+        $code = (string) ($r['code'] ?? '');
+        $ttl  = (string) ($r['title'] ?? '');
+        // No error recorded at all → retryable, per the note above.
+        $act  = ($code === '' && $ttl === '') ? 'later' : wa_error_explain($code, $ttl)['action'];
+        $out[$act === 'never' ? 'never' : 'retry'][] = (int) $r['id'];
+    }
+    return $out;
 }
 
 /**

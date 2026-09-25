@@ -8,6 +8,10 @@ declare(strict_types=1);
  * $varMap: { "1": {source:'static'|'name'|'attribute', value:'', fallback:''}, ... }
  */
 
+// campaign_template_text() renders a template to readable text through the channel layer.
+// Required explicitly rather than relying on automation.php having pulled it in first.
+require_once __DIR__ . '/channel.php';
+
 function campaign_resolve_value(array $spec, array $contact): string
 {
     $source   = (string) ($spec['source'] ?? 'static');
@@ -72,6 +76,41 @@ function campaign_components(array $varMap, array $tplComponents, array $contact
         [],                                  // no client → keep links; the worker swaps in the id
         'campaign_resolve_value'             // campaigns also support contact attributes
     );
+}
+
+/**
+ * A campaign template rendered to readable text, for the Inbox thread.
+ *
+ * The Cloud API is sent components (a body parameter list), not a sentence, so nothing in the
+ * send path ever builds the string the customer actually reads. The personal channel already
+ * had to build it — it has no approved templates and must send plain text — so this reuses
+ * that renderer rather than growing a second one that could disagree with it.
+ *
+ * `campaign_resolve_value` is passed deliberately: campaigns can fill a variable from a
+ * contact attribute, and the default resolver does not know about those, so omitting it would
+ * log a thread that quietly differs from what was sent.
+ *
+ * @param array $tpl templates row (wa_name, components, body_text) — components may be a JSON
+ *                   string, as it comes off the row, or already decoded
+ * @return string '' when there is nothing renderable, so callers keep their own fallback
+ */
+function campaign_template_text(array $tpl, array $cfg, array $contact): string
+{
+    if (!$tpl) return '';
+    $components = $tpl['components'] ?? [];
+    if (is_string($components)) $components = json_decode($components, true) ?: [];
+    if (!is_array($components)) $components = [];
+    if (!$components && trim((string) ($tpl['body_text'] ?? '')) === '') return '';
+
+    try {
+        return channel_render_template_text(
+            $components, $cfg, $contact, 'campaign_resolve_value', (string) ($tpl['body_text'] ?? ''));
+    } catch (Throwable $e) {
+        // A thread that reads "Template: name" is a small loss; a campaign worker that dies
+        // mid-batch because a template had an odd shape is a large one.
+        error_log('campaign_template_text failed: ' . $e->getMessage());
+        return '';
+    }
 }
 
 /**

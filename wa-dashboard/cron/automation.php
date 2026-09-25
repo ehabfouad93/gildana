@@ -10,16 +10,16 @@ declare(strict_types=1);
  * Single-runner via MySQL GET_LOCK, like cron/dispatch.php.
  */
 
-require __DIR__ . '/../includes/config_loader.php';
-require __DIR__ . '/../includes/helpers.php';
-require __DIR__ . '/../includes/crypto.php';
-require __DIR__ . '/../includes/db.php';
-require __DIR__ . '/../includes/whatsapp.php';
-require __DIR__ . '/../includes/credits.php';
-require __DIR__ . '/../includes/ai.php';
-require __DIR__ . '/../includes/notify.php';
-require __DIR__ . '/../includes/campaign.php';
-require __DIR__ . '/../includes/automation.php';
+require_once __DIR__ . '/../includes/config_loader.php';
+require_once __DIR__ . '/../includes/helpers.php';
+require_once __DIR__ . '/../includes/crypto.php';
+require_once __DIR__ . '/../includes/db.php';
+require_once __DIR__ . '/../includes/whatsapp.php';
+require_once __DIR__ . '/../includes/credits.php';
+require_once __DIR__ . '/../includes/ai.php';
+require_once __DIR__ . '/../includes/notify.php';
+require_once __DIR__ . '/../includes/campaign.php';
+require_once __DIR__ . '/../includes/automation.php';
 
 if (PHP_SAPI !== 'cli') {
     if (!hash_equals((string) config('webhook_verify_token'), (string) ($_GET['token'] ?? ''))) {

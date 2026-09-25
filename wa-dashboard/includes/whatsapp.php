@@ -466,6 +466,96 @@ function wa_error_is_transient(string $code, string $title): bool
     return false;
 }
 
+/**
+ * What a WhatsApp send error means in plain language, and whether it is worth trying again.
+ *
+ * Meta's own wording is written for developers and says nothing about what to do — a client
+ * reading "This message was not delivered to maintain healthy ecosystem engagement" has no way
+ * to know that it is a per-recipient cap, that nothing is wrong with their account, or that
+ * the same number usually works again tomorrow.
+ *
+ * `action` is the part that drives the UI, and the three values are genuinely different:
+ *
+ *   'later' — a temporary, per-recipient drop. Resending the same message to the same number
+ *             after the cap resets is the correct fix, so these get a Send again button.
+ *   'never' — Meta will return the same answer however often it is retried (blocked, not on
+ *             WhatsApp, held in an experiment group). Offering a retry here would burn a
+ *             credit to buy the identical error, so the UI offers to discard instead.
+ *   'fix'   — something in the setup is wrong (token, template parameters, media). A retry
+ *             is pointless until a human changes something, so the hint names what to change.
+ *
+ * Kept here rather than in the page that shows it because the Inbox, the campaign report and
+ * the Needs attention page all have to agree about what a code means — three copies of this
+ * ladder would drift, and the one that drifted would be the one telling a client to retry
+ * something that can never succeed.
+ *
+ * @return array{hint:string, action:string, label:string}
+ */
+function wa_error_explain(string $code, string $title = ''): array
+{
+    $code = trim($code);
+    $t    = strtolower($title);
+    $has  = fn(string $needle): bool => $needle !== '' && strpos($t, $needle) !== false;
+
+    // Per-recipient marketing cap. The single most common one on a real campaign, and the
+    // only one where "just send it again tomorrow" is genuinely the right advice.
+    if ($code === '131049' || $has('healthy ecosystem')) {
+        return ['action' => 'later', 'label' => 'Capped by WhatsApp for now',
+                'hint' => 'Nothing is wrong with your account. WhatsApp limits how many <em>marketing</em> '
+                        . 'messages one person receives from all businesses in a period and quietly drops '
+                        . 'the extras. It is per-recipient and temporary — the same number usually works '
+                        . 'again after 24 hours. To reduce it: send less often, keep your audience to people '
+                        . 'who actually reply, and send order or booking updates as a <strong>Utility</strong> '
+                        . 'template, which is not capped this way.'];
+    }
+    if ($code === '131047' || $has('re-engagement') || $has('24 hours')) {
+        return ['action' => 'later', 'label' => 'Outside the 24-hour window',
+                'hint' => 'More than 24 hours have passed since this contact last messaged you, so only an '
+                        . 'approved template can reach them. Sending this as a template will get through.'];
+    }
+    if ($code === '131056' || $code === '130429' || $has('rate limit') || $has('too many')) {
+        return ['action' => 'later', 'label' => 'Sending too fast',
+                'hint' => 'WhatsApp asked us to slow down. This clears by itself — try again in a few minutes.'];
+    }
+
+    if ($code === '130472') {
+        return ['action' => 'never', 'label' => 'In a Meta experiment group',
+                'hint' => 'Meta is holding marketing messages to this recipient as part of an experiment. '
+                        . 'Resending will not get through — skip this number for now.'];
+    }
+    if ($code === '131026' || $has('undeliverable')) {
+        return ['action' => 'never', 'label' => 'Cannot receive this message',
+                'hint' => 'The number may not be on WhatsApp, may have blocked you, or is in a region your '
+                        . 'account cannot message. Check the number is right and on WhatsApp.'];
+    }
+
+    if ($code === '132012' || $has('parameter')) {
+        return ['action' => 'fix', 'label' => 'Template fields missing',
+                'hint' => 'The template needs fields this campaign did not send. Re-create the campaign and '
+                        . 'fill every template field, including the header image.'];
+    }
+    if ($code === '131053' || $has('media')) {
+        return ['action' => 'fix', 'label' => 'WhatsApp could not read the media',
+                'hint' => 'Re-upload the header image with the Upload button so it is sent as a file rather '
+                        . 'than a link.'];
+    }
+    if ($code === '133010' || $has('not registered')) {
+        return ['action' => 'fix', 'label' => 'Phone number not registered',
+                'hint' => 'This number is not registered on the WhatsApp Business Platform — check it in Settings.'];
+    }
+    if ($code === '200' || $code === '190' || $code === '10' || $has('permission') || $has('token')) {
+        return ['action' => 'fix', 'label' => 'Access problem',
+                'hint' => 'The access token cannot send for this WhatsApp Business Account. Check the token '
+                        . 'and phone number in Settings.'];
+    }
+
+    // Unknown code. Say so honestly rather than inventing a cause — but a message that failed
+    // for a reason we cannot name is still worth one manual retry, which is the safe default.
+    return ['action' => 'later', 'label' => 'Send failed',
+            'hint' => 'WhatsApp rejected this message and did not say why in a way we recognise. '
+                    . 'Trying again is usually safe; if it keeps failing, contact support.'];
+}
+
 /** Does this template need a media header (and therefore gentler send concurrency)? */
 function wa_template_has_media(array $components): bool
 {

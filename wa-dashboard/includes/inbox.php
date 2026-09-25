@@ -18,11 +18,15 @@ function msg_log(int $clientId, int $contactId, string $direction, string $body,
 {
     try {
         return db_insert(
-            "INSERT INTO messages (client_id,contact_id,direction,type,body,wa_message_id,status,error_title,source,created_at)
-             VALUES (?,?,?,?,?,?,?,?,?,NOW())",
+            "INSERT INTO messages (client_id,contact_id,direction,type,body,wa_message_id,status,error_code,error_title,source,created_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?,NOW())",
             [
                 $clientId, $contactId, $direction, (string) ($opts['type'] ?? 'text'), $body,
-                $opts['wamid'] ?? null, $opts['status'] ?? null, $opts['error'] ?? null, $opts['source'] ?? null,
+                $opts['wamid'] ?? null, $opts['status'] ?? null,
+                // The code is what the Inbox explains from; the title is Meta's raw wording,
+                // kept so an unrecognised code still shows something truthful.
+                isset($opts['error_code']) && $opts['error_code'] !== '' ? substr((string) $opts['error_code'], 0, 32) : null,
+                $opts['error'] ?? null, $opts['source'] ?? null,
             ]
         );
     } catch (Throwable $e) {
@@ -67,12 +71,25 @@ function inbox_threads(int $clientId, string $q = '', int $limit = 200): array
 function inbox_thread(int $clientId, int $contactId, int $afterId = 0, int $limit = 400): array
 {
     $limit = max(1, min(1000, $limit));
-    return db_all(
-        "SELECT id, direction, type, body, status, error_title, created_at
+    $rows = db_all(
+        "SELECT id, direction, type, body, status, error_code, error_title, created_at
            FROM messages WHERE client_id=? AND contact_id=? AND id>?
           ORDER BY id ASC LIMIT {$limit}",
         [$clientId, $contactId, $afterId]
     );
+    /* Meta's own wording is all the thread used to show — "This message was not delivered to
+       maintain healthy ecosystem engagement" tells an agent nothing about whether the lead is
+       reachable, whether it was their fault, or what to do next. Attach the plain-language
+       explanation here so every caller of the thread gets the same answer. */
+    foreach ($rows as &$r) {
+        if (($r['status'] ?? '') !== 'failed') continue;
+        $ex = wa_error_explain((string) ($r['error_code'] ?? ''), (string) ($r['error_title'] ?? ''));
+        $r['error_label']  = $ex['label'];
+        $r['error_hint']   = strip_tags($ex['hint']);   // plain text: the thread escapes on render
+        $r['error_action'] = $ex['action'];
+    }
+    unset($r);
+    return $rows;
 }
 
 /** Mark a thread read (clears its unread count). */

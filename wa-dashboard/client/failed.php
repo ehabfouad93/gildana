@@ -23,7 +23,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['ajax'])) {
         // Retry clears the attempt history so the backoff starts fresh.
         $n = db_run("UPDATE campaign_messages SET status='queued', attempt_count=0, next_attempt_at=NULL,
                             claimed_by=NULL, claimed_at=NULL, error_code=NULL, error_title=NULL, updated_at=NOW()
-                      WHERE id=? AND client_id=? AND status IN ('dead','review')", [$id, $cid]);
+                      WHERE id=? AND client_id=? AND status IN ('dead','review','failed')", [$id, $cid]);
         if ($n) {
             db_run("DELETE FROM send_attempts WHERE campaign_message_id=?", [$id]);
             trigger_worker();
@@ -32,8 +32,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['ajax'])) {
     }
     if ($a === 'discard') {
         $n = db_run("UPDATE campaign_messages SET status='failed', error_title='Discarded by user', updated_at=NOW()
-                      WHERE id=? AND client_id=? AND status IN ('dead','review')", [$id, $cid]);
+                      WHERE id=? AND client_id=? AND status IN ('dead','review','failed')", [$id, $cid]);
         json_out(['ok' => (bool) $n]);
+    }
+    if ($a === 'retry_all_capped') {
+        /* Only the codes wa_error_explain() marks 'later' are eligible, so this cannot mass-retry
+           blocked numbers or a bad token. Filtered in PHP rather than SQL because the mapping
+           from code to "worth retrying" lives in one function, not duplicated in a query. */
+        $ids = [];
+        foreach (db_all("SELECT id, error_code, error_title FROM campaign_messages
+                          WHERE client_id=? AND status='failed'
+                            AND COALESCE(error_title,'') <> 'Discarded by user'", [$cid]) as $r) {
+            $ex = wa_error_explain((string) ($r['error_code'] ?? ''), (string) ($r['error_title'] ?? ''));
+            if ($ex['action'] === 'later') $ids[] = (int) $r['id'];
+        }
+        if ($ids) {
+            $ph = implode(',', array_fill(0, count($ids), '?'));
+            db_run("UPDATE campaign_messages SET status='queued', attempt_count=0, next_attempt_at=NULL,
+                           claimed_by=NULL, claimed_at=NULL, error_code=NULL, error_title=NULL, updated_at=NOW()
+                     WHERE id IN ($ph) AND client_id=?", array_merge($ids, [$cid]));
+            trigger_worker();
+        }
+        json_out(['ok' => true, 'n' => count($ids)]);
     }
     if ($a === 'retry_all_dead') {
         $n = db_run("UPDATE campaign_messages SET status='queued', attempt_count=0, next_attempt_at=NULL,
@@ -45,17 +65,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['ajax'])) {
     json_out(['ok' => false]);
 }
 
-$rows = db_all(
+/* 'failed' is included deliberately, and it is the reason this page was missing most of what
+   a client actually wanted to see. A per-recipient cap (#131049) is NOT retried automatically
+   — retrying inside the same run returns the identical error and burns a credit — so it lands
+   as terminal 'failed'. This page only listed 'dead' and 'review', so those messages vanished:
+   no count, no reason, no way to send them again once the cap had lifted.
+
+   The filter is by cause, not by status: wa_error_explain() marks a code 'later' only when
+   resending it later can actually succeed. A blocked number or a bad token stays off this list
+   rather than inviting a retry that cannot work. */
+$candidates = db_all(
     "SELECT m.*, c.name AS campaign_name, ct.name AS contact_name
        FROM campaign_messages m
        JOIN campaigns c  ON c.id = m.campaign_id
        LEFT JOIN contacts ct ON ct.id = m.contact_id
-      WHERE m.client_id = ? AND m.status IN ('dead','review')
-      ORDER BY m.updated_at DESC LIMIT 500", [$cid]);
+      WHERE m.client_id = ? AND m.status IN ('dead','review','failed')
+        AND COALESCE(m.error_title,'') <> 'Discarded by user'
+      ORDER BY m.updated_at DESC LIMIT 800", [$cid]);
+
+$rows = [];
+foreach ($candidates as $r) {
+    if ($r['status'] === 'failed') {
+        $ex = wa_error_explain((string) ($r['error_code'] ?? ''), (string) ($r['error_title'] ?? ''));
+        if ($ex['action'] !== 'later') continue;      // a resend would buy the same error
+        $r['explain'] = $ex;
+    }
+    $rows[] = $r;
+    if (count($rows) >= 500) break;
+}
 
 $deadCount   = 0;
 $reviewCount = 0;
-foreach ($rows as $r) { $r['status'] === 'dead' ? $deadCount++ : $reviewCount++; }
+$cappedCount = 0;
+foreach ($rows as $r) {
+    if ($r['status'] === 'dead') $deadCount++;
+    elseif ($r['status'] === 'review') $reviewCount++;
+    else $cappedCount++;
+}
 
 client_header('Needs attention', 'attention', $CLIENT);
 ?>
@@ -88,6 +134,18 @@ client_header('Needs attention', 'attention', $CLIENT);
     </div>
   <?php endif; ?>
 
+  <?php if ($cappedCount): ?>
+    <div class="note warn mb16">
+      <strong><?= (int) $cappedCount ?> message<?= $cappedCount === 1 ? '' : 's' ?> WhatsApp held back for now.</strong>
+      These were not charged and nothing is wrong with your account — WhatsApp limits how many
+      marketing messages one person receives from all businesses in a period. It clears by
+      itself, usually within 24 hours, so sending them again tomorrow normally works.
+      <div style="margin-top:10px">
+        <button class="btn btn-sm" id="retry-capped">Send all <?= (int) $cappedCount ?> again</button>
+      </div>
+    </div>
+  <?php endif; ?>
+
   <div class="card">
     <table class="table">
       <thead><tr><th>Campaign</th><th>To</th><th>What happened</th><th>Tries</th><th></th></tr></thead>
@@ -103,6 +161,9 @@ client_header('Needs attention', 'attention', $CLIENT);
             <?php if ($r['status'] === 'review'): ?>
               <span class="pill warn">Result unconfirmed</span>
               <span class="text-muted d-block">Sent, but WhatsApp never confirmed it.</span>
+            <?php elseif ($r['status'] === 'failed' && !empty($r['explain'])): ?>
+              <span class="pill gold"><?= e((string) $r['explain']['label']) ?></span>
+              <span class="text-muted d-block"><?= strip_tags((string) $r['explain']['hint']) ?></span>
             <?php else: ?>
               <span class="pill red">Gave up</span>
               <span class="text-muted d-block"><?= e((string) ($r['error_title'] ?: 'Repeated errors')) ?></span>
@@ -139,5 +200,7 @@ document.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click',
 }));
 const all = document.getElementById('retry-all');
 if (all) all.addEventListener('click', () => act('retry_all_dead', '', all));
+const cap = document.getElementById('retry-capped');
+if (cap) cap.addEventListener('click', () => act('retry_all_capped', '', cap));
 </script>
 <?php layout_footer(); ?>

@@ -28,6 +28,10 @@ $IB_SEP = strpos($IB_ENDPOINT, '?') === false ? '?' : '&';
   .ib-out{align-self:flex-end;background:#d9fdd3}
   .ib-b .st{display:block;text-align:right;font-size:10.5px;color:#667;margin-top:2px}
   .ib-b .st.failed{color:#c0392b}
+  /* The explanation under a failed send. Left-aligned and wrapping, unlike the timestamp it
+     sits beneath, because it is a sentence to read rather than a status to glance at. */
+  .ib-b .ib-err-hint{display:block;text-align:left;font-size:11px;line-height:1.45;
+    color:#8a6d3b;background:#fdf6e3;border-radius:6px;padding:5px 7px;margin-top:4px;white-space:normal}
   .ib-foot{padding:10px 12px;background:var(--surface,#fff);border-top:1px solid var(--line,rgba(13,19,33,.10))}
   .ib-foot form{display:flex;gap:8px;align-items:flex-end}
   .ib-foot textarea{flex:1;resize:none;border:1px solid var(--line,rgba(13,19,33,.10));border-radius:20px;padding:9px 14px;font-size:13.5px;max-height:120px}
@@ -122,7 +126,17 @@ async function pollThread(){
     div.className='ib-b '+(m.direction==='out'?'ib-out':'ib-in');
     let st=''; if(m.direction==='out'){ const t=tick(m.status); if(t) st=`<span class="st ${m.status==='failed'?'failed':''}">${t} ${tfmt(m.created_at)}</span>`; }
     else st=`<span class="st">${tfmt(m.created_at)}</span>`;
-    const errLine = (m.status==='failed' && m.error_title) ? `<span class="st failed" style="display:block">⚠ ${esc(m.error_title)}</span>` : '';
+    /* A failed send now says what went wrong in words the agent can act on, with Meta's own
+       wording kept underneath so nothing is hidden. 'never' means a resend buys the same
+       error, so the line says so rather than leaving them to try it three times. */
+    let errLine = '';
+    if (m.status==='failed' && (m.error_label || m.error_title)) {
+      const label = esc(m.error_label || m.error_title);
+      const hint  = m.error_hint ? `<span class="ib-err-hint">${esc(m.error_hint)}</span>` : '';
+      const where = m.error_action === 'never' ? ''
+                  : `<span class="ib-err-hint">Resend it from ${m.error_action === 'fix' ? 'Campaigns once fixed' : 'Needs attention or Lead Qualifier'}.</span>`;
+      errLine = `<span class="st failed" style="display:block">⚠ ${label}</span>${hint}${where}`;
+    }
     div.innerHTML=esc(m.body)+st+errLine;
     body.appendChild(div);
   });
