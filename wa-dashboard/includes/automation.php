@@ -189,6 +189,8 @@ function auto_send(array $client, array &$run, array $step, array $contact, stri
         msg_log((int) $client['id'], (int) $contact['id'], 'out', $body, [
             'type' => $kind, 'source' => 'automation', 'status' => $status,
             'wamid' => $res['wamid'] ?? null, 'error' => $res['error_title'] ?? null,
+            'error_code' => (string) ($res['error_code'] ?? ''),
+            'ref' => (int) $run['id'],
         ]);
     }
     return (bool) $res['ok'];
@@ -1875,7 +1877,7 @@ function automation_send_outreach(int $maxPerRun = 0, int $onlyFlowId = 0): int
                     db_run("UPDATE flow_runs SET status='waiting_input', current_step_id=?, updated_at=NOW() WHERE id=?", [$m['stepId'], $runId]);
                     db_run("INSERT INTO flow_messages (flow_id,step_id,run_id,client_id,contact_id,wa_message_id,status,created_at) VALUES (?,?,?,?,?,?, 'sent', NOW())",
                         [$m['flow_id'], $m['stepId'], $runId, $cid, $m['contact_id'], $rr['wamid'] ?? null]);
-                    if (function_exists('msg_log')) msg_log($cid, $m['contact_id'], 'out', $logTxt, ['type' => $logTyp, 'source' => 'qualifier', 'status' => 'sent', 'wamid' => $rr['wamid'] ?? null]);
+                    if (function_exists('msg_log')) msg_log($cid, $m['contact_id'], 'out', $logTxt, ['type' => $logTyp, 'source' => 'qualifier', 'status' => 'sent', 'wamid' => $rr['wamid'] ?? null, 'ref' => (int) $runId]);
                     $sent++;
                 } else {
                     credits_adjust($cid, 1, 'automation_refund', null);
@@ -1890,7 +1892,7 @@ function automation_send_outreach(int $maxPerRun = 0, int $onlyFlowId = 0): int
                     db_run("INSERT INTO flow_messages (flow_id,step_id,run_id,client_id,contact_id,wa_message_id,status,error_code,error_title,created_at) VALUES (?,?,?,?,?,?, 'failed', ?, ?, NOW())",
                         [$m['flow_id'], $m['stepId'], $runId, $cid, $m['contact_id'], $rr['wamid'] ?? null,
                          $ecode !== '' ? substr($ecode, 0, 32) : null, substr($err, 0, 255)]);
-                    if (function_exists('msg_log')) msg_log($cid, $m['contact_id'], 'out', $logTxt, ['type' => $logTyp, 'source' => 'qualifier', 'status' => 'failed', 'error' => $err, 'error_code' => $ecode]);
+                    if (function_exists('msg_log')) msg_log($cid, $m['contact_id'], 'out', $logTxt, ['type' => $logTyp, 'source' => 'qualifier', 'status' => 'failed', 'error' => $err, 'error_code' => $ecode, 'ref' => (int) $runId]);
                 }
             }
         }

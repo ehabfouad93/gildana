@@ -395,6 +395,9 @@ try {
                         'status' => $r['ok'] ? 'sent' : 'failed', 'wamid' => $r['wamid'] ?? null,
                         'error' => $r['ok'] ? null : (string) $r['error_title'],
                         'error_code' => $r['ok'] ? null : (string) ($r['error_code'] ?? ''),
+                        // Lets the Inbox resend this exact message without the client having
+                        // to find the campaign it belonged to.
+                        'ref' => (int) $mid,
                     ]);
                 }
                 // A send attempt spends slot budget even when it fails: the number still
