@@ -2,9 +2,13 @@
 /**
  * Shared Inbox UI (WhatsApp-style two-pane live chat). Include after the page header.
  * Expects: $IB_ENDPOINT (string, e.g. 'inbox.php' or 'inbox.php?client=3').
+ * Optional: $IB_UPLOAD — a media upload endpoint for the template picker. Left empty the
+ *   Upload button is not shown and a link can still be pasted. Admin has no such endpoint
+ *   (upload_media.php saves under the signed-in CLIENT's folder), so admin gets the paste box.
  * The including page must already have handled ?ajax via inbox_handle_ajax().
  */
 $IB_ENDPOINT = $IB_ENDPOINT ?? 'inbox.php';
+$IB_UPLOAD   = $IB_UPLOAD ?? '';
 $IB_SEP = strpos($IB_ENDPOINT, '?') === false ? '?' : '&';
 ?>
 <style>
@@ -136,6 +140,7 @@ $IB_SEP = strpos($IB_ENDPOINT, '?') === false ? '?' : '&';
 
 <script>
 const IB_URL = <?= json_encode($IB_ENDPOINT) ?>;
+const IB_UPLOAD = <?= json_encode($IB_UPLOAD) ?>;
 const IB_SEP = <?= json_encode($IB_SEP) ?>;
 const IB_CSRF = <?= json_encode(csrf_token()) ?>;
 let ibCur = 0, ibLast = 0, ibOpen = false;
@@ -259,7 +264,13 @@ el('ib-body').addEventListener('click', async e=>{
     fd.append('ajax','resend'); fd.append('csrf_token',IB_CSRF); fd.append('message',rs.dataset.msg);
     try {
       const r = await fetch(IB_URL,{method:'POST',body:fd}); const d = await r.json();
-      if (d.ok) { rs.textContent = '✓ Queued'; loadThreads(); }
+      if (d.ok) { rs.textContent = '✓ Sent again'; pollThread(); loadThreads(); }
+      else if (d.pick_template) {
+        /* The variables were never stored, so "the same template" needs the fields filled in
+           rather than guessed. Open the picker on it instead of refusing. */
+        rs.disabled = false; rs.textContent = was;
+        openTpl(d.pick_template);
+      }
       else { rs.disabled = false; rs.textContent = was; alert(d.error || 'Could not resend.'); }
     } catch (err) { rs.disabled = false; rs.textContent = was; alert('Could not resend.'); }
     return;
@@ -276,7 +287,7 @@ tplBack().addEventListener('click', e=>{ if(e.target === tplBack()) closeTpl(); 
 document.querySelector('.ib-tpl-x').addEventListener('click', closeTpl);
 el('ib-tpl-back').addEventListener('click', ()=> renderTplList());
 
-async function openTpl(){
+async function openTpl(preselectId){
   if(!ibCur) return;
   tplBack().hidden = false;
   if (ibTpls === null) {
@@ -286,7 +297,8 @@ async function openTpl(){
       ibTpls = d.ok ? (d.templates || []) : [];
     } catch(e){ ibTpls = []; }
   }
-  renderTplList();
+  const i = preselectId ? ibTpls.findIndex(t => t.id === preselectId) : -1;
+  if (i >= 0) pickTpl(i); else renderTplList();
 }
 
 function renderTplList(){
@@ -318,14 +330,45 @@ function pickTpl(i){
     f.push(`<div class="ib-tpl-f"><label>Header field {{${n}}}</label><input data-h="${n}"></div>`);
   for (let n=1; n<=ibPick.body_vars; n++)
     f.push(`<div class="ib-tpl-f"><label>Field {{${n}}}</label><input data-v="${n}"></div>`);
-  if (ibPick.needs_media)
-    f.push(`<div class="ib-tpl-f"><label>${esc(ibPick.needs_media)} link</label><input data-m="1" placeholder="https://…"></div>`);
+  if (ibPick.needs_media) {
+    /* Prefilled with the image this template was last sent with, because that is almost always
+       the right one and the agent should not have to go and find it. Upload is there for the
+       first send, or when they want a different one. */
+    const cur = ibPick.last_media || '';
+    f.push(`<div class="ib-tpl-f">
+      <label>${esc(ibPick.needs_media)} — reusing the one from your campaign${cur?'':' (none found yet, upload or paste a link)'}</label>
+      <div style="display:flex;gap:6px;align-items:center">
+        <input data-m="1" value="${esc(cur)}" placeholder="https://…" style="flex:1">
+        ${IB_UPLOAD ? `<button type="button" class="btn btn-ghost btn-sm" id="ib-tpl-up">Upload</button>
+        <input type="file" id="ib-tpl-file" hidden accept="image/*,video/mp4,application/pdf">` : ''}
+      </div>
+      <span id="ib-tpl-upst" class="text-muted" style="font-size:11px"></span>
+    </div>`);
+  }
   el('ib-tpl-list').innerHTML =
     `<b style="font-size:13px">${esc(ibPick.name)}</b>
      <span style="display:block;font-size:11.5px;color:#667;white-space:pre-wrap;margin-top:4px">${esc(ibPick.preview||'')}</span>
      ${f.join('') || '<p class="text-muted" style="font-size:12.5px;margin-top:10px">Nothing to fill in — ready to send.</p>'}
      <div class="ib-tpl-err" id="ib-tpl-err" hidden></div>`;
   el('ib-tpl-foot').hidden = false;
+
+  const up = el('ib-tpl-up'), file = el('ib-tpl-file'), st = el('ib-tpl-upst');
+  if (up && file) {
+    up.addEventListener('click', ()=> file.click());
+    file.addEventListener('change', async ()=>{
+      if (!file.files || !file.files[0]) return;
+      st.textContent = 'Uploading…'; up.disabled = true;
+      const fd = new FormData(); fd.append('csrf_token', IB_CSRF); fd.append('media', file.files[0]);
+      try {
+        const r = await fetch(IB_UPLOAD, {method:'POST', body:fd}); const d = await r.json();
+        if (d.ok) {
+          el('ib-tpl-list').querySelector('[data-m]').value = d.url;
+          st.textContent = '✓ Uploaded';
+        } else st.textContent = d.error || 'Upload failed.';
+      } catch(e){ st.textContent = 'Upload failed.'; }
+      up.disabled = false;
+    });
+  }
 }
 
 el('ib-tpl-send').addEventListener('click', async ()=>{

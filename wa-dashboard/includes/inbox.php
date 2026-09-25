@@ -90,9 +90,11 @@ function inbox_thread(int $clientId, int $contactId, int $afterId = 0, int $limi
         $r['error_hint']   = strip_tags($ex['hint']);   // plain text: the thread escapes on render
         $r['error_action'] = $ex['action'];
         // Offer the button only when a resend can actually succeed AND we know what to re-run.
-        $r['can_resend']   = $ex['action'] === 'later'
-                          && (int) ($r['source_ref_id'] ?? 0) > 0
-                          && in_array((string) ($r['source'] ?? ''), ['campaign', 'qualifier', 'automation'], true);
+        /* Offered whenever the error can clear. A row with no source_ref_id still resends —
+           inbox_resend() falls back to sending the text again, or to reopening the template
+           picker — so withholding the button here would hide the feature from exactly the
+           older messages that most need it. */
+        $r['can_resend']   = $ex['action'] === 'later';
     }
     unset($r);
     return $rows;
@@ -167,6 +169,54 @@ function inbox_handle_ajax(array $client): void
 }
 
 /**
+ * Resending a message that has no queued work item behind it.
+ *
+ * Returns null when nothing can be done; otherwise a result for inbox_resend() to hand back.
+ * Two shapes, because two different things are missing:
+ *
+ *   plain text  — the body IS the message, so it goes straight back out. Only inside the
+ *                 24-hour window; outside it WhatsApp accepts nothing but a template, and
+ *                 saying so beats a Meta error the agent has to decode.
+ *
+ *   a template  — the body was rendered from variables that were never stored, so sending
+ *                 "the same thing" is not something we can reconstruct. Rather than refuse or
+ *                 silently send something different, name the template and let the UI reopen
+ *                 the picker on it with the fields showing.
+ */
+function inbox_resend_fallback(array $client, array $m): ?array
+{
+    $cid       = (int) $client['id'];
+    $contactId = (int) $m['contact_id'];
+    $type      = (string) ($m['type'] ?? 'text');
+    $body      = (string) ($m['body'] ?? '');
+
+    if ($type === 'template') {
+        /* Rows written before templates were rendered to text logged "Template: <wa_name>",
+           which is enough to find the template again — the whole reason those rows are the
+           ones most likely to need this. */
+        $name = '';
+        if (preg_match('/Template:\s*(\S+)/u', $body, $mm)) $name = trim($mm[1]);
+        $tpl = $name !== ''
+            ? db_row("SELECT id FROM templates WHERE client_id=? AND wa_name=? AND LOWER(status)='approved'", [$cid, $name])
+            : null;
+        if (!$tpl) return null;
+        return ['ok' => false, 'pick_template' => (int) $tpl['id'],
+                'error' => 'Choose the fields for this template and send it again.'];
+    }
+
+    if (trim($body) === '') return null;
+
+    $contact = db_row("SELECT * FROM contacts WHERE id=? AND client_id=?", [$contactId, $cid]);
+    if (!$contact) return ['ok' => false, 'error' => 'Contact not found.'];
+    if (!inbox_window_open($contact, $client)) {
+        return ['ok' => false, 'error' => 'More than 24 hours have passed, so only a template can reach '
+                                        . 'this contact now — use “Try another template”.'];
+    }
+    $res = inbox_send($client, $contactId, $body);
+    return ['ok' => !empty($res['ok']), 'error' => (string) ($res['error'] ?? '')];
+}
+
+/**
  * Send a failed message again, from the thread it failed in.
  *
  * The Inbox could already explain a failure but not act on it, so a client reading "this clears
@@ -201,10 +251,18 @@ function inbox_resend(array $client, int $messageId): array
 
     $ref    = (int) ($m['source_ref_id'] ?? 0);
     $source = (string) ($m['source'] ?? '');
+
+    /* No queued item to re-run — either a message logged before source_ref_id existed, or one
+       an agent sent by hand. Send it again directly rather than refusing: the client's question
+       is "send this to this person again", and we still have the message.
+
+       A template needs its variables, which were never stored, so this hands the UI the
+       template to reopen the picker on instead of guessing values. Plain text we can simply
+       send, when the 24-hour window still allows it. */
     if ($ref <= 0) {
-        return ['ok' => false, 'error' => $source === 'manual'
-            ? 'Type the message again to resend it.'
-            : 'This message was sent before resending was supported — resend it from the campaign or qualifier.'];
+        $again = inbox_resend_fallback($client, $m);
+        if ($again !== null) return $again;
+        return ['ok' => false, 'error' => 'There is nothing recorded to send again for this message.'];
     }
 
     if ($source === 'campaign') {
@@ -233,6 +291,52 @@ function inbox_resend(array $client, int $messageId): array
 }
 
 /**
+ * The header media each template was last sent with, keyed by template id.
+ *
+ * Campaigns keep it in campaigns.variable_map; a qualifier's outreach step keeps it in the
+ * step config, under 'header_media' on the Cloud path and 'media' on the personal one. Both are
+ * searched, newest first, so whichever the client actually used is what comes back.
+ *
+ * Read rather than joined because both are JSON columns: a LIKE against JSON text would match
+ * substrings of unrelated keys, and MySQL's JSON functions are not available on every MariaDB
+ * build this ships to.
+ *
+ * @return array<int, string>
+ */
+function inbox_template_media(int $clientId): array
+{
+    $out = [];
+
+    try {
+        foreach (db_all(
+            "SELECT template_id, variable_map FROM campaigns
+              WHERE client_id=? AND template_id IS NOT NULL AND variable_map IS NOT NULL
+              ORDER BY id DESC LIMIT 300", [$clientId]) as $c) {
+            $tid = (int) $c['template_id'];
+            if ($tid <= 0 || isset($out[$tid])) continue;          // newest wins
+            $url = trim((string) ((json_decode((string) $c['variable_map'], true) ?: [])['header_media'] ?? ''));
+            if ($url !== '') $out[$tid] = $url;
+        }
+
+        foreach (db_all(
+            "SELECT config FROM flow_steps
+              WHERE client_id=? AND type='template' AND config IS NOT NULL
+              ORDER BY id DESC LIMIT 300", [$clientId]) as $st) {
+            $cfg = json_decode((string) $st['config'], true) ?: [];
+            $tid = (int) ($cfg['template_id'] ?? 0);
+            if ($tid <= 0 || isset($out[$tid])) continue;
+            $url = trim((string) ($cfg['header_media'] ?? $cfg['media'] ?? ''));
+            if ($url !== '') $out[$tid] = $url;
+        }
+    } catch (Throwable $e) {
+        // A prefill is a convenience; failing to find one must not stop the picker opening.
+        error_log('inbox_template_media failed: ' . $e->getMessage());
+    }
+
+    return $out;
+}
+
+/**
  * Approved templates this client can send from the Inbox, with what each one needs filled in.
  *
  * The 24-hour window is the reason this exists. Once it closes the reply box is disabled and a
@@ -248,6 +352,13 @@ function inbox_templates(int $clientId): array
            FROM templates
           WHERE client_id=? AND LOWER(status)='approved'
           ORDER BY wa_name", [$clientId]);
+
+    /* The header image this client last sent with each template.
+       A media-header template needs a link, and asking an agent to paste one mid-conversation
+       is asking for the wrong thing: the image was already uploaded when the campaign or the
+       qualifier was built, and it is the same image every time. Look it up and prefill it, so
+       the common case is nothing to fill in at all. */
+    $media = inbox_template_media($clientId);
 
     $out = [];
     foreach ($rows as $t) {
@@ -265,6 +376,7 @@ function inbox_templates(int $clientId): array
             'body_vars'   => (int) ($spec['body_vars'] ?? 0),
             'header_vars' => $hf === 'TEXT' ? (int) ($spec['header']['text_vars'] ?? 0) : 0,
             'needs_media' => in_array($hf, ['IMAGE', 'VIDEO', 'DOCUMENT'], true) ? strtolower($hf) : '',
+            'last_media'  => (string) ($media[(int) $t['id']] ?? ''),
         ];
     }
     return $out;

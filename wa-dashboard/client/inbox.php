@@ -9,5 +9,6 @@ inbox_handle_ajax($CLIENT);
 client_header('Inbox', 'inbox', $CLIENT);
 page_head('Inbox');
 $IB_ENDPOINT = 'inbox.php';
+$IB_UPLOAD   = 'upload_media.php';   // lets the template picker upload a header image
 require __DIR__ . '/../includes/inbox_view.php';
 layout_footer();
