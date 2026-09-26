@@ -179,7 +179,7 @@ function inbox_handle_ajax(array $client): void
     }
     if ($a === 'resend') {
         verify_csrf();
-        json_out(inbox_resend($client, (int) ($_POST['message'] ?? 0)));
+        json_out(inbox_resend($client, (int) ($_POST['message'] ?? 0), !empty($_POST['schedule'])));
     }
     if ($a === 'templates') {
         json_out(['ok' => true, 'templates' => inbox_templates($cid)]);
@@ -280,7 +280,7 @@ function inbox_resend_fallback(array $client, array $m): ?array
  *
  * @return array{ok:bool, error?:string}
  */
-function inbox_resend(array $client, int $messageId): array
+function inbox_resend(array $client, int $messageId, bool $schedule = false): array
 {
     $cid = (int) $client['id'];
     $m = db_row("SELECT * FROM messages WHERE id=? AND client_id=?", [$messageId, $cid]);
@@ -310,12 +310,13 @@ function inbox_resend(array $client, int $messageId): array
         return ['ok' => false, 'error' => 'There is nothing recorded to send again for this message.'];
     }
 
-    /* When the cap is still in force, queue the message for the moment it lifts rather than
-       sending it into the same rejection. The worker already respects next_attempt_at, and
-       outreach now respects wait_until, so this is a scheduled send and not a loop the client
-       has to run by hand — which is what they were doing: resend, fail, resend, fail. */
+    /* Sending again means NOW unless the client explicitly asked us to wait.
+       The Inbox is where an agent goes to push a stuck message out by hand, so defaulting to
+       "we will try tomorrow" takes away the one thing the button is for. Scheduling is offered
+       beside it for the capped case, where now is likely to fail — but it is their call, and
+       only they know whether this lead is worth spending a credit to find out. */
     $waitUntil = null;
-    if (wa_error_is_capped((string) ($m['error_code'] ?? ''), (string) ($m['error_title'] ?? ''))) {
+    if ($schedule && wa_error_is_capped((string) ($m['error_code'] ?? ''), (string) ($m['error_title'] ?? ''))) {
         $lifts = strtotime((string) $m['created_at']) + 24 * 3600;
         if ($lifts > time()) $waitUntil = date('Y-m-d H:i:s', $lifts);
     }
@@ -525,8 +526,16 @@ function inbox_send_template(array $client, int $contactId, int $templateId,
     // An agent sending by hand is taking the conversation over, same as a typed reply.
     if (!empty($res['ok'])) inbox_take_over($cid, $contactId);
 
-    return ['ok' => !empty($res['ok']), 'id' => $id,
-            'error' => !empty($res['ok']) ? '' : (string) ($res['error_title'] ?? 'Send failed.')];
+    if (!empty($res['ok'])) return ['ok' => true, 'id' => $id];
+
+    /* Say what WhatsApp said, in words plus its code. "Send failed" tells an agent nothing and
+       tells support less; the code is what separates a marketing cap (wait, or use a utility
+       template) from a bad token (nothing will send until Settings is fixed). */
+    $code = (string) ($res['error_code'] ?? '');
+    $ex   = wa_error_explain($code, (string) ($res['error_title'] ?? ''));
+    return ['ok' => false, 'id' => $id, 'error_code' => $code,
+            'error' => $ex['label'] . ($code !== '' ? ' (#' . $code . ')' : '')
+                     . ' — ' . strip_tags($ex['hint'])];
 }
 
 /** Send a manual reply (free-form text, 24h window only). Costs 1 credit. */

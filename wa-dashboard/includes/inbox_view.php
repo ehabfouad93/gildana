@@ -41,6 +41,8 @@ $IB_SEP = strpos($IB_ENDPOINT, '?') === false ? '?' : '&';
     color:#fff;background:var(--brand,#6c4cf1);border:0;border-radius:6px;padding:5px 10px;cursor:pointer}
   .ib-b .ib-resend:hover{filter:brightness(1.08)}
   .ib-b .ib-resend[disabled]{opacity:.55;cursor:default}
+  .ib-b .ib-later{background:transparent;color:var(--brand,#6c4cf1);border:1px solid currentColor;margin-left:6px}
+  .ib-b .ib-resend-err{color:#8a1f11;background:#fdecea}
   .ib-b .ib-tpl-alt{display:inline-block;margin:6px 0 0 6px;font-size:11.5px;font-weight:600;
     color:var(--brand,#6c4cf1);background:transparent;border:1px solid currentColor;border-radius:6px;
     padding:4px 9px;cursor:pointer}
@@ -199,9 +201,11 @@ async function pollThread(){
          It is offered only when the error can clear and we know which queued item to re-run;
          otherwise fall back to telling them where the fix lives. */
       const again = m.can_resend
-        ? `<button class="ib-resend" data-msg="${m.id}" data-wait="${m.resend_wait||0}"
-             title="${m.resend_wait ? 'WhatsApp is still capping this number. It will go out automatically once the cap lifts.' : 'Send this message again now'}"
-           >↻ ${m.resend_wait ? `Send when the cap lifts (~${m.resend_wait}h)` : 'Send again'}</button>`
+        ? `<button class="ib-resend" data-msg="${m.id}" title="Send this message again now">↻ Send again</button>`
+          + (m.resend_wait
+             ? `<button class="ib-resend ib-later" data-msg="${m.id}" data-schedule="1"
+                  title="Queue it and let it go out by itself once WhatsApp lifts the cap"
+                >⏱ Or wait ~${m.resend_wait}h</button>` : '')
         : (m.error_action === 'never' ? ''
            : `<span class="ib-err-hint">Resend it from ${m.error_action === 'fix' ? 'Campaigns once fixed' : 'Needs attention or Lead Qualifier'}.</span>`);
       /* A different template is often the better move: when WhatsApp caps a marketing
@@ -262,13 +266,14 @@ el('ib-body').addEventListener('click', async e=>{
   const rs = e.target.closest('.ib-resend');
   if (rs) {
     rs.disabled = true; const was = rs.textContent;
-    rs.textContent = parseInt(rs.dataset.wait || '0', 10) > 0 ? 'Scheduling…' : 'Sending…';
+    rs.textContent = rs.dataset.schedule ? 'Scheduling…' : 'Sending…';
     const fd = new FormData();
     fd.append('ajax','resend'); fd.append('csrf_token',IB_CSRF); fd.append('message',rs.dataset.msg);
+    if (rs.dataset.schedule) fd.append('schedule','1');
     try {
       const r = await fetch(IB_URL,{method:'POST',body:fd}); const d = await r.json();
       if (d.ok) {
-        rs.textContent = d.queued === 'later' ? `✓ Will send in ~${d.hours}h` : '✓ Sent again';
+        rs.textContent = d.queued === 'later' ? `✓ Will send in ~${d.hours}h` : '✓ Queued to send';
         pollThread(); loadThreads();
       }
       else if (d.pick_template !== undefined) {
@@ -277,12 +282,23 @@ el('ib-body').addEventListener('click', async e=>{
         rs.disabled = false; rs.textContent = was;
         openTpl(d.pick_template || 0);      // 0 = we could not identify it; show the list
       }
-      else { rs.disabled = false; rs.textContent = was; alert(d.error || 'Could not resend.'); }
-    } catch (err) { rs.disabled = false; rs.textContent = was; alert('Could not resend.'); }
+      else {
+        rs.disabled = false; rs.textContent = was;
+        showResendErr(rs, d.error || 'Could not resend.');
+      }
+    } catch (err) { rs.disabled = false; rs.textContent = was; showResendErr(rs, 'Could not resend.'); }
     return;
   }
   if (e.target.closest('.ib-tpl-alt')) openTpl();
 });
+/* An alert() is gone by the time anyone can read the code in it, and the code is the whole
+   point — it is what tells a marketing cap apart from a bad token. Keep it on the bubble. */
+function showResendErr(btn, msg){
+  const b = btn.closest('.ib-b'); if (!b) { alert(msg); return; }
+  let box = b.querySelector('.ib-resend-err');
+  if (!box) { box = document.createElement('span'); box.className = 'ib-err-hint ib-resend-err'; b.appendChild(box); }
+  box.textContent = '⚠ ' + msg;
+}
 document.querySelector('.ib-tpl-open')?.addEventListener('click', openTpl);
 
 let ibTpls = null, ibPick = null;
