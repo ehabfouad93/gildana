@@ -125,9 +125,7 @@ function inbox_thread(int $clientId, int $contactId, int $afterId = 0, int $limi
            spends another credit. Say how long is left rather than letting them find out by
            paying for it. The button still works — this is a warning, not a lock, because only
            the client knows whether the message is worth the gamble. */
-        $capped = (string) ($r['error_code'] ?? '') === '131049'
-               || stripos((string) ($r['error_title'] ?? ''), 'healthy ecosystem') !== false;
-        if ($capped) {
+        if (wa_error_is_capped((string) ($r['error_code'] ?? ''), (string) ($r['error_title'] ?? ''))) {
             $age = (time() - strtotime((string) $r['created_at'])) / 3600;
             if ($age < 24) $r['resend_wait'] = max(1, (int) ceil(24 - $age));
         }
@@ -312,18 +310,29 @@ function inbox_resend(array $client, int $messageId): array
         return ['ok' => false, 'error' => 'There is nothing recorded to send again for this message.'];
     }
 
+    /* When the cap is still in force, queue the message for the moment it lifts rather than
+       sending it into the same rejection. The worker already respects next_attempt_at, and
+       outreach now respects wait_until, so this is a scheduled send and not a loop the client
+       has to run by hand — which is what they were doing: resend, fail, resend, fail. */
+    $waitUntil = null;
+    if (wa_error_is_capped((string) ($m['error_code'] ?? ''), (string) ($m['error_title'] ?? ''))) {
+        $lifts = strtotime((string) $m['created_at']) + 24 * 3600;
+        if ($lifts > time()) $waitUntil = date('Y-m-d H:i:s', $lifts);
+    }
+
     if ($source === 'campaign') {
         $n = db_run("UPDATE campaign_messages
-                        SET status='queued', attempt_count=0, next_attempt_at=NULL, claimed_by=NULL,
+                        SET status='queued', attempt_count=0, next_attempt_at=?, claimed_by=NULL,
                             claimed_at=NULL, error_code=NULL, error_title=NULL, updated_at=NOW()
-                      WHERE id=? AND client_id=? AND status IN ('failed','dead','review')", [$ref, $cid]);
+                      WHERE id=? AND client_id=? AND status IN ('failed','dead','review')",
+                    [$waitUntil, $ref, $cid]);
         if (!$n) return ['ok' => false, 'error' => 'That message is already on its way.'];
         db_run("DELETE FROM send_attempts WHERE campaign_message_id=?", [$ref]);
     } elseif ($source === 'qualifier' || $source === 'automation') {
         // 'blocked' is where a failed outreach leaves the run; anything else is still running
         // and must not be restarted underneath itself.
-        $n = db_run("UPDATE flow_runs SET status='queued', updated_at=NOW()
-                      WHERE id=? AND client_id=? AND status='blocked'", [$ref, $cid]);
+        $n = db_run("UPDATE flow_runs SET status='queued', wait_until=?, updated_at=NOW()
+                      WHERE id=? AND client_id=? AND status='blocked'", [$waitUntil, $ref, $cid]);
         if (!$n) return ['ok' => false, 'error' => 'That conversation has already moved on.'];
     } else {
         return ['ok' => false, 'error' => 'This message cannot be sent again automatically.'];
@@ -334,7 +343,11 @@ function inbox_resend(array $client, int $messageId): array
        thread shows. */
     db_run("UPDATE messages SET status='resent' WHERE id=?", [$messageId]);
     if (function_exists('trigger_worker')) trigger_worker();
-    return ['ok' => true];
+
+    return $waitUntil === null
+        ? ['ok' => true, 'queued' => 'now']
+        : ['ok' => true, 'queued' => 'later',
+           'hours' => max(1, (int) ceil((strtotime($waitUntil) - time()) / 3600))];
 }
 
 /**

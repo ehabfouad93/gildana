@@ -1741,17 +1741,22 @@ function automation_send_outreach(int $maxPerRun = 0, int $onlyFlowId = 0): int
     // Fair scheduling: give every qualifier with queued leads a slice each run, so a big
     // backlog in one qualifier can't starve a small one. (Optionally target a single flow.)
     $fwhere = $onlyFlowId > 0 ? " AND r.flow_id = " . (int) $onlyFlowId : '';
+    /* wait_until gates outreach as well as timers. A lead whose first message was capped by
+       WhatsApp is re-queued with the time the cap lifts, so it waits here instead of being
+       retried immediately into the same rejection. NULL means "now", which is every other run. */
     $flowsQ = db_all(
         "SELECT r.flow_id, COUNT(*) c FROM flow_runs r
            JOIN flows f ON f.id = r.flow_id AND f.status NOT IN ('archived','paused')
-          WHERE r.status='queued'{$fwhere}
+          WHERE r.status='queued' AND (r.wait_until IS NULL OR r.wait_until <= NOW()){$fwhere}
           GROUP BY r.flow_id"
     );
     if (!$flowsQ) return 0;
     $perFlow = max(20, intdiv($cap, count($flowsQ)));
     $ids = [];
     foreach ($flowsQ as $fq) {
-        $rows = db_all("SELECT id FROM flow_runs WHERE flow_id=? AND status='queued' ORDER BY id ASC LIMIT " . (int) $perFlow, [(int) $fq['flow_id']]);
+        $rows = db_all("SELECT id FROM flow_runs WHERE flow_id=? AND status='queued'
+                          AND (wait_until IS NULL OR wait_until <= NOW())
+                        ORDER BY id ASC LIMIT " . (int) $perFlow, [(int) $fq['flow_id']]);
         foreach ($rows as $rr) $ids[] = (int) $rr['id'];
         if (count($ids) >= $cap) break;
     }

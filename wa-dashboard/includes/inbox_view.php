@@ -199,7 +199,9 @@ async function pollThread(){
          It is offered only when the error can clear and we know which queued item to re-run;
          otherwise fall back to telling them where the fix lives. */
       const again = m.can_resend
-        ? `<button class="ib-resend" data-msg="${m.id}" data-wait="${m.resend_wait||0}">↻ Send again</button>`
+        ? `<button class="ib-resend" data-msg="${m.id}" data-wait="${m.resend_wait||0}"
+             title="${m.resend_wait ? 'WhatsApp is still capping this number. It will go out automatically once the cap lifts.' : 'Send this message again now'}"
+           >↻ ${m.resend_wait ? `Send when the cap lifts (~${m.resend_wait}h)` : 'Send again'}</button>`
         : (m.error_action === 'never' ? ''
            : `<span class="ib-err-hint">Resend it from ${m.error_action === 'fix' ? 'Campaigns once fixed' : 'Needs attention or Lead Qualifier'}.</span>`);
       /* A different template is often the better move: when WhatsApp caps a marketing
@@ -259,19 +261,16 @@ el('ib-text').addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){ 
 el('ib-body').addEventListener('click', async e=>{
   const rs = e.target.closest('.ib-resend');
   if (rs) {
-    /* Sending inside the cap window buys the same error again, so say so first. Their call,
-       not ours — some messages are worth the retry. */
-    const wait = parseInt(rs.dataset.wait || '0', 10);
-    if (wait > 0 && !confirm(
-        `WhatsApp capped this one and usually clears it about ${wait} hour(s) from now. `
-      + `Sending it again before then will probably fail the same way and still cost a credit.\n\n`
-      + `Send it anyway?`)) return;
-    rs.disabled = true; const was = rs.textContent; rs.textContent = 'Sending…';
+    rs.disabled = true; const was = rs.textContent;
+    rs.textContent = parseInt(rs.dataset.wait || '0', 10) > 0 ? 'Scheduling…' : 'Sending…';
     const fd = new FormData();
     fd.append('ajax','resend'); fd.append('csrf_token',IB_CSRF); fd.append('message',rs.dataset.msg);
     try {
       const r = await fetch(IB_URL,{method:'POST',body:fd}); const d = await r.json();
-      if (d.ok) { rs.textContent = '✓ Sent again'; pollThread(); loadThreads(); }
+      if (d.ok) {
+        rs.textContent = d.queued === 'later' ? `✓ Will send in ~${d.hours}h` : '✓ Sent again';
+        pollThread(); loadThreads();
+      }
       else if (d.pick_template !== undefined) {
         /* The variables were never stored, so "the same template" needs the fields filled in
            rather than guessed. Open the picker on it instead of refusing. */

@@ -491,6 +491,18 @@ function wa_error_is_transient(string $code, string $title): bool
  *
  * @return array{hint:string, action:string, label:string}
  */
+/**
+ * Is this the per-recipient marketing cap?
+ *
+ * Its own predicate because it is the one 'later' error with a real waiting period: WhatsApp
+ * clears it after roughly a day, so a resend before then returns the same error and spends
+ * another credit. Callers schedule around it rather than retrying blind.
+ */
+function wa_error_is_capped(string $code, string $title = ''): bool
+{
+    return trim($code) === '131049' || stripos($title, 'healthy ecosystem') !== false;
+}
+
 function wa_error_explain(string $code, string $title = ''): array
 {
     $code = trim($code);
