@@ -91,6 +91,13 @@ function inbox_thread(int $clientId, int $contactId, int $afterId = 0, int $limi
 {
     $limit = max(1, min(1000, $limit));
 
+    /* Whether free text can still reach this contact at all. A failed TEXT message outside the
+       24-hour window can never be resent as-is — WhatsApp accepts only templates there — so the
+       thread must not offer a button whose single outcome is an error message. */
+    $contact  = db_row("SELECT * FROM contacts WHERE id=? AND client_id=?", [$contactId, $clientId]);
+    $client   = $contact ? db_row("SELECT * FROM clients WHERE id=?", [$clientId]) : null;
+    $windowOn = $contact && $client ? inbox_window_open($contact, $client) : true;
+
     // Same reason as msg_log below: between a pull and its migration these may not exist yet,
     // and a thread that will not load at all is far worse than one missing a Send again button.
     $extra = '';
@@ -118,7 +125,17 @@ function inbox_thread(int $clientId, int $contactId, int $afterId = 0, int $limi
            inbox_resend() falls back to sending the text again, or to reopening the template
            picker — so withholding the button here would hide the feature from exactly the
            older messages that most need it. */
-        $r['can_resend']   = $ex['action'] === 'later';
+        /* A text message outside the window is the one 'later' error a resend cannot fix: the
+           button would spend a click to say "use a template". Say that up front instead, and
+           leave only the button that can actually work. */
+        $textOutsideWindow = (string) ($r['type'] ?? 'text') === 'text' && !$windowOn;
+        $r['can_resend']   = $ex['action'] === 'later' && !$textOutsideWindow;
+        if ($textOutsideWindow) {
+            $r['needs_template'] = true;
+            $r['error_hint'] = 'This contact last wrote to you over 24 hours ago, so WhatsApp will '
+                             . 'only accept an approved template now — sending the same text again '
+                             . 'cannot work. Use "Try another template".';
+        }
 
         /* The per-recipient cap is the one 'later' error with a real waiting period: WhatsApp
            clears it after roughly a day, and a resend before then returns the same error and
@@ -438,6 +455,10 @@ function inbox_templates(int $clientId): array
             'header_vars' => $hf === 'TEXT' ? (int) ($spec['header']['text_vars'] ?? 0) : 0,
             'needs_media' => in_array($hf, ['IMAGE', 'VIDEO', 'DOCUMENT'], true) ? strtolower($hf) : '',
             'last_media'  => (string) ($media[(int) $t['id']] ?? ''),
+            /* The per-recipient cap applies to MARKETING only. When a number has just been
+               capped, a utility template is the one thing that still gets through — which is
+               the difference between a picker that solves the problem and one that repeats it. */
+            'capped_risk' => strtolower((string) $t['category']) === 'marketing',
         ];
     }
     return $out;

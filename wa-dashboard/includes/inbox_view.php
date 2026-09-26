@@ -43,6 +43,8 @@ $IB_SEP = strpos($IB_ENDPOINT, '?') === false ? '?' : '&';
   .ib-b .ib-resend[disabled]{opacity:.55;cursor:default}
   .ib-b .ib-later{background:transparent;color:var(--brand,#6c4cf1);border:1px solid currentColor;margin-left:6px}
   .ib-b .ib-resend-err{color:#8a1f11;background:#fdecea}
+  /* When a template is the only thing that can work, it stops being the secondary option. */
+  .ib-b .ib-tpl-alt.only{background:var(--brand,#6c4cf1);color:#fff;border-color:transparent;margin-left:0}
   .ib-b .ib-tpl-alt{display:inline-block;margin:6px 0 0 6px;font-size:11.5px;font-weight:600;
     color:var(--brand,#6c4cf1);background:transparent;border:1px solid currentColor;border-radius:6px;
     padding:4px 9px;cursor:pointer}
@@ -75,6 +77,9 @@ $IB_SEP = strpos($IB_ENDPOINT, '?') === false ? '?' : '&';
   .ib-tpl-f label{display:block;font-size:11.5px;color:var(--muted,#667);margin-bottom:3px}
   .ib-tpl-f input{width:100%;padding:7px 9px;border:1px solid var(--line,#e6e8ef);border-radius:7px;font-size:13px}
   .ib-tpl-err{color:#c0392b;font-size:12px;margin-top:8px}
+  .ib-tpl-tag{font-size:10px;font-weight:600;padding:1px 6px;border-radius:9px;vertical-align:middle}
+  .ib-tpl-tag.warn{background:#fdf0e3;color:#a9631a}
+  .ib-tpl-tag.ok{background:#e8f5ea;color:#1e7a3c}
   .ib-foot{padding:10px 12px;background:var(--surface,#fff);border-top:1px solid var(--line,rgba(13,19,33,.10))}
   .ib-foot form{display:flex;gap:8px;align-items:flex-end}
   .ib-foot textarea{flex:1;resize:none;border:1px solid var(--line,rgba(13,19,33,.10));border-radius:20px;padding:9px 14px;font-size:13.5px;max-height:120px}
@@ -211,7 +216,8 @@ async function pollThread(){
       /* A different template is often the better move: when WhatsApp caps a marketing
          template, a utility one goes through, and resending the same one does not. */
       const alt = m.error_action === 'never' ? ''
-                : `<button class="ib-tpl-alt" type="button">📄 Try another template</button>`;
+                : `<button class="ib-tpl-alt${m.needs_template ? ' only' : ''}" type="button">📄 ${
+                    m.needs_template ? 'Send a template' : 'Try another template'}</button>`;
       const where = again + alt;
       errLine = `<span class="st failed" style="display:block">⚠ ${label}</span>${hint}${where}`;
     }
@@ -333,11 +339,17 @@ function renderTplList(){
       + 'add one on the Templates page.</p>';
     return;
   }
-  box.innerHTML = ibTpls.map((t,i)=>`
+  /* Utility first. When a number has just been capped, only a utility template still gets
+     through, so burying them under the marketing ones makes the picker repeat the very problem
+     the client opened it to solve. */
+  const order = ibTpls.map((t,i)=>({t,i})).sort((a,b)=> (a.t.capped_risk?1:0) - (b.t.capped_risk?1:0));
+  box.innerHTML = order.map(({t,i})=>`
     <button type="button" class="ib-tpl-row" data-i="${i}">
-      <b>${esc(t.name)}</b>
+      <b>${esc(t.name)} ${t.capped_risk
+        ? '<span class="ib-tpl-tag warn">marketing · can be capped</span>'
+        : '<span class="ib-tpl-tag ok">utility · not capped</span>'}</b>
       <span>${esc((t.preview||'').slice(0,160))}</span>
-      <em>${esc(t.language)}${t.category?' · '+esc(t.category):''}${
+      <em>${esc(t.language)}${
         t.body_vars||t.header_vars?' · '+(t.body_vars+t.header_vars)+' field(s) to fill':''}${
         t.needs_media?' · needs a '+esc(t.needs_media)+' link':''}</em>
     </button>`).join('');
