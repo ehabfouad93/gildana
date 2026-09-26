@@ -231,7 +231,7 @@ try {
             if (!isset($tplCache[$campId])) {
                 // LEFT JOIN: a personal-channel campaign has no template — it carries its
                 // own text in campaigns.body_text.
-                $row = db_row("SELECT t.wa_name, t.language, t.components, t.body_text,
+                $row = db_row("SELECT t.id AS template_id, t.wa_name, t.language, t.components, t.body_text,
                                       c.variable_map, c.body_text AS campaign_text
                                  FROM campaigns c LEFT JOIN templates t ON t.id=c.template_id
                                 WHERE c.id=?", [$campId]);
@@ -398,6 +398,7 @@ try {
                         // Lets the Inbox resend this exact message without the client having
                         // to find the campaign it belonged to.
                         'ref' => (int) $mid,
+                        'template_id' => (int) ($it['tpl']['template_id'] ?? 0),
                     ]);
                 }
                 // A send attempt spends slot budget even when it fails: the number still

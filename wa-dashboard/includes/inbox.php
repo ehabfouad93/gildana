@@ -18,8 +18,8 @@ function msg_log(int $clientId, int $contactId, string $direction, string $body,
 {
     try {
         return db_insert(
-            "INSERT INTO messages (client_id,contact_id,direction,type,body,wa_message_id,status,error_code,error_title,source,source_ref_id,created_at)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,NOW())",
+            "INSERT INTO messages (client_id,contact_id,direction,type,body,wa_message_id,status,error_code,error_title,source,source_ref_id,template_id,created_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NOW())",
             [
                 $clientId, $contactId, $direction, (string) ($opts['type'] ?? 'text'), $body,
                 $opts['wamid'] ?? null, $opts['status'] ?? null,
@@ -29,6 +29,8 @@ function msg_log(int $clientId, int $contactId, string $direction, string $body,
                 $opts['error'] ?? null, $opts['source'] ?? null,
                 // What to re-run to send this again: a campaign_messages id, or a flow_runs id.
                 isset($opts['ref']) && (int) $opts['ref'] > 0 ? (int) $opts['ref'] : null,
+                // Which template this was, so "Send again" works even with nothing queued.
+                isset($opts['template_id']) && (int) $opts['template_id'] > 0 ? (int) $opts['template_id'] : null,
             ]
         );
     } catch (Throwable $e) {
@@ -74,7 +76,8 @@ function inbox_thread(int $clientId, int $contactId, int $afterId = 0, int $limi
 {
     $limit = max(1, min(1000, $limit));
     $rows = db_all(
-        "SELECT id, direction, type, body, status, error_code, error_title, source, source_ref_id, created_at
+        "SELECT id, direction, type, body, status, error_code, error_title, source, source_ref_id,
+                template_id, created_at
            FROM messages WHERE client_id=? AND contact_id=? AND id>?
           ORDER BY id ASC LIMIT {$limit}",
         [$clientId, $contactId, $afterId]
@@ -95,6 +98,18 @@ function inbox_thread(int $clientId, int $contactId, int $afterId = 0, int $limi
            picker — so withholding the button here would hide the feature from exactly the
            older messages that most need it. */
         $r['can_resend']   = $ex['action'] === 'later';
+
+        /* The per-recipient cap is the one 'later' error with a real waiting period: WhatsApp
+           clears it after roughly a day, and a resend before then returns the same error and
+           spends another credit. Say how long is left rather than letting them find out by
+           paying for it. The button still works — this is a warning, not a lock, because only
+           the client knows whether the message is worth the gamble. */
+        $capped = (string) ($r['error_code'] ?? '') === '131049'
+               || stripos((string) ($r['error_title'] ?? ''), 'healthy ecosystem') !== false;
+        if ($capped) {
+            $age = (time() - strtotime((string) $r['created_at'])) / 3600;
+            if ($age < 24) $r['resend_wait'] = max(1, (int) ceil(24 - $age));
+        }
     }
     unset($r);
     return $rows;
@@ -190,18 +205,29 @@ function inbox_resend_fallback(array $client, array $m): ?array
     $type      = (string) ($m['type'] ?? 'text');
     $body      = (string) ($m['body'] ?? '');
 
-    if ($type === 'template') {
-        /* Rows written before templates were rendered to text logged "Template: <wa_name>",
-           which is enough to find the template again — the whole reason those rows are the
-           ones most likely to need this. */
-        $name = '';
-        if (preg_match('/Template:\s*(\S+)/u', $body, $mm)) $name = trim($mm[1]);
-        $tpl = $name !== ''
-            ? db_row("SELECT id FROM templates WHERE client_id=? AND wa_name=? AND LOWER(status)='approved'", [$cid, $name])
-            : null;
-        if (!$tpl) return null;
-        return ['ok' => false, 'pick_template' => (int) $tpl['id'],
-                'error' => 'Choose the fields for this template and send it again.'];
+    if ($type === 'template' || $type === 'image') {
+        /* Which template this was, best source first:
+             template_id  recorded on the message since migration 031 — exact.
+             the body      rows written before templates were rendered to text logged
+                           "Template: <wa_name>", which still names it.
+           Older rows have neither: the body is the rendered message and nothing points back.
+           Those open the full picker rather than dead-ending, because "I cannot identify it"
+           is not a reason to refuse — the agent can see the message and knows which it was. */
+        $tid = (int) ($m['template_id'] ?? 0);
+        if ($tid > 0 && !db_row("SELECT id FROM templates WHERE id=? AND client_id=? AND LOWER(status)='approved'", [$tid, $cid])) {
+            $tid = 0;   // deleted, renamed, or approval withdrawn since
+        }
+        if ($tid <= 0 && preg_match('/Template:\s*(\S+)/u', $body, $mm)) {
+            $row = db_row("SELECT id FROM templates WHERE client_id=? AND wa_name=? AND LOWER(status)='approved'",
+                          [$cid, trim($mm[1])]);
+            if ($row) $tid = (int) $row['id'];
+        }
+
+        return $tid > 0
+            ? ['ok' => false, 'pick_template' => $tid,
+               'error' => 'Fill in this template\'s fields and send it again.']
+            : ['ok' => false, 'pick_template' => 0,
+               'error' => 'This message is too old for us to tell which template it used — pick it below.'];
     }
 
     if (trim($body) === '') return null;
@@ -460,6 +486,7 @@ function inbox_send_template(array $client, int $contactId, int $templateId,
         'status' => !empty($res['ok']) ? 'sent' : 'failed',
         'wamid' => $res['wamid'] ?? null,
         'error' => $res['error_title'] ?? null, 'error_code' => (string) ($res['error_code'] ?? ''),
+        'template_id' => $templateId,
     ]);
     // An agent sending by hand is taking the conversation over, same as a typed reply.
     if (!empty($res['ok'])) inbox_take_over($cid, $contactId);

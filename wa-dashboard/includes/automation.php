@@ -191,6 +191,9 @@ function auto_send(array $client, array &$run, array $step, array $contact, stri
             'wamid' => $res['wamid'] ?? null, 'error' => $res['error_title'] ?? null,
             'error_code' => (string) ($res['error_code'] ?? ''),
             'ref' => (int) $run['id'],
+            // Only a template step has one; anything else records 0 and is skipped.
+            'template_id' => $kind === 'template'
+                ? (int) ((json_decode((string) ($step['config'] ?? ''), true) ?: [])['template_id'] ?? 0) : 0,
         ]);
     }
     return (bool) $res['ok'];
@@ -1796,10 +1799,11 @@ function automation_send_outreach(int $maxPerRun = 0, int $onlyFlowId = 0): int
                                            'name' => 'Message', 'lang' => 'en', 'components' => [], 'body_text' => '',
                                            'cfg' => $cfg, 'stepId' => (int) $step['id']];
                     } else {
-                        $tpl = db_row("SELECT wa_name, language, variable_count, components, body_text FROM templates WHERE id=? AND client_id=?",
+                        $tpl = db_row("SELECT id, wa_name, language, variable_count, components, body_text FROM templates WHERE id=? AND client_id=?",
                             [(int) ($cfg['template_id'] ?? 0), $cid]);
                         $tplCache[$fid] = $tpl
                             ? ['name' => (string) $tpl['wa_name'], 'lang' => (string) $tpl['language'],
+                               'template_id' => (int) $tpl['id'],
                                'components' => json_decode((string) $tpl['components'], true) ?: [],
                                'body_text' => (string) ($tpl['body_text'] ?? ''),
                                'cfg' => $cfg, 'stepId' => (int) $step['id']]
@@ -1823,6 +1827,7 @@ function automation_send_outreach(int $maxPerRun = 0, int $onlyFlowId = 0): int
                                                       channel_is_personal($client) ? [] : $client),
                 // Used only by the personal channel, which renders the template to text.
                 'tpl' => ['wa_name' => $t['name'], 'language' => $t['lang'],
+                          'template_id' => (int) ($t['template_id'] ?? 0),
                           'components' => json_encode($t['components']), 'body_text' => (string) ($t['body_text'] ?? '')],
                 'cfg' => $t['cfg'],
                 'contact_row' => ['name' => (string) $r['contact_name'], 'phone_e164' => (string) $r['phone_e164']],
@@ -1877,7 +1882,7 @@ function automation_send_outreach(int $maxPerRun = 0, int $onlyFlowId = 0): int
                     db_run("UPDATE flow_runs SET status='waiting_input', current_step_id=?, updated_at=NOW() WHERE id=?", [$m['stepId'], $runId]);
                     db_run("INSERT INTO flow_messages (flow_id,step_id,run_id,client_id,contact_id,wa_message_id,status,created_at) VALUES (?,?,?,?,?,?, 'sent', NOW())",
                         [$m['flow_id'], $m['stepId'], $runId, $cid, $m['contact_id'], $rr['wamid'] ?? null]);
-                    if (function_exists('msg_log')) msg_log($cid, $m['contact_id'], 'out', $logTxt, ['type' => $logTyp, 'source' => 'qualifier', 'status' => 'sent', 'wamid' => $rr['wamid'] ?? null, 'ref' => (int) $runId]);
+                    if (function_exists('msg_log')) msg_log($cid, $m['contact_id'], 'out', $logTxt, ['type' => $logTyp, 'source' => 'qualifier', 'status' => 'sent', 'wamid' => $rr['wamid'] ?? null, 'ref' => (int) $runId, 'template_id' => (int) ($it['tpl']['template_id'] ?? 0)]);
                     $sent++;
                 } else {
                     credits_adjust($cid, 1, 'automation_refund', null);
@@ -1892,7 +1897,7 @@ function automation_send_outreach(int $maxPerRun = 0, int $onlyFlowId = 0): int
                     db_run("INSERT INTO flow_messages (flow_id,step_id,run_id,client_id,contact_id,wa_message_id,status,error_code,error_title,created_at) VALUES (?,?,?,?,?,?, 'failed', ?, ?, NOW())",
                         [$m['flow_id'], $m['stepId'], $runId, $cid, $m['contact_id'], $rr['wamid'] ?? null,
                          $ecode !== '' ? substr($ecode, 0, 32) : null, substr($err, 0, 255)]);
-                    if (function_exists('msg_log')) msg_log($cid, $m['contact_id'], 'out', $logTxt, ['type' => $logTyp, 'source' => 'qualifier', 'status' => 'failed', 'error' => $err, 'error_code' => $ecode, 'ref' => (int) $runId]);
+                    if (function_exists('msg_log')) msg_log($cid, $m['contact_id'], 'out', $logTxt, ['type' => $logTyp, 'source' => 'qualifier', 'status' => 'failed', 'error' => $err, 'error_code' => $ecode, 'ref' => (int) $runId, 'template_id' => (int) ($it['tpl']['template_id'] ?? 0)]);
                 }
             }
         }

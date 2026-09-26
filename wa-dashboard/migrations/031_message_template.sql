@@ -1,0 +1,14 @@
+-- Remember WHICH template a thread message was, so it can be sent again.
+--
+-- source_ref_id (migration 030) points at the queued work item — a campaign_messages row or a
+-- flow_run — which is the best thing to re-run when it exists. But it does not always exist:
+-- a message logged before 030, or one an agent sent by hand from the Inbox, has nothing queued
+-- behind it. For those, "send the same template again" needs the template itself, and the only
+-- record was the rendered body text. Once that body became the real Arabic message (rather
+-- than "Template: tbk_noanswer_leads") even the name was gone, so resend dead-ended with
+-- "there is nothing recorded to send again for this message".
+--
+-- Storing the id costs one column and makes the fallback exact instead of a guess at parsing
+-- the body. Not a foreign key: a deleted template should leave its history readable, and the
+-- resend path already handles the template no longer existing.
+ALTER TABLE messages ADD COLUMN template_id INT NULL AFTER source_ref_id;
