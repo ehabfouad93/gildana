@@ -17,21 +17,36 @@ require_once __DIR__ . '/credits.php';
 function msg_log(int $clientId, int $contactId, string $direction, string $body, array $opts = []): int
 {
     try {
+        $cols = ['client_id', 'contact_id', 'direction', 'type', 'body', 'wa_message_id', 'status',
+                 'error_title', 'source'];
+        $vals = [$clientId, $contactId, $direction, (string) ($opts['type'] ?? 'text'), $body,
+                 $opts['wamid'] ?? null, $opts['status'] ?? null,
+                 // Meta's raw wording, kept so an unrecognised code still shows something truthful.
+                 $opts['error'] ?? null, $opts['source'] ?? null];
+
+        /* Columns added by later migrations:
+             error_code     what the Inbox explains the failure from
+             source_ref_id  what to re-run to send it again (campaign_messages / flow_runs id)
+             template_id    which template it was, so a resend works with nothing queued
+
+           Written only once they exist, because a deploy is a pull and THEN a migrate. In
+           between, naming them throws — and the catch below swallows it, silently dropping
+           every message this was asked to record. */
+        foreach ([
+            'error_code'    => isset($opts['error_code']) && $opts['error_code'] !== ''
+                                 ? substr((string) $opts['error_code'], 0, 32) : null,
+            'source_ref_id' => isset($opts['ref']) && (int) $opts['ref'] > 0 ? (int) $opts['ref'] : null,
+            'template_id'   => isset($opts['template_id']) && (int) $opts['template_id'] > 0
+                                 ? (int) $opts['template_id'] : null,
+        ] as $col => $val) {
+            if (!db_has_column('messages', $col)) continue;
+            $cols[] = $col; $vals[] = $val;
+        }
+
+        $ph = implode(',', array_fill(0, count($cols), '?'));
         return db_insert(
-            "INSERT INTO messages (client_id,contact_id,direction,type,body,wa_message_id,status,error_code,error_title,source,source_ref_id,template_id,created_at)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NOW())",
-            [
-                $clientId, $contactId, $direction, (string) ($opts['type'] ?? 'text'), $body,
-                $opts['wamid'] ?? null, $opts['status'] ?? null,
-                // The code is what the Inbox explains from; the title is Meta's raw wording,
-                // kept so an unrecognised code still shows something truthful.
-                isset($opts['error_code']) && $opts['error_code'] !== '' ? substr((string) $opts['error_code'], 0, 32) : null,
-                $opts['error'] ?? null, $opts['source'] ?? null,
-                // What to re-run to send this again: a campaign_messages id, or a flow_runs id.
-                isset($opts['ref']) && (int) $opts['ref'] > 0 ? (int) $opts['ref'] : null,
-                // Which template this was, so "Send again" works even with nothing queued.
-                isset($opts['template_id']) && (int) $opts['template_id'] > 0 ? (int) $opts['template_id'] : null,
-            ]
+            "INSERT INTO messages (" . implode(',', $cols) . ",created_at) VALUES ({$ph},NOW())",
+            $vals
         );
     } catch (Throwable $e) {
         error_log('msg_log skipped: ' . $e->getMessage());
@@ -75,9 +90,15 @@ function inbox_threads(int $clientId, string $q = '', int $limit = 200): array
 function inbox_thread(int $clientId, int $contactId, int $afterId = 0, int $limit = 400): array
 {
     $limit = max(1, min(1000, $limit));
+
+    // Same reason as msg_log below: between a pull and its migration these may not exist yet,
+    // and a thread that will not load at all is far worse than one missing a Send again button.
+    $extra = '';
+    foreach (['error_code', 'source_ref_id', 'template_id'] as $col) {
+        if (db_has_column('messages', $col)) $extra .= ', ' . $col;
+    }
     $rows = db_all(
-        "SELECT id, direction, type, body, status, error_code, error_title, source, source_ref_id,
-                template_id, created_at
+        "SELECT id, direction, type, body, status, error_title, source, created_at{$extra}
            FROM messages WHERE client_id=? AND contact_id=? AND id>?
           ORDER BY id ASC LIMIT {$limit}",
         [$clientId, $contactId, $afterId]

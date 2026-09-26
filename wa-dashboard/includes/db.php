@@ -67,6 +67,36 @@ function db_insert(string $sql, array $params = []): int
  * Runs any *.sql files in migrations/ that haven't run yet, in filename order.
  * Each file may contain multiple statements separated by ';'.
  */
+/**
+ * Does this column exist yet?
+ *
+ * Deploys here are `git pull` followed by a SEPARATE manual migrate step, so there is always a
+ * window where new code is running against the old schema. Code that hard-depends on a new
+ * column turns that window into an outage: the Inbox threw "Unknown column" and every message
+ * was dropped on the floor until someone ran the migration.
+ *
+ * Checking lets those paths degrade to their previous behaviour instead — the new feature is
+ * missing until the migration runs, which is honest, rather than the page being broken.
+ *
+ * Cached per request: INFORMATION_SCHEMA is cheap but this is called per query.
+ */
+function db_has_column(string $table, string $column): bool
+{
+    static $cache = [];
+    $key = $table . '.' . $column;
+    if (isset($cache[$key])) return $cache[$key];
+
+    try {
+        $cache[$key] = (bool) db_val(
+            "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+              WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+            [$table, $column]);
+    } catch (Throwable $e) {
+        $cache[$key] = false;   // cannot tell → assume not there and use the old path
+    }
+    return $cache[$key];
+}
+
 function migrate(): array
 {
     $pdo = db();
