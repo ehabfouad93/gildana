@@ -23,7 +23,8 @@ require __DIR__ . '/includes/credits.php';
 require __DIR__ . '/includes/whatsapp.php';
 require __DIR__ . '/includes/ai.php';
 require __DIR__ . '/includes/notify.php';
-require __DIR__ . '/includes/automation.php';   // pulls in channel.php + inbox.php
+require __DIR__ . '/includes/automation.php';
+require_once __DIR__ . '/includes/crm.php';   // pulls in channel.php + inbox.php
 require_once __DIR__ . '/includes/push.php';
 
 // Some gateways probe the URL with a GET before they will save it.
@@ -132,6 +133,11 @@ function pw_handle_inbound(array $client, array $in): void
         db_run("INSERT INTO contacts (client_id,phone_e164,wa_jid,name,opt_in_status,source,created_at,last_inbound_at)
                 VALUES (?,?,?,?, 'in','inbound',NOW(),NOW())", [$cid, $from, $jid ?: null, (string) $in['name']]);
         $contact = db_row("SELECT * FROM contacts WHERE client_id=? AND phone_e164=?", [$cid, $from]);
+        // Same as the Cloud webhook: a first message is a new lead for the next salesperson.
+        if ($contact) {
+            crm_on_new_inbound($client, (int) $contact['id'], 'inbound');
+            $contact = db_row("SELECT * FROM contacts WHERE id=?", [(int) $contact['id']]);
+        }
     } else {
         db_run("UPDATE contacts SET last_inbound_at=NOW(), wa_jid=COALESCE(NULLIF(?,''), wa_jid) WHERE id=?",
             [$jid, (int) $contact['id']]);

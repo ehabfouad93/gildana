@@ -19,6 +19,7 @@ require_once __DIR__ . '/includes/credits.php';
 require_once __DIR__ . '/includes/whatsapp.php';
 require_once __DIR__ . '/includes/ai.php';
 require_once __DIR__ . '/includes/ads.php';
+require_once __DIR__ . '/includes/crm.php';
 require_once __DIR__ . '/includes/notify.php';
 require_once __DIR__ . '/includes/automation.php';
 require_once __DIR__ . '/includes/push.php';
@@ -236,6 +237,12 @@ foreach (($data['entry'] ?? []) as $entry) {
                     db_run("INSERT INTO contacts (client_id,phone_e164,name,opt_in_status,source,created_at,last_inbound_at)
                             VALUES (?,?,?, 'in','inbound',NOW(),NOW())", [$cid, $from, $profileName]);
                     $contact = db_row("SELECT * FROM contacts WHERE client_id=? AND phone_e164=?", [$cid, $from]);
+                    // A first message is a new lead: into the pipeline, and to the next salesperson.
+                    // Tagged as an ad lead when it came from one, so reports can tell them apart.
+                    if ($contact) {
+                        crm_on_new_inbound($client, (int) $contact['id'], $referral ? 'ctwa' : 'inbound');
+                        $contact = db_row("SELECT * FROM contacts WHERE id=?", [(int) $contact['id']]);
+                    }
                 } else {
                     db_run("UPDATE contacts SET last_inbound_at=NOW() WHERE id=?", [(int) $contact['id']]);
                     $contact['last_inbound_at'] = date('Y-m-d H:i:s');

@@ -86,6 +86,7 @@ $IB_SEP = strpos($IB_ENDPOINT, '?') === false ? '?' : '&';
   .ib-note{font-size:12px;color:var(--muted,rgba(13,19,33,.55));text-align:center;padding:8px}
   .ib-empty{margin:auto;color:var(--muted,rgba(13,19,33,.55));text-align:center;font-size:13px}
   .ib-bot{font-size:11.5px;padding:3px 9px;border-radius:11px;white-space:nowrap;font-weight:600}
+  .ib-owner{width:auto;max-width:150px;font-size:12px;padding:4px 6px;margin-right:6px}
   .ib-bot.on{background:#e8f5ea;color:#1e7a3c}
   .ib-bot.off{background:#fdf0e3;color:#a9631a}
   .ib-back{display:none;background:0;border:0;cursor:pointer;color:var(--ink,#2a221a);padding:2px 6px 2px 0;font-size:19px;line-height:1}
@@ -117,6 +118,18 @@ $IB_SEP = strpos($IB_ENDPOINT, '?') === false ? '?' : '&';
       <div class="ib-av" id="ib-hav"></div>
       <div><div class="nm" id="ib-hname"></div><div class="pv" id="ib-hphone"></div></div>
       <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+        <?php
+          // The owner picker: Admins only, and only where the account has the CRM.
+          $ibPeople = (function_exists('is_client_admin') && is_client_admin() && isset($CLIENT)
+                       && function_exists('crm_enabled') && crm_enabled($CLIENT))
+                    ? crm_assignable_users((int) $CLIENT['id']) : [];
+        ?>
+        <?php if ($ibPeople): ?>
+          <select id="ib-owner" class="ib-owner" aria-label="Owner" title="Who owns this lead">
+            <option value="none">Unassigned</option>
+            <?php foreach ($ibPeople as $u): ?><option value="<?= (int) $u['id'] ?>"><?= e((string) $u['name']) ?></option><?php endforeach; ?>
+          </select>
+        <?php endif; ?>
         <span class="ib-bot" id="ib-bot"></span>
         <button type="button" class="btn btn-ghost btn-sm" id="ib-bot-btn"></button>
       </div>
@@ -226,6 +239,8 @@ async function pollThread(){
   });
   if(d.messages.length && atBottom) body.scrollTop=body.scrollHeight;
   ibOpen=!!d.window_open;
+  const own = el('ib-owner');
+  if (own && document.activeElement !== own) own.value = d.owner == null ? 'none' : String(d.owner);
   el('ib-form').style.display = ibOpen?'flex':'none';
   el('ib-closed').style.display = ibOpen?'none':'block';
   setBotState(!!d.bot_paused);
@@ -433,4 +448,15 @@ el('ib-back').addEventListener('click',()=>{
 });
 el('ib-q').addEventListener('input',()=>{ clearTimeout(window._ibq); window._ibq=setTimeout(loadThreads,300); });
 loadThreads(); setInterval(loadThreads,5000); setInterval(pollThread,3500);
+el('ib-owner')?.addEventListener('change', async e => {
+  if (!ibCur) return;
+  const fd = new FormData(); fd.append('ajax','assign'); fd.append('csrf_token',IB_CSRF);
+  fd.append('contact',ibCur); fd.append('user_id', e.target.value);
+  const d = await (await fetch(IB_URL,{method:'POST',body:fd})).json().catch(()=>({ok:false}));
+  if (!d.ok) alert(d.error || 'Could not reassign.');
+  loadThreads();
+});
+/* Arriving from a link to one conversation (the CRM's "Open conversation"): open it straight away. */
+const IB_OPEN = <?= json_encode($IB_OPEN ?? null) ?>;
+if (IB_OPEN) openThread(IB_OPEN.id, IB_OPEN.name, IB_OPEN.phone);
 </script>

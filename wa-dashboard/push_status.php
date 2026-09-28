@@ -26,7 +26,15 @@ $body = json_decode($raw, true);
 $endpoint = trim((string) ($body['endpoint'] ?? ($_POST['endpoint'] ?? '')));
 if ($endpoint === '') { echo json_encode(['ok' => false]); exit; }
 
-$sub = db_row("SELECT client_id FROM push_subscriptions WHERE endpoint_hash=?", [hash('sha256', $endpoint)]);
+$sub = db_row("SELECT client_id, user_id FROM push_subscriptions WHERE endpoint_hash=?", [hash('sha256', $endpoint)]);
 if (!$sub) { http_response_code(404); echo json_encode(['ok' => false]); exit; }
 
-echo json_encode(['ok' => true, 'count' => inbox_unread_total((int) $sub['client_id'])]);
+// A salesperson's device counts their own leads only; everyone else counts the account.
+$uid   = $sub['user_id'] !== null ? (int) $sub['user_id'] : null;
+$owner = push_scope_owner($uid);
+echo json_encode([
+    'ok'        => true,
+    'count'     => inbox_unread_total((int) $sub['client_id'], $owner),
+    // Still bare integers — no names, numbers or message text leave through this endpoint.
+    'new_leads' => $uid ? push_new_leads($uid) : 0,
+]);

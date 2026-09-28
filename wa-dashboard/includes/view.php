@@ -94,6 +94,7 @@ function nav_items(string $role): array
     $nav = [
         'dashboard' => ['label' => 'Dashboard', 'url' => 'index.php',     'icon' => 'grid'],
         'inbox'     => ['label' => 'Inbox',     'url' => 'inbox.php',     'icon' => 'chat'],
+        'crm'       => ['label' => 'CRM',       'url' => 'crm.php',       'icon' => 'pipe'],
         'contacts'  => ['label' => 'Contacts',  'url' => 'contacts.php',  'icon' => 'users'],
         'lists'     => ['label' => 'Lists',     'url' => 'lists.php',     'icon' => 'list'],
         'templates'   => ['label' => 'Templates',   'url' => 'templates.php',   'icon' => 'doc'],
@@ -110,7 +111,7 @@ function nav_items(string $role): array
     // Only appears when something is actually waiting — a permanent zero is just noise.
     if (($n = nav_attention_count()) > 0) {
         $item = ['label' => 'Needs attention', 'url' => 'failed.php', 'icon' => 'alert', 'badge' => $n];
-        $nav = array_slice($nav, 0, 6, true) + ['attention' => $item] + array_slice($nav, 6, null, true);
+        $nav = array_slice($nav, 0, 7, true) + ['attention' => $item] + array_slice($nav, 7, null, true);
     }
 
     /* Show only what this user can open. The gate in client/_init.php already refuses the rest;
@@ -154,7 +155,9 @@ function nav_primary(string $role): array
 {
     return $role === 'admin'
         ? ['overview', 'clients', 'inbox', 'campaigns']
-        : ['dashboard', 'inbox', 'campaigns', 'contacts'];
+        // A priority list, not a fixed four: the tab bar shows the first four this user can open,
+        // so a salesperson gets the CRM where an account owner gets Campaigns.
+        : ['dashboard', 'inbox', 'crm', 'campaigns', 'contacts'];
 }
 
 function nav_icon(string $key): string
@@ -162,6 +165,7 @@ function nav_icon(string $key): string
     $s = 'width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"';
     $icons = [
         'grid'  => "<path d=\"M2 2h5v5H2zM9 2h5v5H9zM2 9h5v5H2zM9 9h5v5H9z\"/>",
+        'pipe'  => "<path d=\"M2 2.5h3.2v11H2zM6.4 2.5h3.2v7.5H6.4zM10.8 2.5H14v4.5h-3.2z\"/>",
         'users' => "<circle cx=\"6\" cy=\"5\" r=\"2.5\"/><path d=\"M1.5 13.5c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4\"/><circle cx=\"12\" cy=\"5.5\" r=\"1.8\"/><path d=\"M14.5 12.5c0-1.8-1.2-3-2.7-3.3\"/>",
         'list'  => "<path d=\"M5 4h9M5 8h9M5 12h9M2 4h.01M2 8h.01M2 12h.01\"/>",
         'doc'   => "<path d=\"M4 1.5h5l3 3v9a1 1 0 01-1 1H4a1 1 0 01-1-1v-11a1 1 0 011-1z\"/><path d=\"M9 1.5V5h3M5.5 8.5h5M5.5 11h5\"/>",
@@ -303,7 +307,7 @@ function layout_footer(): void
     $tabBase = $tabSub ? '' : ($tabRole === 'admin' ? 'admin/' : 'client/');
 ?>
 <nav class="tabbar" aria-label="Primary">
-  <?php foreach (nav_primary($tabRole) as $key): if (empty($tabItems[$key])) continue; $it = $tabItems[$key]; ?>
+  <?php $tabShown = 0; foreach (nav_primary($tabRole) as $key): if (empty($tabItems[$key]) || $tabShown >= 4) continue; $tabShown++; $it = $tabItems[$key]; ?>
     <a class="tab <?= $key === $tabActive ? 'active' : '' ?>" href="<?= e($tabBase . $it['url']) ?>">
       <?= nav_icon($it['icon']) ?><span><?= e($it['label']) ?></span>
     </a>

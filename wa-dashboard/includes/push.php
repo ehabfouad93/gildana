@@ -213,7 +213,17 @@ function push_notify_client(int $clientId): int
     if (!$keys) return 0;
     $subs = db_all("SELECT * FROM push_subscriptions WHERE client_id=?", [$clientId]);
     $sent = 0;
+    $quiet = [];
     foreach ($subs as $sub) {
+        /* A salesperson's phone buzzes for their own leads, not the whole account. Without this a
+           team of five would each be woken for every message any of them received. */
+        if (function_exists('push_scope_owner') && ($uid = (int) ($sub['user_id'] ?? 0)) > 0) {
+            if (!array_key_exists($uid, $quiet)) {
+                $owner = push_scope_owner($uid);
+                $quiet[$uid] = $owner !== null && inbox_unread_total($clientId, $owner) === 0;
+            }
+            if ($quiet[$uid]) continue;
+        }
         $r = push_send($sub, $keys);
         if (!empty($r['ok'])) {
             db_run("UPDATE push_subscriptions SET last_ok_at=NOW(), fail_count=0 WHERE id=?", [(int) $sub['id']]);
@@ -223,6 +233,41 @@ function push_notify_client(int $clientId): int
         } else {
             db_run("UPDATE push_subscriptions SET fail_count=fail_count+1 WHERE id=?", [(int) $sub['id']]);
         }
+    }
+    return $sent;
+}
+
+/**
+ * Push to one person's devices — "a lead was assigned to you". The service worker asks
+ * push_status.php what to say, and a recent unanswered assignment reads as a new lead.
+ */
+function push_notify_user(int $userId): int
+{
+    $keys = push_vapid_keys(false);
+    if (!$keys) return 0;
+    $sent = 0;
+    foreach (db_all("SELECT * FROM push_subscriptions WHERE user_id=?", [$userId]) as $sub) {
+        $r = push_send($sub, $keys);
+        if (!empty($r['ok'])) { db_run("UPDATE push_subscriptions SET last_ok_at=NOW(), fail_count=0 WHERE id=?", [(int) $sub['id']]); $sent++; }
+        elseif (!empty($r['gone'])) db_run("DELETE FROM push_subscriptions WHERE id=?", [(int) $sub['id']]);
+        else db_run("UPDATE push_subscriptions SET fail_count=fail_count+1 WHERE id=?", [(int) $sub['id']]);
+    }
+    return $sent;
+}
+
+/** Drain the per-person outbox (lead assignments). Same clear-first pattern as push_dispatch(). */
+function push_dispatch_users(int $limit = 200): int
+{
+    if (!push_configured()) return 0;
+    try {
+        $rows = db_all("SELECT user_id FROM push_outbox_user ORDER BY queued_at ASC LIMIT " . (int) $limit);
+    } catch (Throwable $e) {
+        return 0;                                        // migration 033 not applied yet
+    }
+    $sent = 0;
+    foreach ($rows as $r) {
+        db_run("DELETE FROM push_outbox_user WHERE user_id=?", [(int) $r['user_id']]);
+        $sent += push_notify_user((int) $r['user_id']);
     }
     return $sent;
 }

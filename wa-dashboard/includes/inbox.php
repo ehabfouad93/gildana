@@ -10,6 +10,7 @@ require_once __DIR__ . '/crypto.php';
 require_once __DIR__ . '/whatsapp.php';
 require_once __DIR__ . '/channel.php';
 require_once __DIR__ . '/credits.php';
+require_once __DIR__ . '/crm.php';
 
 /** Record one message. Returns the row id. $opts: type, wamid, status, error, source.
  *  Never throws — logging must not break sending if the `messages` table is missing
@@ -44,10 +45,15 @@ function msg_log(int $clientId, int $contactId, string $direction, string $body,
         }
 
         $ph = implode(',', array_fill(0, count($cols), '?'));
-        return db_insert(
+        $id = db_insert(
             "INSERT INTO messages (" . implode(',', $cols) . ",created_at) VALUES ({$ph},NOW())",
             $vals
         );
+        // A person answering a lead — the sales report's first-response time.
+        if ($direction === 'out' && ($opts['status'] ?? '') !== 'failed') {
+            crm_mark_response($contactId, (string) ($opts['source'] ?? ''));
+        }
+        return $id;
     } catch (Throwable $e) {
         error_log('msg_log skipped: ' . $e->getMessage());
         return 0;
@@ -70,6 +76,9 @@ function inbox_threads(int $clientId, string $q = '', int $limit = 200): array
     $params = [$clientId];
     $search = '';
     if ($q !== '') { $search = " AND (c.name LIKE ? OR c.phone_e164 LIKE ?)"; $params[] = "%$q%"; $params[] = "%$q%"; }
+    // A salesperson sees the conversations of their own leads, and nobody else's.
+    [$scope, $sp] = crm_scope('c');
+    $search .= $scope; $params = array_merge($params, $sp);
     $limit = max(1, min(500, $limit));
     return db_all(
         "SELECT c.id contact_id, c.phone_e164, c.name, c.last_inbound_at,
@@ -186,13 +195,40 @@ function inbox_mark_read(int $clientId, int $contactId): void
 }
 
 /** Total unread across all threads for a client (for a nav badge). */
-function inbox_unread_total(int $clientId): int
+/**
+ * Unread inbound messages. With $ownerId, only on that person's own leads — which is what a
+ * salesperson's phone should count, or it would buzz with a number for colleagues' conversations.
+ */
+function inbox_unread_total(int $clientId, ?int $ownerId = null): int
 {
+    $own = $ownerId !== null ? ' AND c.owner_user_id = ?' : '';
     return (int) db_val(
         "SELECT COUNT(*) FROM messages m JOIN contacts c ON c.id=m.contact_id
-          WHERE m.client_id=? AND m.direction='in' AND m.created_at > COALESCE(c.inbox_read_at,'2000-01-01')",
-        [$clientId]
+          WHERE m.client_id=? AND m.direction='in' AND m.created_at > COALESCE(c.inbox_read_at,'2000-01-01'){$own}",
+        $ownerId !== null ? [$clientId, $ownerId] : [$clientId]
     );
+}
+
+/**
+ * Whose count a subscription should see: a Sales user's own id, or NULL for the whole account.
+ * Pushes and the service worker's badge both go through this, so they can never disagree.
+ */
+function push_scope_owner(?int $userId): ?int
+{
+    if (!$userId) return null;
+    $u = db_row("SELECT client_role, role FROM users WHERE id=?", [$userId]);
+    return $u && ($u['role'] ?? '') === 'client' && ($u['client_role'] ?? '') === 'sales' ? $userId : null;
+}
+
+/** Leads handed to this person recently that nobody has answered yet — "new lead for you". */
+function push_new_leads(int $userId): int
+{
+    try {
+        return (int) db_val("SELECT COUNT(*) FROM contacts WHERE owner_user_id=? AND first_response_at IS NULL
+                               AND assigned_at > NOW() - INTERVAL 30 MINUTE", [$userId]);
+    } catch (Throwable $e) {
+        return 0;
+    }
 }
 
 /** Shared AJAX endpoint for the Inbox UIs. Echoes JSON + exits if it handled a request. */
@@ -205,6 +241,22 @@ function inbox_handle_ajax(array $client): void
     if ($a === 'threads') {
         json_out(['ok' => true, 'threads' => inbox_threads($cid, trim((string) ($_GET['q'] ?? '')))]);
     }
+    /* Every action below names a contact. Check that this user may see it before any of them run:
+       the thread list is scoped, but ids are guessable, and a salesperson must not be able to read
+       or message a colleague's lead by typing its number into a request. Refused as not-found so
+       guessing reveals nothing about which ids exist. */
+    $cidReq = (int) ($_GET['contact'] ?? $_POST['contact'] ?? 0);
+    if ($cidReq > 0) {
+        $seen = db_row("SELECT * FROM contacts WHERE id=? AND client_id=?", [$cidReq, $cid]);
+        if (!$seen || !crm_can_see($seen)) json_out(['ok' => false, 'error' => 'Contact not found.']);
+    }
+    if ($a === 'resend') {
+        $mid  = (int) ($_POST['message'] ?? 0);
+        $mrow = db_row("SELECT c.* FROM messages m JOIN contacts c ON c.id=m.contact_id
+                         WHERE m.id=? AND m.client_id=?", [$mid, $cid]);
+        if (!$mrow || !crm_can_see($mrow)) json_out(['ok' => false, 'error' => 'Message not found.']);
+    }
+
     if ($a === 'thread') {
         $contactId = (int) ($_GET['contact'] ?? 0);
         $after     = (int) ($_GET['after'] ?? 0);
@@ -216,6 +268,8 @@ function inbox_handle_ajax(array $client): void
             'ok' => true, 'messages' => $msgs, 'window_open' => inbox_window_open($contact, $client),
             'name' => (string) $contact['name'], 'phone' => (string) $contact['phone_e164'],
             'bot_paused' => inbox_bot_paused($contact),
+            // For the owner picker in the header — present only where it can be used.
+            'owner'      => $contact['owner_user_id'] !== null ? (int) $contact['owner_user_id'] : null,
         ]);
     }
     if ($a === 'send') {
@@ -236,6 +290,22 @@ function inbox_handle_ajax(array $client): void
             $client, (int) ($_POST['contact'] ?? 0), (int) ($_POST['template'] ?? 0),
             $strs('vars'), $strs('header_vars'), (string) ($_POST['header_media'] ?? '')));
     }
+    /* Reassign from the conversation itself. An Admin reading a thread is exactly when they
+       notice it belongs with someone else; making them go to the CRM to do it is friction. A
+       contact not yet in the pipeline is added to it, since an owner only means something there. */
+    if ($a === 'assign') {
+        verify_csrf();
+        if (!function_exists('is_client_admin') || !is_client_admin()) json_out(['ok' => false, 'error' => 'Only an Admin can reassign.']);
+        $contactId = (int) ($_POST['contact'] ?? 0);
+        $to = (string) ($_POST['user_id'] ?? '');
+        $c = db_row("SELECT * FROM contacts WHERE id=? AND client_id=?", [$contactId, $cid]);
+        if (!$c) json_out(['ok' => false]);
+        $uid = $to === 'none' || $to === '' ? null : ($to === 'auto' ? crm_assign_next($client) : (int) $to);
+        if ($c['stage_id'] === null) crm_add_lead($client, $contactId, '', $uid === null ? 'none' : $uid, null, crm_actor_id());
+        else crm_assign($client, $contactId, $uid, crm_actor_id());
+        json_out(['ok' => true, 'owner' => $uid]);
+    }
+
     // Live takeover: pause the bot for this contact / hand it back.
     if ($a === 'takeover' || $a === 'resume') {
         verify_csrf();

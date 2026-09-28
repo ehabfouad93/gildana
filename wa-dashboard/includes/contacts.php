@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/crm.php';
+
 /**
  * Contact tags and bulk operations.
  *
@@ -82,6 +84,13 @@ function contact_selection_where(int $clientId, array $post): array
 {
     $sql = "client_id = ?";
     $params = [$clientId];
+
+    /* The list, the CSV export and every bulk action are all built here, so scoping once covers
+       them all: a salesperson sees, exports and bulk-edits only the contacts that are theirs. */
+    if (function_exists('crm_scope')) {
+        [$scope, $sp] = crm_scope('');
+        $sql .= $scope; $params = array_merge($params, $sp);
+    }
 
     if (($post['scope'] ?? 'ids') === 'filter') {
         $q   = trim((string) ($post['q'] ?? ''));

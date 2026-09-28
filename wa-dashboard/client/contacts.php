@@ -30,6 +30,11 @@ if (($_GET['export'] ?? '') === '1') {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['ajax'])) {
     verify_csrf();
     $a = (string) ($_POST['action'] ?? '');
+    // The single-contact actions take an id straight from the request: check it is theirs.
+    if (in_array($a, ['delete_contact', 'toggle_optout'], true)) {
+        $mine = db_row("SELECT * FROM contacts WHERE id=? AND client_id=?", [(int) ($_POST['id'] ?? 0), $cid]);
+        if (!$mine || !crm_can_see($mine)) json_out(['ok' => false]);
+    }
     if ($a === 'delete_contact') {
         $ok = db_run("DELETE FROM contacts WHERE id=? AND client_id=?", [(int) ($_POST['id'] ?? 0), $cid]) > 0;
         json_out(['ok' => $ok]);
@@ -46,7 +51,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['ajax'])) {
        Every one takes either the ticked ids or the current filter, resolved by the shared
        selection helper, so "the 12 I picked" and "all 3,400 tagged hot" are the same code
        path and neither can reach another client's contacts. */
-    if (in_array($a, ['bulk_tag', 'bulk_untag', 'bulk_list', 'bulk_optout', 'bulk_delete'], true)) {
+    if (in_array($a, ['bulk_tag', 'bulk_untag', 'bulk_list', 'bulk_optout', 'bulk_delete', 'bulk_crm'], true)) {
         $ids = contact_selection_ids($cid, $_POST);
         if (!$ids) json_out(['ok' => false, 'error' => 'Nothing selected.']);
 
@@ -85,6 +90,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['ajax'])) {
             json_out(['ok' => true, 'n' => $n, 'msg' => $n . ' contact(s) opted out.']);
         }
 
+        /* Put existing contacts into the pipeline — the way thousands of contacts from before the
+           CRM existed get there without re-importing a spreadsheet. Already-leads are left alone
+           (they keep their stage and owner); the rest are shared out between the sales team, or
+           kept by the salesperson doing it. */
+        if ($a === 'bulk_crm') {
+            if (!crm_enabled($CLIENT)) json_out(['ok' => false, 'error' => 'The CRM is not switched on for this account.']);
+            $added = 0;
+            $owner = is_sales() ? (int) $PERM_USER['id'] : 'auto';
+            foreach ($ids as $id) if (crm_add_lead($CLIENT, (int) $id, '', $owner, null, crm_actor_id())) $added++;
+            $skip = count($ids) - $added;
+            json_out(['ok' => true, 'n' => $added, 'msg' => $added . ' added to the CRM'
+                      . ($skip ? ' · ' . $skip . ' were already in it' : '') . '.']);
+        }
+
         if ($a === 'bulk_delete') {
             $in = implode(',', array_fill(0, count($ids), '?'));
             $n = db_run("DELETE FROM contacts WHERE client_id=? AND id IN ($in)", array_merge([$cid], $ids));
@@ -119,56 +138,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_c
     }
 }
 
-/* ── CSV import ── */
+/* ── Import (CSV or Excel) ──
+   The same importer the CRM uses, so the two can never disagree about what counts as a phone
+   number. It also now takes .xlsx, and reports each skipped row's reason instead of a count. */
+require_once __DIR__ . '/../includes/import.php';
 $importSummary = null;
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'import_csv') {
     verify_csrf();
     if (empty($_FILES['csv']['tmp_name']) || ($_FILES['csv']['error'] ?? 1) !== UPLOAD_ERR_OK) {
-        $err = 'Please choose a CSV file to upload.';
+        $err = 'Please choose a CSV or Excel file to upload.';
     } else {
-        $imported = 0; $updated = 0; $skipped = 0; $total = 0;
         // Chosen country overrides the account default for this import batch.
         $importCountry = preg_replace('/\D+/', '', (string) ($_POST['import_country'] ?? '')) ?: $country;
-        $fh = fopen($_FILES['csv']['tmp_name'], 'r');
-        if ($fh) {
-            $header = fgetcsv($fh);
-            // Normalize header names → find phone & name columns; rest = attributes
-            $cols = array_map(fn($h) => strtolower(trim((string) $h)), $header ?: []);
-            $phoneIdx = null; $nameIdx = null;
-            foreach ($cols as $i => $h) {
-                if ($phoneIdx === null && in_array($h, ['phone','number','mobile','msisdn','whatsapp','tel'], true)) $phoneIdx = $i;
-                if ($nameIdx === null && in_array($h, ['name','full_name','fullname','contact'], true)) $nameIdx = $i;
-            }
-            if ($phoneIdx === null) $phoneIdx = 0; // assume first column is the phone
-
-            $stmt = db()->prepare(
-                "INSERT INTO contacts (client_id,phone_e164,name,attributes,opt_in_status,source,created_at)
-                 VALUES (?,?,?,?, 'in','import',NOW())
-                 ON DUPLICATE KEY UPDATE name=VALUES(name), attributes=VALUES(attributes)"
-            );
-
-            while (($row = fgetcsv($fh)) !== false) {
-                if (count($row) === 1 && trim((string) $row[0]) === '') continue;
-                $total++;
-                $phone = normalize_phone((string) ($row[$phoneIdx] ?? ''), $importCountry);
-                if ($phone === '') { $skipped++; continue; }
-                $name = $nameIdx !== null ? trim((string) ($row[$nameIdx] ?? '')) : '';
-
-                // any non phone/name column → attributes
-                $attrs = [];
-                foreach ($cols as $i => $h) {
-                    if ($i === $phoneIdx || $i === $nameIdx) continue;
-                    $v = trim((string) ($row[$i] ?? ''));
-                    if ($h !== '' && $v !== '') $attrs[$h] = $v;
-                }
-                $exists = (int) db_val("SELECT COUNT(*) FROM contacts WHERE client_id=? AND phone_e164=?", [$cid, $phone]);
-                $stmt->execute([$cid, $phone, $name, $attrs ? json_encode($attrs, JSON_UNESCAPED_UNICODE) : null]);
-                if ($exists) $updated++; else $imported++;
-            }
-            fclose($fh);
-            $importSummary = compact('total', 'imported', 'updated', 'skipped');
+        $read = import_read((string) $_FILES['csv']['tmp_name'], (string) $_FILES['csv']['name']);
+        if (empty($read['ok'])) {
+            $err = (string) $read['error'];
         } else {
-            $err = 'Could not read the uploaded file.';
+            $s = import_contacts($CLIENT, $read['header'], $read['rows'], import_guess_mapping($read['header']),
+                                 ['country' => $importCountry, 'crm' => false]);
+            $importSummary = ['total' => $s['total'], 'imported' => $s['added'], 'updated' => $s['updated'],
+                              'skipped' => $s['skipped'], 'problems' => $s['problems']];
         }
     }
 }
@@ -203,7 +192,13 @@ page_head('Contacts', $actions);
 
 if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif;
 if ($importSummary): ?>
-  <div class="alert success">Import done — <?= (int) $importSummary['imported'] ?> added, <?= (int) $importSummary['updated'] ?> updated, <?= (int) $importSummary['skipped'] ?> skipped (invalid numbers) of <?= (int) $importSummary['total'] ?> rows.</div>
+  <div class="alert success">Import done — <?= (int) $importSummary['imported'] ?> added, <?= (int) $importSummary['updated'] ?> updated, <?= (int) $importSummary['skipped'] ?> skipped of <?= (int) $importSummary['total'] ?> rows.
+    <?php if (!empty($importSummary['problems'])): ?>
+      <details style="margin-top:6px"><summary>What was skipped or changed, and why</summary>
+        <ul style="margin:6px 0 0;padding-left:18px;font-size:12.5px">
+          <?php foreach ($importSummary['problems'] as $pr): ?><li><?= e($pr) ?></li><?php endforeach; ?>
+        </ul></details>
+    <?php endif; ?></div>
 <?php endif; ?>
 
 <div class="card card-flush">
@@ -247,6 +242,9 @@ if ($importSummary): ?>
     <button type="button" class="btn btn-ghost btn-sm" onclick="openBulk('list')">Add to list</button>
     <button type="button" class="btn btn-ghost btn-sm" onclick="openBulk('tag')">Add tag</button>
     <button type="button" class="btn btn-ghost btn-sm" onclick="openBulk('untag')">Remove tag</button>
+    <?php if (crm_enabled($CLIENT) && can_use('crm')): ?>
+    <button type="button" class="btn btn-ghost btn-sm" onclick="bulkCrm()">Add to CRM</button>
+    <?php endif; ?>
     <button type="button" class="btn btn-ghost btn-sm" onclick="bulkOptout()">Opt out</button>
     <button type="button" class="btn btn-ghost btn-sm danger" onclick="bulkDelete()">Delete</button>
   </div>
@@ -322,7 +320,7 @@ if ($importSummary): ?>
       First row = header. A <strong>phone</strong> column is required; <strong>name</strong> is optional.
       Any extra columns are stored as personalization variables. Local numbers are normalized with the account country code<?= $country ? ' (+' . e($country) . ')' : '' ?>.
     </p>
-    <div class="field"><span class="lbl">CSV File</span><input type="file" name="csv" accept=".csv,text/csv" required></div>
+    <div class="field"><span class="lbl">CSV or Excel file</span><input type="file" name="csv" accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required></div>
     <div class="field"><span class="lbl">Country <span class="text-muted">(local numbers get this code; empty = account default<?= $country ? ' +' . e($country) : '' ?>)</span></span>
       <?= function_exists('country_picker_html')
             ? country_picker_html('import_country', '')
@@ -462,6 +460,11 @@ async function runBulk(){
   document.getElementById('m-bulk').classList.remove('open');
   showToast(d.msg || 'Done.');
   setTimeout(() => location.reload(), 700);
+}
+async function bulkCrm(){
+  if(!confirm(scopeText() + '\n\nAdd them to the CRM as leads? New leads are shared out between the sales team.')) return;
+  const d = await post({action:'bulk_crm', ...selectionPayload()});
+  if(d.ok){ showToast(d.msg); setTimeout(()=>location.reload(), 900); } else showToast(d.error||'Could not add them.', true);
 }
 async function bulkOptout(){
   if(!confirm(scopeText() + '\n\nOpt them out? They will be excluded from every future campaign.')) return;

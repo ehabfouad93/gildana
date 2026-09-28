@@ -9,7 +9,7 @@
  * conversations; a cached copy could be shown to the wrong account after a logout/login
  * on a shared phone, or long after the data changed. Only the offline shell is stored.
  */
-const VERSION = 'revenect-v3';
+const VERSION = 'revenect-v4';   // bumped so installed devices pick up the lead notification
 const OFFLINE = './offline.html';
 const PRECACHE = [OFFLINE, './assets/icons/icon-192.png', './manifest.webmanifest'];
 
@@ -66,6 +66,7 @@ const NOTIF_TAG = 'revenect-inbox';   // fixed tag → the OS REPLACES rather th
 async function showInboxNotification() {
   let title = 'New WhatsApp message';
   let body  = 'Open Revenect to reply.';
+  let url   = './client/inbox.php';
   try {
     const sub = await self.registration.pushManager.getSubscription();
     if (sub) {
@@ -77,7 +78,14 @@ async function showInboxNotification() {
       if (res.ok) {
         const d = await res.json();
         const n = parseInt(d.count, 10);
-        if (n > 0) {
+        const leads = parseInt(d.new_leads, 10);
+        if (leads > 0) {
+          // A lead was just handed to this person and nobody has answered it yet — that is
+          // the thing to act on, so it wins over the generic message count.
+          title = leads === 1 ? 'A new lead is yours' : leads + ' new leads are yours';
+          body  = 'Tap to open your CRM and reply first.';
+          url   = './client/crm.php';
+        } else if (n > 0) {
           title = n === 1 ? '1 new message' : n + ' new messages';
           body  = 'Tap to open your inbox.';
         }
@@ -91,7 +99,7 @@ async function showInboxNotification() {
     badge: './assets/icons/icon-192.png',
     tag: NOTIF_TAG,
     renotify: true,
-    data: { url: './client/inbox.php' }
+    data: { url: url }
   });
 }
 

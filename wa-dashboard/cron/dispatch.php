@@ -444,7 +444,7 @@ try {
             $outreach = automation_send_outreach();
             $noAns    = automation_sweep_no_answer((int) config('no_answer_hours', 24));
             // One push per client with pending inbound, however many messages arrived.
-            $pushes   = push_dispatch();
+            $pushes   = push_dispatch() + push_dispatch_users();   // + "a lead was assigned to you"
             out("Automation: resumed={$resumed} sheet_leads={$leads} campaign_followups={$followed} outreach_sent={$outreach} no_answer={$noAns} pushes={$pushes}.");
         } finally {
             $pdo->query("SELECT RELEASE_LOCK('wa_automation')");
