@@ -134,6 +134,16 @@ $log   = db_all("SELECT l.*, f.name AS form_name, c.name AS contact_name FROM me
                    LEFT JOIN meta_forms f ON f.client_id=l.client_id AND f.form_id=l.form_id
                    LEFT JOIN contacts c ON c.id=l.contact_id
                   WHERE l.client_id=? ORDER BY l.id DESC LIMIT 30", [$cid]);
+// Is the automatic import actually running? Answered from what it last did, not from settings.
+$lastHook  = db_val("SELECT MAX(created_at) FROM meta_lead_log WHERE client_id=? AND via='webhook'", [$cid]);
+$lastCheck = db_val("SELECT MAX(last_polled_at) FROM meta_forms WHERE client_id=? AND enabled=1", [$cid]);
+$liveForms = count(array_filter($forms, fn($f) => (int) $f['enabled']));
+$ago = function ($t): string {
+    if (!$t) return 'not yet';
+    $m = (int) floor((time() - strtotime((string) $t)) / 60);
+    return $m < 1 ? 'just now' : ($m < 60 ? $m . ' min ago' : ($m < 1440 ? floor($m / 60) . ' h ago' : date('j M, H:i', strtotime((string) $t))));
+};
+$checkStale = $liveForms && (!$lastCheck || strtotime((string) $lastCheck) < time() - 20 * 60);
 $pageErrors = array_filter($pages, fn($p) => (int) $p['subscribed'] && $p['last_error']);
 
 client_header('Lead forms', 'crm', $CLIENT);
@@ -192,6 +202,17 @@ page_head('Facebook & Instagram lead forms', '<a class="btn btn-ghost btn-sm" hr
 </div>
 <?php endif; ?>
 
+<?php if ($liveForms): ?>
+<div class="alert <?= $checkStale ? 'warn' : 'info' ?>" id="mf-auto" style="font-size:12.5px">
+  <strong>Automatic import is on for <?= $liveForms ?> form<?= $liveForms === 1 ? '' : 's' ?>.</strong>
+  New leads come in by themselves — you only need Sync leads once, for the ones from before you connected.
+  <span style="display:block;margin-top:4px" class="text-muted">
+    Instant from Facebook: last lead <?= e($ago($lastHook)) ?> ·
+    Background check every 5 minutes: last ran <?= e($ago($lastCheck)) ?></span>
+  <?php if ($checkStale): ?><span style="display:block;margin-top:4px">The background check has not run for a while, so leads may be
+    delayed until Facebook's instant notice arrives. Ask <?= e(BRAND_PARENT) ?> to check the background worker is running.</span><?php endif; ?>
+</div>
+<?php endif; ?>
 <style>
 /* On a phone each form becomes a small card, so Sync leads is in reach instead of off to the right. */
 @media (max-width: 560px) {

@@ -36,10 +36,10 @@ if (($x = (string) ($_GET['export'] ?? '')) !== '') {
         fputcsv($out, ['Source', 'Leads', 'Won', 'Won value', 'Conversion %']);
         foreach ($sources as $r) fputcsv($out, [$r['label'], $r['leads'], $r['won'], $r['won_value'], $r['rate']]);
     } else {
-        fputcsv($out, ['Salesperson', 'Assigned', 'Contacted', 'Median first response (minutes)', 'Worked', 'Won',
+        fputcsv($out, ['Salesperson', 'Assigned', 'Contacted', 'Median first response (minutes)', 'Worked', 'Activities logged', 'Won',
                        'Won value', 'Conversion %', 'Overdue follow-ups']);
         foreach ($sales as $r) fputcsv($out, [$r['name'], $r['assigned'], $r['contacted'],
-            $r['median_response'] !== null ? round($r['median_response'] / 60) : '', $r['worked'], $r['won'],
+            $r['median_response'] !== null ? round($r['median_response'] / 60) : '', $r['worked'], $r['activities'] ?? 0, $r['won'],
             $r['won_value'], $r['conversion'], $r['overdue']]);
     }
     fclose($out);
@@ -123,15 +123,16 @@ page_head('CRM reports', '<a class="btn btn-ghost btn-sm" href="crm.php">&larr; 
   </div>
   <div class="table-wrap"><table class="data">
     <thead><tr><th>Salesperson</th><th class="num">Assigned</th><th class="num">Contacted</th><th class="num">First response</th>
-      <th class="num">Worked</th><th class="num">Won</th><th class="num">Won value</th><th class="num">Conversion</th><th class="num">Overdue now</th></tr></thead>
+      <th class="num">Worked</th><th class="num" title="Calls, meetings, visits, WhatsApps and emails logged">Activities</th><th class="num">Won</th><th class="num">Won value</th><th class="num">Conversion</th><th class="num">Overdue now</th></tr></thead>
     <tbody>
-    <?php if (!$sales): ?><tr><td colspan="9"><div class="empty">No leads were handed out in this period.</div></td></tr><?php endif; ?>
+    <?php if (!$sales): ?><tr><td colspan="10"><div class="empty">No leads were handed out in this period.</div></td></tr><?php endif; ?>
     <?php foreach ($sales as $r): ?>
       <tr><td><strong><?= e($r['name']) ?></strong></td>
         <td class="num"><?= $r['assigned'] ?></td>
         <td class="num"><?= $r['contacted'] ?></td>
         <td class="num"><?= e(crm_duration($r['median_response'])) ?></td>
         <td class="num"><?= $r['worked'] ?></td>
+        <td class="num"><?= (int) ($r['activities'] ?? 0) ?></td>
         <td class="num"><strong><?= $r['won'] ?></strong></td>
         <td class="num"><?= number_format($r['won_value']) ?></td>
         <td class="num"><?= $r['conversion'] !== null ? $r['conversion'] . '%' : '—' ?></td>

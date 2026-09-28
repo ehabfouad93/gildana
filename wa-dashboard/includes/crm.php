@@ -199,6 +199,58 @@ function crm_add_note(array $client, int $contactId, string $body, ?int $by = nu
               [(int) $client['id'], $contactId, $by, mb_substr($body, 0, 5000)]);
 }
 
+/** The kinds of thing a salesperson logs against a lead. */
+function crm_activity_kinds(): array
+{
+    return ['call' => 'Call', 'whatsapp' => 'WhatsApp', 'meeting' => 'Meeting', 'visit' => 'Site visit',
+            'email' => 'Email', 'note' => 'Comment'];
+}
+
+/** How it went. Kept short and shared by every kind, so reports can count them. */
+function crm_activity_outcomes(): array
+{
+    return ['answered' => 'Answered', 'no_answer' => 'No answer', 'busy' => 'Busy / call later',
+            'interested' => 'Interested', 'not_interested' => 'Not interested', 'booked' => 'Booked a visit / meeting',
+            'sent_info' => 'Sent details', 'wrong_number' => 'Wrong number'];
+}
+
+/**
+ * Log a call, meeting, visit, WhatsApp, email or comment against a lead.
+ *
+ * Anything but a plain comment is contact with the lead, so it also stamps the first response —
+ * a salesperson who phones a lead has responded, even though no WhatsApp went out.
+ */
+function crm_log_activity(array $client, int $contactId, string $kind, ?string $outcome, string $body, ?int $by): bool
+{
+    $kinds = crm_activity_kinds();
+    if (!isset($kinds[$kind])) $kind = 'note';
+    if ($outcome !== null && !isset(crm_activity_outcomes()[$outcome])) $outcome = null;
+    $body = trim($body);
+    if ($kind === 'note' && $body === '') return false;
+    if (!db_has_column('crm_notes', 'kind')) {                     // migration 038 not applied yet
+        crm_add_note($client, $contactId, ($kind !== 'note' ? $kinds[$kind] . ': ' : '') . $body, $by);
+        return true;
+    }
+    db_insert("INSERT INTO crm_notes (client_id,contact_id,user_id,kind,outcome,body,created_at) VALUES (?,?,?,?,?,?,NOW())",
+              [(int) $client['id'], $contactId, $by, $kind, $outcome, mb_substr($body, 0, 5000)]);
+    if ($kind !== 'note') crm_mark_response($contactId, 'crm');
+    return true;
+}
+
+/** Set (or clear, with NULL) the next follow-up, and keep it in the lead's history. */
+function crm_set_followup(array $client, int $contactId, ?string $when, string $note, ?int $by): void
+{
+    $at = $when !== null && strtotime($when) ? date('Y-m-d H:i:s', strtotime($when)) : null;
+    $note = mb_substr(trim($note), 0, 255);
+    if (db_has_column('contacts', 'followup_note')) {
+        db_run("UPDATE contacts SET next_followup_at=?, followup_note=? WHERE id=? AND client_id=?",
+               [$at, $at && $note !== '' ? $note : null, $contactId, (int) $client['id']]);
+    } else {
+        db_run("UPDATE contacts SET next_followup_at=? WHERE id=? AND client_id=?", [$at, $contactId, (int) $client['id']]);
+    }
+    crm_log((int) $client['id'], $contactId, 'followup', null, $at, $by);
+}
+
 /**
  * Put a contact into the pipeline.
  *

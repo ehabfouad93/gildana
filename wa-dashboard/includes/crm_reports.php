@@ -72,7 +72,7 @@ function crm_report_sales(int $clientId, array $f): array
 
     $rows = [];
     $blank = fn($uid, $name) => ['user_id' => $uid, 'name' => $name, 'assigned' => 0, 'contacted' => 0,
-                                 'worked' => 0, 'won' => 0, 'won_value' => 0.0, 'overdue' => 0, 'resp' => []];
+                                 'worked' => 0, 'activities' => 0, 'won' => 0, 'won_value' => 0.0, 'overdue' => 0, 'resp' => []];
 
     // Handed out in the period.
     $given = db_all("SELECT e.to_val AS uid, e.contact_id, e.created_at, c.first_response_at
@@ -101,6 +101,17 @@ function crm_report_sales(int $clientId, array $f): array
         $uid = (int) $r['uid'];
         $rows[$uid] ??= $blank($uid, crm_user_name($uid));
         $rows[$uid]['worked'] = (int) $r['n'];
+    }
+
+    // Calls, meetings, visits, WhatsApps and emails they logged — the work behind the numbers.
+    if (db_has_column('crm_notes', 'kind')) {
+        foreach (db_all("SELECT n.user_id AS uid, COUNT(*) n FROM crm_notes n JOIN contacts c ON c.id = n.contact_id
+                          WHERE n.kind <> 'note' AND n.user_id IS NOT NULL AND n.created_at BETWEEN ? AND ? AND {$w}
+                          GROUP BY n.user_id", array_merge([$from, $to], $p)) as $r) {
+            $uid = (int) $r['uid'];
+            $rows[$uid] ??= $blank($uid, crm_user_name($uid));
+            $rows[$uid]['activities'] = (int) $r['n'];
+        }
     }
 
     // Won in the period.

@@ -318,7 +318,7 @@ function meta_process_lead(array $page, string $leadgenId, string $via, ?array $
  *
  * @return array{forms:int, imported:int}
  */
-function meta_poll(int $everyMinutes = 10, int $maxForms = 50): array
+function meta_poll(int $everyMinutes = 5, int $maxForms = 50): array
 {
     $sum = ['forms' => 0, 'imported' => 0];
     try {

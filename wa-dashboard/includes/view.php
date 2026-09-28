@@ -94,7 +94,7 @@ function nav_items(string $role): array
     $nav = [
         'dashboard' => ['label' => 'Dashboard', 'url' => 'index.php',     'icon' => 'grid'],
         'inbox'     => ['label' => 'Inbox',     'url' => 'inbox.php',     'icon' => 'chat'],
-        'crm'       => ['label' => 'CRM',       'url' => 'crm.php',       'icon' => 'pipe'],
+        'crm'       => ['label' => 'CRM',       'url' => 'crm.php',       'icon' => 'pipe', 'children' => 'crm'],
         'contacts'  => ['label' => 'Contacts',  'url' => 'contacts.php',  'icon' => 'users'],
         'lists'     => ['label' => 'Lists',     'url' => 'lists.php',     'icon' => 'list'],
         'templates'   => ['label' => 'Templates',   'url' => 'templates.php',   'icon' => 'doc'],
@@ -125,6 +125,40 @@ function nav_items(string $role): array
         }
     }
     return $nav;
+}
+
+/**
+ * The sub-menu under a sidebar item, for sections with several pages of their own.
+ * Each entry: [label, url, the page that counts as "here"]. Filtered by what this user may do.
+ */
+function nav_children(string $group): array
+{
+    if ($group !== 'crm') return [];
+    $write = !function_exists('can_write') || can_write();
+    $admin = !function_exists('is_client_admin') || is_client_admin();
+    $items = [
+        ['Pipeline',     'crm.php',                         'crm.php'],
+        ['Follow-ups',   'crm.php?view=table&due=today',    'crm.php?due'],
+        ['Reports',      'crm_reports.php',                 'crm_reports.php'],
+    ];
+    if ($write) $items[] = ['Import leads', 'crm_import.php', 'crm_import.php'];
+    if ($admin) {
+        $items[] = ['Lead forms', 'meta_leads.php', 'meta_leads.php'];
+        $items[] = ['Stages',     'crm.php?stages=1', 'crm.php?stages'];
+    }
+    return $items;
+}
+
+/** Which sub-menu entry is the page being viewed. */
+function nav_child_active(array $child): bool
+{
+    $page = basename((string) ($_SERVER['SCRIPT_NAME'] ?? ''));
+    [$file, $q] = array_pad(explode('?', $child[2], 2), 2, '');
+    if ($page !== $file) return $page === 'crm_lead.php' && $child[0] === 'Pipeline';
+    $hasDue = ($_GET['due'] ?? '') !== ''; $hasStages = !empty($_GET['stages']);
+    if ($q === 'due')    return $hasDue;
+    if ($q === 'stages') return $hasStages;
+    return !$hasDue && !$hasStages;
 }
 
 /**
@@ -268,10 +302,30 @@ $barH   = max(58, $logoH + 22);
 <div class="shell">
   <aside class="sidebar" id="sidebar">
     <nav class="sb-nav">
-      <?php foreach ($items as $key => $item): ?>
+      <?php foreach ($items as $key => $item):
+        $kids = !empty($item['children']) ? nav_children((string) $item['children']) : []; ?>
+        <?php if ($kids): $open = $key === $active; ?>
+        <div class="sb-group <?= $open ? 'open' : '' ?>">
+          <div class="sb-head">
+            <a class="sb-link <?= $open ? 'active' : '' ?>" href="<?= e($navBase . $item['url']) ?>">
+              <?= nav_icon($item['icon']) ?> <span><?= e($item['label']) ?></span>
+            </a>
+            <button type="button" class="sb-toggle" aria-label="Show <?= e($item['label']) ?> pages" aria-expanded="<?= $open ? 'true' : 'false' ?>"
+                    onclick="const g=this.closest('.sb-group');g.classList.toggle('open');this.setAttribute('aria-expanded',g.classList.contains('open'))">
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 4.5l3 3 3-3"/></svg>
+            </button>
+          </div>
+          <div class="sb-sub">
+            <?php foreach ($kids as $kid): ?>
+              <a class="sb-sublink <?= $open && nav_child_active($kid) ? 'active' : '' ?>" href="<?= e($navBase . $kid[1]) ?>"><?= e($kid[0]) ?></a>
+            <?php endforeach; ?>
+          </div>
+        </div>
+        <?php else: ?>
         <a class="sb-link <?= $key === $active ? 'active' : '' ?>" href="<?= e($navBase . $item['url']) ?>">
           <?= nav_icon($item['icon']) ?> <span><?= e($item['label']) ?></span>
         </a>
+        <?php endif; ?>
       <?php endforeach; ?>
       <span class="sb-sep"></span>
       <span class="sb-who"><?= e(current_user()['email'] ?? '') ?></span>

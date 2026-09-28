@@ -388,7 +388,8 @@ async function stSave(){
   const stages = [...document.querySelectorAll('#st-list .st-row')].map(r => ({
     id: r.dataset.id, name: r.querySelector('.st-name').value, kind: r.querySelector('.st-kind').value }));
   const d = await crmPost({action:'stages', stages: JSON.stringify(stages)});
-  if (d.ok) location.reload(); else { $m('st-err').hidden = false; $m('st-err').textContent = d.error || 'Could not save.'; }
+  if (d.ok) location.href = 'crm.php'; else { $m('st-err').hidden = false; $m('st-err').textContent = d.error || 'Could not save.'; }
 }
+<?php if ($isAdmin && !empty($_GET['stages'])): ?>crmStages();   // opened from the CRM menu → Stages<?php endif; ?>
 </script>
 <?php layout_footer();
