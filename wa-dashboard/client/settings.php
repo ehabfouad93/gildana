@@ -175,33 +175,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
     redirect('settings.php#ai');
 }
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array(($_POST['action'] ?? ''), ['save_profile', 'clear_avatar'], true)) {
-    verify_csrf();
-    if (($_POST['action'] ?? '') === 'clear_avatar') { profile_clear_avatar((int) $ME['id']); flash('Picture removed.'); redirect('settings.php#profile'); }
-    $r = profile_save((int) $ME['id'], $_POST, $_FILES);
-    if (!$r['ok']) $err = $r['error'];
-    else { flash('Profile saved.'); redirect('settings.php#profile'); }
-}
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'change_password') {
-    verify_csrf();
-    $cur  = (string) ($_POST['current_password'] ?? '');
-    $new  = (string) ($_POST['new_password'] ?? '');
-    $conf = (string) ($_POST['confirm_password'] ?? '');
-    $user = db_row("SELECT * FROM users WHERE id=?", [(int) $ME['id']]);
-
-    if (!$user || !password_verify($cur, $user['password_hash'])) {
-        $err = 'Current password is incorrect.';
-    } elseif (strlen($new) < 8) {
-        $err = 'New password must be at least 8 characters.';
-    } elseif ($new !== $conf) {
-        $err = 'New passwords do not match.';
-    } else {
-        db_run("UPDATE users SET password_hash=? WHERE id=?", [password_hash($new, PASSWORD_DEFAULT), (int) $ME['id']]);
-        flash('Password changed.');
-        redirect('settings.php');
-    }
-}
+// A person's own name, picture and password now live on profile.php, open to every role.
 
 client_header('Settings', 'settings', $CLIENT);
 page_head('Settings');
@@ -581,18 +555,10 @@ $isPersonal = channel_is_personal($CLIENT); ?>
   <?php endif; ?>
 </div>
 
-<?= profile_card_html(db_row("SELECT * FROM users WHERE id=?", [(int) $ME['id']]) ?: $ME, '../') ?>
-
 <div class="card">
-  <h2>Change Password</h2>
-  <form method="post" style="max-width:420px">
-    <?= csrf_field() ?>
-    <input type="hidden" name="action" value="change_password">
-    <div class="field"><span class="lbl">Current Password</span><input type="password" name="current_password" required></div>
-    <div class="field"><span class="lbl">New Password (min 8)</span><input type="password" name="new_password" required minlength="8"></div>
-    <div class="field"><span class="lbl">Confirm New Password</span><input type="password" name="confirm_password" required></div>
-    <button type="submit" class="btn btn-primary">Change Password</button>
-  </form>
+  <h2>Your profile</h2>
+  <p class="text-muted" style="font-size:12.5px;margin:0">Your name, picture and password are on
+    <a href="profile.php">My profile</a>.</p>
 </div>
 
 <script>

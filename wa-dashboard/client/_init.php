@@ -7,9 +7,21 @@ require_once __DIR__ . '/../includes/whatsapp.php';
 require_once __DIR__ . '/../includes/channel.php';
 require_once __DIR__ . '/../includes/credits.php';
 require_once __DIR__ . '/../includes/billing.php';
+require_once __DIR__ . '/../includes/permissions.php';
 
 /** @var array $ME, array $CLIENT */
 [$ME, $CLIENT] = require_client();
+
+/* The user's row, read from the database on every request rather than trusted from the session.
+   A role or module change must bite on the next click: if it only applied at the next login, a
+   salesperson who has just been demoted or removed would keep their old access for as long as
+   their session lived. */
+$PERM_USER = current_user_full() ?: $ME;
+if (($ME['role'] ?? '') !== 'admin'
+    && (empty($PERM_USER['id']) || ($PERM_USER['status'] ?? 'active') !== 'active')) {
+    logout();
+    redirect('../login.php');
+}
 
 /** Credits chip for the topbar. */
 function credits_chip(array $client): string
@@ -59,3 +71,39 @@ function client_ready(array $client): bool
     }
     return $client['access_token_enc'] && $client['phone_number_id'];
 }
+
+/* ── Access: one gate for every client page ──
+   Every client page loads this file, so enforcing here means no page can forget to. */
+(function () use ($CLIENT) {
+    $user = $GLOBALS['PERM_USER'];
+    $page = basename((string) ($_SERVER['SCRIPT_NAME'] ?? ''));
+    $ajax = !empty($_POST['ajax']) || !empty($_GET['ajax'])
+         || stripos((string) ($_SERVER['HTTP_ACCEPT'] ?? ''), 'application/json') !== false;
+
+    $refuse = function (int $code, string $title, string $why) use ($ajax, $CLIENT): void {
+        http_response_code($code);
+        if ($ajax) { header('Content-Type: application/json'); echo json_encode(['ok' => false, 'error' => $why]); exit; }
+        client_header($title, '', $CLIENT);
+        echo '<div class="card" style="max-width:560px"><h2 style="margin-top:0">' . e($title) . '</h2>'
+           . '<p class="text-muted">' . e($why) . '</p>'
+           . '<a class="btn btn-ghost" href="index.php">&larr; Back to the dashboard</a></div>';
+        layout_footer();
+        exit;
+    };
+
+    $why = page_denied($page, $user, $CLIENT);
+    if ($why === 'plan') {
+        $refuse(403, 'Not included in your plan',
+            'This part of the app is not switched on for your account. Ask ' . BRAND_PARENT . ' to add it.');
+    }
+    if ($why === 'role') {
+        $refuse(403, 'Not available for your role',
+            'Your account admin has not given you access to this. Ask them to add it on the Team page.');
+    }
+
+    // Viewers can look but never change or send. Refusing every POST here, rather than asking
+    // each form to check, is what makes that true everywhere including pages added later.
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && !can_write()) {
+        $refuse(403, 'View-only access', 'Your role can view this account but not change anything or send messages.');
+    }
+})();

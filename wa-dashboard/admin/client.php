@@ -3,6 +3,7 @@ declare(strict_types=1);
 require __DIR__ . '/_init.php';
 require_once __DIR__ . '/../includes/billing.php';
 require_once __DIR__ . '/../includes/channel.php';
+require_once __DIR__ . '/../includes/permissions.php';
 
 $id = (int) ($_GET['id'] ?? 0);
 $client = db_row("SELECT * FROM clients WHERE id = ?", [$id]);
@@ -142,6 +143,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $new = credits_adjust($id, $delta, $reason);
             if ($new === null) $err = 'Adjustment rejected (balance cannot go negative).';
             else { flash('Credits updated. New balance: ' . number_format($new) . '.'); redirect('client.php?id=' . $id . '#credits'); }
+        }
+    }
+
+    if ($action === 'save_modules') {
+        /* What this client has bought. Stored as NULL when everything is ticked, so "all" keeps
+           meaning all as modules are added in future releases rather than freezing today's list. */
+        $picked = array_map('strval', (array) ($_POST['modules'] ?? []));
+        if (!$picked) {
+            $err = 'Leave at least one module on — an account with none has nothing to open.';
+        } else {
+            db_run("UPDATE clients SET modules=? WHERE id=?", [perm_store($picked), $id]);
+            flash('Modules updated. The change applies on the client\'s next click.');
+            redirect('client.php?id=' . $id . '#modules');
         }
     }
 
@@ -298,6 +312,33 @@ $use      = db_row("SELECT * FROM usage_periods WHERE client_id=? AND period_sta
     <?php endif; ?>
 
     <button type="submit" class="btn btn-primary mt10">Save plan</button>
+  </form>
+</div>
+
+<!-- ── Modules ── -->
+<?php $hasMods = client_modules($client); $allOn = ($client['modules'] ?? null) === null; ?>
+<div class="card" id="modules">
+  <h2>Modules</h2>
+  <p class="text-muted" style="font-size:12.5px;margin:-6px 0 14px">
+    What this account can use. Anything switched off disappears from their menu and cannot be
+    opened, for every user on the account — their own admins can only narrow further, never add.
+    <strong>Settings</strong> and <strong>Team</strong> are always on: without them the client
+    could not connect WhatsApp or add their own people.
+  </p>
+  <form method="post">
+    <?= csrf_field() ?><input type="hidden" name="action" value="save_modules">
+    <label class="mod-all"><input type="checkbox" id="mod-all" <?= $allOn ? 'checked' : '' ?>
+      onchange="document.querySelectorAll('.mod-cb').forEach(c=>c.checked=this.checked)">
+      <strong>Everything</strong> <span class="text-muted">— including modules added in future updates</span></label>
+    <div class="mod-grid">
+      <?php foreach (perm_plan_modules() as $key => $m): ?>
+        <label class="mod-opt"><input type="checkbox" class="mod-cb" name="modules[]" value="<?= e($key) ?>"
+          <?= in_array($key, $hasMods, true) ? 'checked' : '' ?>
+          onchange="document.getElementById('mod-all').checked=[...document.querySelectorAll('.mod-cb')].every(c=>c.checked)">
+          <?= e($m['label']) ?></label>
+      <?php endforeach; ?>
+    </div>
+    <button type="submit" class="btn btn-primary mt10">Save modules</button>
   </form>
 </div>
 
@@ -486,11 +527,12 @@ function chToggle(){ document.getElementById('ch-personal').style.display =
   </div>
   <div class="table-wrap">
     <table class="data">
-      <thead><tr><th>Email</th><th>Last Login</th><th>Created</th><th></th></tr></thead>
+      <thead><tr><th>Email</th><th>Role</th><th>Last Login</th><th>Created</th><th></th></tr></thead>
       <tbody>
       <?php foreach ($users as $u): ?>
         <tr>
           <td><?= e((string) $u['email']) ?></td>
+          <td><span class="pill gray"><?= e(perm_roles()[user_client_role($u)]['label']) ?></span></td>
           <td class="text-muted"><?= $u['last_login_at'] ? e(date('d M Y, H:i', strtotime((string) $u['last_login_at']))) : 'Never' ?></td>
           <td class="text-muted"><?= e(date('d M Y', strtotime((string) $u['created_at']))) ?></td>
           <td style="text-align:right;white-space:nowrap">

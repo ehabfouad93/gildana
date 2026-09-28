@@ -27,7 +27,8 @@ if (!client_ready($CLIENT)): ?>
 /* The first-run walkthrough, answered from real data rather than a list someone ticks by
    hand. It disappears the moment everything is done — a checklist of six ticks is clutter. */
 $gs = guide_checklist($CLIENT);
-if ($gs['done'] < $gs['total']): ?>
+// Setup is the account Admin's job; a salesperson has no way to act on "connect WhatsApp".
+if ($gs['done'] < $gs['total'] && is_client_admin()): ?>
   <div class="card">
     <div class="gs-head">
       <h2 style="margin:0;border:0;padding:0">Getting started</h2>
@@ -59,6 +60,7 @@ if ($gs['done'] < $gs['total']): ?>
   <div class="stat-tile"><span class="lbl">Sent (30d)</span><span class="val"><?= number_format($sent30) ?></span></div>
 </div>
 
+<?php if (can_use('campaigns')): /* campaign names and results are Campaigns' business */ ?>
 <div class="card card-flush">
   <div style="padding:16px 22px" class="row-between">
     <h2 style="border:0;padding:0;margin:0">Recent Campaigns</h2>
@@ -86,5 +88,6 @@ if ($gs['done'] < $gs['total']): ?>
     </table>
   </div>
 </div>
+<?php endif; ?>
 
 <?php layout_footer(); ?>

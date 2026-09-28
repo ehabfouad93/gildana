@@ -103,6 +103,7 @@ function nav_items(string $role): array
         'agents'      => ['label' => 'AI Chat Agent',  'url' => 'agents.php',       'icon' => 'bot'],
         'reports'     => ['label' => 'Reports',        'url' => 'reports.php',      'icon' => 'chart'],
         'billing'     => ['label' => 'Billing',        'url' => 'billing.php',      'icon' => 'doc'],
+        'team'        => ['label' => 'Team',           'url' => 'team.php',         'icon' => 'team'],
         'settings'  => ['label' => 'Settings',  'url' => 'settings.php',  'icon' => 'gear'],
     ];
 
@@ -110,6 +111,17 @@ function nav_items(string $role): array
     if (($n = nav_attention_count()) > 0) {
         $item = ['label' => 'Needs attention', 'url' => 'failed.php', 'icon' => 'alert', 'badge' => $n];
         $nav = array_slice($nav, 0, 6, true) + ['attention' => $item] + array_slice($nav, 6, null, true);
+    }
+
+    /* Show only what this user can open. The gate in client/_init.php already refuses the rest;
+       hiding it here is what keeps the sidebar from being a list of doors that say no. Items
+       whose nav key is not a module (the dashboard) always stay. */
+    if (function_exists('can_use') && function_exists('perm_modules')) {
+        $navToModule = ['attention' => 'campaigns'];
+        foreach ($nav as $key => $_) {
+            $mod = $navToModule[$key] ?? $key;
+            if (isset(perm_modules()[$mod]) && !can_use($mod)) unset($nav[$key]);
+        }
     }
     return $nav;
 }
@@ -221,14 +233,25 @@ $barH   = max(58, $logoH + 22);
   <nav class="topbar-nav">
     <?php if (!empty($opts['credits_html'])): ?><?= $opts['credits_html'] ?><?php endif; ?>
 
+    <?php
+      /* The bell opens the Inbox and counts its unread threads, so a user without the Inbox
+         should not see either: a door that says "not for your role", with a number on it they
+         are not allowed to act on. The profile chip is the person's OWN page, so it goes to
+         profile.php for client users rather than to the company's Settings. */
+      $clientSide = $role !== 'admin';
+      $showBell   = !$clientSide || !function_exists('can_use') || can_use('inbox');
+      $meHref     = $clientSide ? 'profile.php' : 'settings.php';
+    ?>
+    <?php if ($showBell): ?>
     <a class="topbar-bell" href="<?= e($navBase) ?>inbox.php" aria-label="<?= $unread ? $unread . ' unread message(s)' : 'Inbox' ?>" title="Inbox">
       <svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
         <path d="M10 2.5a4.5 4.5 0 00-4.5 4.5c0 3.5-1.5 4.5-1.5 4.5h12s-1.5-1-1.5-4.5A4.5 4.5 0 0010 2.5z"/><path d="M8.6 15a1.6 1.6 0 002.8 0"/>
       </svg>
       <?php if ($unread > 0): ?><span class="bell-dot"><?= $unread > 99 ? '99+' : (int) $unread ?></span><?php endif; ?>
     </a>
+    <?php endif; ?>
 
-    <a class="topbar-user" href="<?= e($navBase) ?>settings.php" title="<?= e((string) ($me['email'] ?? '')) ?>">
+    <a class="topbar-user" href="<?= e($navBase) ?><?= $meHref ?>" title="<?= e((string) ($me['email'] ?? '')) ?>">
       <?= user_avatar_html($me, 30, $root) ?>
       <span class="topbar-user-name"><?= e(user_display_name($me)) ?></span>
     </a>
