@@ -92,6 +92,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         setting_set('meta_app_id', preg_replace('/\D+/', '', (string) ($_POST['meta_app_id'] ?? '')));
         $sec = trim((string) ($_POST['meta_app_secret'] ?? ''));
         if ($sec !== '') setting_set('meta_app_secret', encrypt_secret($sec));    // blank = keep
+        setting_set('meta_config_id', preg_replace('/\D+/', '', (string) ($_POST['meta_config_id'] ?? '')));
         flash('Facebook lead form settings saved.');
         redirect('settings.php#meta');
     }
@@ -388,6 +389,9 @@ if ($ok):  ?><div class="alert success"><?= e($ok) ?></div><?php endif; ?>
         <input type="text" name="meta_app_id" value="<?= e($mCfg['app_id']) ?>" inputmode="numeric" placeholder="1234567890123456"></div>
       <div class="field"><span class="lbl">App Secret <?= $mCfg['app_secret'] !== '' ? '<span class="pill green" style="margin-left:6px">••• set</span>' : '' ?></span>
         <input type="text" name="meta_app_secret" autocomplete="off" placeholder="<?= $mCfg['app_secret'] !== '' ? 'Leave blank to keep current' : 'Paste the app secret' ?>"></div>
+      <div class="field"><span class="lbl">Login configuration ID <span class="text-muted">(optional)</span></span>
+        <input type="text" name="meta_config_id" value="<?= e($mCfg['config_id']) ?>" inputmode="numeric" placeholder="Only if Facebook says Invalid Scopes">
+        <span class="text-muted" style="font-size:12px">From Facebook Login for Business → Configurations. When set, it decides the permissions asked for.</span></div>
     </div>
     <button type="submit" class="btn btn-primary">Save</button>
   </form>

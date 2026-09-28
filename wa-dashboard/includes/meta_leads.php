@@ -34,6 +34,8 @@ function meta_cfg(): array
     return [
         'app_id'     => meta_setting('meta_app_id'),
         'app_secret' => (($s = meta_setting('meta_app_secret')) !== '' ? decrypt_secret($s) : ''),
+        // Facebook Login for Business: a saved configuration in the app decides the permissions.
+        'config_id'  => meta_setting('meta_config_id'),
     ];
 }
 
@@ -84,13 +86,16 @@ function meta_auth_url(int $clientId, ?int $userId): string
     $state = bin2hex(random_bytes(24));
     db_run("INSERT INTO meta_oauth_state (state,client_id,user_id,created_at) VALUES (?,?,?,NOW())", [$state, $clientId, $userId]);
     try { db_run("DELETE FROM meta_oauth_state WHERE created_at < NOW() - INTERVAL 1 HOUR"); } catch (Throwable $e) {}
+    $cfg = meta_cfg();
+    // Business-type apps reject a scope list and want the id of a Login configuration instead.
+    $ask = $cfg['config_id'] !== '' ? ['config_id' => $cfg['config_id'], 'override_default_response_type' => 'true']
+                                    : ['scope' => META_SCOPES];
     return meta_dialog_base() . '/dialog/oauth?' . http_build_query([
-        'client_id'     => meta_cfg()['app_id'],
+        'client_id'     => $cfg['app_id'],
         'redirect_uri'  => meta_redirect_uri(),
         'state'         => $state,
-        'scope'         => META_SCOPES,
         'response_type' => 'code',
-    ]);
+    ] + $ask);
 }
 
 function meta_take_state(string $state): ?array
