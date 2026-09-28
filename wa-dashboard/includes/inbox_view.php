@@ -156,7 +156,7 @@ const esc = s => (s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&
 const initials = s => (s||'?').trim().slice(0,2).toUpperCase();
 function tfmt(t){ if(!t) return ''; const d=new Date(t.replace(' ','T')); return isNaN(d)?'':d.toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}); }
 const tick = s => s==='read'?'✓✓':s==='delivered'?'✓✓':s==='sent'?'✓'
-  :s==='failed'?'⚠ failed':s==='resent'?'↻ queued again':'';
+  :s==='failed'?'⚠ failed':s==='resent'?'↻ sent again — see below':'';
 
 async function loadThreads(){
   const q = encodeURIComponent(el('ib-q').value||'');

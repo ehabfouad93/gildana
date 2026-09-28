@@ -114,10 +114,38 @@ function inbox_thread(int $clientId, int $contactId, int $afterId = 0, int $limi
        maintain healthy ecosystem engagement" tells an agent nothing about whether the lead is
        reachable, whether it was their fault, or what to do next. Attach the plain-language
        explanation here so every caller of the thread gets the same answer. */
+    /* Number each attempt at the same message. A resend that WhatsApp refuses again produces a
+       NEW failed row identical to the first, so after a refresh the thread looked exactly as if
+       the button had done nothing — the client could not tell "not retried" from "retried and
+       refused". Attempts are linked by the queued item they re-ran (source + source_ref_id),
+       which is exact; manual sends have no such item, so those fall back to the same body. */
+    $seen = [];
+    foreach ($rows as &$r) {
+        if (($r['direction'] ?? '') !== 'out') continue;
+        $ref = (int) ($r['source_ref_id'] ?? 0);
+        $key = $ref > 0 ? ($r['source'] ?? '') . ':' . $ref : 'body:' . md5((string) $r['body']);
+        $seen[$key] = ($seen[$key] ?? 0) + 1;
+        $r['attempt'] = $seen[$key];
+    }
+    unset($r);
+    // A message that was retried is superseded by its later attempt: mark it so the thread can
+    // quiet it down instead of showing two identical failures side by side.
+    foreach ($rows as &$r) {
+        if (($r['direction'] ?? '') !== 'out') continue;
+        $ref = (int) ($r['source_ref_id'] ?? 0);
+        $key = $ref > 0 ? ($r['source'] ?? '') . ':' . $ref : 'body:' . md5((string) $r['body']);
+        $r['attempts_total'] = $seen[$key];
+    }
+    unset($r);
+
     foreach ($rows as &$r) {
         if (($r['status'] ?? '') !== 'failed') continue;
         $ex = wa_error_explain((string) ($r['error_code'] ?? ''), (string) ($r['error_title'] ?? ''));
         $r['error_label']  = $ex['label'];
+        if ((int) ($r['attempt'] ?? 1) > 1) {
+            // Say plainly that the resend DID happen. Otherwise it reads as a broken button.
+            $r['error_label'] = 'Sent again — WhatsApp refused it again (attempt ' . (int) $r['attempt'] . ')';
+        }
         $r['error_hint']   = strip_tags($ex['hint']);   // plain text: the thread escapes on render
         $r['error_action'] = $ex['action'];
         // Offer the button only when a resend can actually succeed AND we know what to re-run.
