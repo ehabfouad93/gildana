@@ -21,7 +21,15 @@ declare(strict_types=1);
 require_once __DIR__ . '/crm.php';
 require_once __DIR__ . '/whatsapp.php';
 
-const META_SCOPES = 'pages_show_list,pages_read_engagement,pages_manage_metadata,leads_retrieval,business_management';
+// pages_manage_ads is what lets us LIST a Page's forms and their questions; leads_retrieval reads the leads.
+const META_SCOPES = 'pages_show_list,pages_read_engagement,pages_manage_metadata,pages_manage_ads,leads_retrieval,business_management';
+
+/** Where a form's answer can go. */
+function meta_targets(): array
+{
+    return ['phone' => 'Phone (required)', 'name' => 'Full name', 'first_name' => 'First name', 'last_name' => 'Last name',
+            'email' => 'Email', 'attr' => 'Keep as a detail on the lead', 'ignore' => 'Don\'t import'];
+}
 
 function meta_setting(string $k): string
 {
@@ -182,14 +190,27 @@ function meta_sync_forms(array $page): array
  * anything that looks like a phone; everything else is kept as a detail on the lead, since a
  * question someone bothered to ask on the form is information the salesperson wants.
  */
-function meta_map_fields(array $fieldData): array
+function meta_map_fields(array $fieldData, ?array $mapping = null): array
 {
     $out = ['phone' => '', 'name' => '', 'email' => '', 'attrs' => []];
     $first = $last = '';
+    $mapping = $mapping ? array_change_key_case($mapping, CASE_LOWER) : null;
     foreach ($fieldData as $f) {
         $key = mb_strtolower(trim((string) ($f['name'] ?? '')));
         $val = trim((string) (is_array($f['values'] ?? null) ? implode(', ', $f['values']) : ($f['values'] ?? '')));
         if ($key === '' || $val === '') continue;
+        // The client's own mapping for this form wins; a question it doesn't mention falls through to recognition.
+        if ($mapping && isset($mapping[$key])) {
+            switch ($mapping[$key]) {
+                case 'ignore':     continue 2;
+                case 'phone':      if ($out['phone'] === '') $out['phone'] = $val; continue 2;
+                case 'name':       $out['name'] = $val; continue 2;
+                case 'first_name': $first = $val; continue 2;
+                case 'last_name':  $last = $val; continue 2;
+                case 'email':      $out['email'] = $val; continue 2;
+                case 'attr':       $out['attrs'][$key] = $val; continue 2;
+            }
+        }
         if ($key === 'phone_number' || $key === 'phone') { $out['phone'] = $val; continue; }
         if ($key === 'full_name')                         { $out['name']  = $val; continue; }
         if ($key === 'first_name')                        { $first = $val; continue; }
@@ -252,7 +273,8 @@ function meta_process_lead(array $page, string $leadgenId, string $via, ?array $
     if ($form && !(int) $form['enabled']) { meta_log($cid, $leadgenId, 'skipped', 'That form is switched off.'); return 'skipped'; }
     if (!$form && !(int) $page['all_forms']) { meta_log($cid, $leadgenId, 'skipped', 'A form not chosen for import.'); return 'skipped'; }
 
-    $m = meta_map_fields((array) ($lead['field_data'] ?? []));
+    $map = json_decode((string) ($form['mapping'] ?? ''), true);
+    $m = meta_map_fields((array) ($lead['field_data'] ?? []), is_array($map) ? $map : null);
     $phone = normalize_phone($m['phone'], (string) ($client['default_country'] ?? ''));
     if ($phone === '') {
         meta_log($cid, $leadgenId, 'skipped', $m['phone'] === '' ? 'The form has no phone number.' : 'Not a usable phone number: ' . $m['phone']);
@@ -326,5 +348,93 @@ function meta_poll(int $everyMinutes = 10, int $maxForms = 50): array
             if (meta_process_lead($page, (string) ($lead['id'] ?? ''), 'poll', $lead, (string) $f['form_id']) === 'imported') $sum['imported']++;
         }
     }
+    return $sum;
+}
+
+/**
+ * A Page's forms, read live from Facebook, with their questions and lead counts — what the
+ * "choose a form" dropdown and the mapping step are built from.
+ *
+ * @return array{ok:bool, error:string, forms:array}
+ */
+function meta_page_forms(array $page): array
+{
+    $r = meta_http('GET', $page['page_id'] . '/leadgen_forms', [
+        'fields' => 'id,name,status,leads_count,created_time,questions{key,label,type}',
+        'limit' => 200, 'access_token' => meta_page_token($page)]);
+    if (!$r['ok']) return ['ok' => false, 'error' => meta_explain_error($r['error']), 'forms' => []];
+    $forms = [];
+    foreach ((array) ($r['json']['data'] ?? []) as $f) {
+        if (empty($f['id'])) continue;
+        $qs = [];
+        foreach ((array) ($f['questions'] ?? []) as $q) {
+            $key = (string) ($q['key'] ?? '');
+            if ($key === '') continue;
+            $qs[] = ['key' => $key, 'label' => (string) ($q['label'] ?? '') ?: ucfirst(str_replace('_', ' ', $key)),
+                     'type' => (string) ($q['type'] ?? ''), 'guess' => meta_guess_target($key, (string) ($q['type'] ?? ''))];
+        }
+        $forms[] = ['id' => (string) $f['id'], 'name' => (string) ($f['name'] ?? $f['id']), 'status' => (string) ($f['status'] ?? ''),
+                    'leads_count' => isset($f['leads_count']) ? (int) $f['leads_count'] : null, 'questions' => $qs];
+    }
+    return ['ok' => true, 'error' => '', 'forms' => $forms];
+}
+
+/** The sensible default for a question, so most forms need no changes at all. */
+function meta_guess_target(string $key, string $type): string
+{
+    $t = strtoupper($type); $k = mb_strtolower($key);
+    if ($t === 'PHONE' || in_array($k, ['phone_number', 'phone'], true)) return 'phone';
+    if ($t === 'FULL_NAME' || $k === 'full_name') return 'name';
+    if ($t === 'FIRST_NAME' || $k === 'first_name') return 'first_name';
+    if ($t === 'LAST_NAME' || $k === 'last_name') return 'last_name';
+    if ($t === 'EMAIL' || $k === 'email') return 'email';
+    if (preg_match('/phone|mobile|whatsapp|موبايل|رقم|هاتف/u', $k)) return 'phone';
+    return 'attr';
+}
+
+/** Facebook's permission errors, said in terms of what to do about them. */
+function meta_explain_error(string $err): string
+{
+    if (preg_match('/pages_manage_ads|leads_retrieval|permission|\(#200\)|\(#10\)/i', $err)) {
+        return 'Facebook would not share this Page\'s forms: ' . $err . ' — press "Reconnect Facebook" and allow every permission it asks for. '
+             . 'You also need to be an admin of the Page (or have Leads access in its settings).';
+    }
+    return $err;
+}
+
+/**
+ * Pull every lead Meta still holds for one form (it keeps 90 days), page by page.
+ * Dedupe is the same claim the webhook uses, so running it twice imports nothing twice.
+ *
+ * @return array{ok:bool, error:string, imported:int, already:int, skipped:int, more:bool}
+ */
+function meta_sync_form(array $form, int $max = 1000): array
+{
+    $sum = ['ok' => true, 'error' => '', 'imported' => 0, 'already' => 0, 'skipped' => 0, 'more' => false];
+    $page = db_row("SELECT * FROM meta_pages WHERE client_id=? AND page_id=?", [(int) $form['client_id'], (string) $form['page_id']]);
+    if (!$page) return ['ok' => false, 'error' => 'The Page for this form is no longer connected.'] + $sum;
+    $params = ['fields' => 'id,created_time,field_data,form_id,ad_id,ad_name,campaign_name', 'limit' => 100,
+               'access_token' => meta_page_token($page)];
+    $seen = 0;
+    while (true) {
+        $r = meta_http('GET', $form['form_id'] . '/leads', $params);
+        if (!$r['ok']) { $sum['ok'] = false; $sum['error'] = meta_explain_error($r['error']); break; }
+        foreach ((array) ($r['json']['data'] ?? []) as $lead) {
+            $out = meta_process_lead($page, (string) ($lead['id'] ?? ''), 'poll', $lead, (string) $form['form_id']);
+            $sum[$out === 'imported' ? 'imported' : ($out === 'duplicate' ? 'already' : 'skipped')]++;
+            $seen++;
+        }
+        $after = (string) ($r['json']['paging']['cursors']['after'] ?? '');
+        if ($after === '' || empty($r['json']['paging']['next'])) break;
+        if ($seen >= $max) { $sum['more'] = true; break; }
+        $params['after'] = $after;
+    }
+    // Reading the form worked, so whatever Facebook complained about before is over.
+    if ($sum['ok']) db_run("UPDATE meta_pages SET last_error=NULL WHERE id=?", [(int) $page['id']]);
+    // Fresh count while we are here.
+    $c = meta_http('GET', (string) $form['form_id'], ['fields' => 'leads_count', 'access_token' => meta_page_token($page)]);
+    $cnt = $c['ok'] && isset($c['json']['leads_count']) ? (int) $c['json']['leads_count'] : null;
+    db_run("UPDATE meta_forms SET last_synced_at=NOW(), last_polled_at=NOW(), leads_count=COALESCE(?, leads_count) WHERE id=?",
+           [$cnt, (int) $form['id']]);
     return $sum;
 }

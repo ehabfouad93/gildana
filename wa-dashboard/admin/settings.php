@@ -376,7 +376,7 @@ if ($ok):  ?><div class="alert success"><?= e($ok) ?></div><?php endif; ?>
       <li>Paste the App ID and App Secret below.</li>
     </ol>
     <div style="margin-top:8px"><strong>Before clients can use it:</strong> submit the app for <strong>App Review</strong> for
-      <span class="mono">leads_retrieval</span>, <span class="mono">pages_manage_metadata</span>,
+      <span class="mono">leads_retrieval</span>, <span class="mono">pages_manage_metadata</span>, <span class="mono">pages_manage_ads</span>,
       <span class="mono">pages_show_list</span>, <span class="mono">pages_read_engagement</span> and
       <span class="mono">business_management</span>, with
       <strong>Business Verification</strong>. Until it passes, only Pages managed by the app's own admins and testers
