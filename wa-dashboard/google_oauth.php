@@ -9,7 +9,7 @@ declare(strict_types=1);
  * connection fails, so the error below says so rather than just relaying "redirect_uri_mismatch".
  */
 
-require __DIR__ . '/includes/bootstrap.php';
+require_once __DIR__ . '/includes/bootstrap.php';
 require_once __DIR__ . '/includes/google.php';
 
 $state = (string) ($_GET['state'] ?? '');

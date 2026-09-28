@@ -1,6 +1,6 @@
 <?php
 declare(strict_types=1);
-require __DIR__ . '/includes/bootstrap.php';
+require_once __DIR__ . '/includes/bootstrap.php';
 
 /**
  * Self-contained image CAPTCHA (GD). Renders a distorted 5-character code,

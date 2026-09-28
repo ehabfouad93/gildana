@@ -14,17 +14,18 @@ declare(strict_types=1);
  * identically on both channels.
  */
 
-require __DIR__ . '/includes/config_loader.php';
-require __DIR__ . '/includes/helpers.php';
-require __DIR__ . '/includes/crypto.php';
-require __DIR__ . '/includes/db.php';
-require __DIR__ . '/includes/campaign.php';
-require __DIR__ . '/includes/credits.php';
-require __DIR__ . '/includes/whatsapp.php';
-require __DIR__ . '/includes/ai.php';
-require __DIR__ . '/includes/notify.php';
-require __DIR__ . '/includes/automation.php';
-require_once __DIR__ . '/includes/crm.php';   // pulls in channel.php + inbox.php
+require_once __DIR__ . '/includes/config_loader.php';
+require_once __DIR__ . '/includes/helpers.php';
+require_once __DIR__ . '/includes/crypto.php';
+require_once __DIR__ . '/includes/db.php';
+require_once __DIR__ . '/includes/campaign.php';
+require_once __DIR__ . '/includes/credits.php';
+require_once __DIR__ . '/includes/whatsapp.php';
+require_once __DIR__ . '/includes/ai.php';
+require_once __DIR__ . '/includes/notify.php';
+require_once __DIR__ . '/includes/automation.php';
+require_once __DIR__ . '/includes/crm.php';
+require_once __DIR__ . '/includes/sending.php';   // pulls in channel.php + inbox.php
 require_once __DIR__ . '/includes/push.php';
 
 // Some gateways probe the URL with a GET before they will save it.
@@ -50,6 +51,19 @@ if ($secret === '' || strlen($secret) < 16) {
 $client = db_row(
     "SELECT * FROM clients WHERE personal_hook_secret = ? OR personal_hook_secret_prev = ?",
     [$secret, $secret]);
+
+/* Not the company's phone? It may be a salesperson's own. Their session has its own secret, so a
+   message to Sara's number is known to be Sara's, and the client row becomes one carrying her
+   session — every function below then reads and writes her session, never the company's. */
+if (!$client) {
+    try {
+        $uc = db_row("SELECT * FROM user_channels WHERE hook_secret = ? OR hook_secret_prev = ?", [$secret, $secret]);
+    } catch (Throwable $e) { $uc = null; }
+    if ($uc) {
+        $base   = db_row("SELECT * FROM clients WHERE id=?", [(int) $uc['client_id']]);
+        $client = $base ? user_channel_client($base, $uc) : null;
+    }
+}
 if (!$client || ($client['status'] ?? '') !== 'active') {
     http_response_code(403);
     exit('unknown instance');
@@ -58,7 +72,7 @@ if (!$client || ($client['status'] ?? '') !== 'active') {
 /* A request on the CURRENT secret proves the gateway has moved over, so the previous one is
    no longer needed — retire it at the first real proof rather than on a timer. */
 if (!empty($client['personal_hook_secret_prev']) && hash_equals((string) $client['personal_hook_secret'], $secret)) {
-    db_run("UPDATE clients SET personal_hook_secret_prev=NULL WHERE id=?", [(int) $client['id']]);
+    pw_store($client, "personal_hook_secret_prev=NULL", []);
 }
 
 // Ack immediately: gateways retry on a slow response, and a retry would double-handle.
@@ -84,8 +98,8 @@ if (strpos($ev, 'connection') !== false) {
     $state = strtolower((string) ($data['data']['state'] ?? $data['state'] ?? ''));
     $mapped = in_array($state, ['open', 'connected'], true) ? 'connected'
             : (in_array($state, ['connecting', 'qr'], true) ? 'qr_pending' : 'disconnected');
-    db_run("UPDATE clients SET personal_status=?, personal_connected_at=IF(?='connected', NOW(), personal_connected_at) WHERE id=?",
-        [$mapped, $mapped, $cid]);
+    // To whichever phone this is — the company's or a salesperson's.
+    pw_store($client, "personal_status=?, personal_connected_at=IF(?='connected', NOW(), personal_connected_at)", [$mapped, $mapped]);
     exit;
 }
 
@@ -133,9 +147,15 @@ function pw_handle_inbound(array $client, array $in): void
         db_run("INSERT INTO contacts (client_id,phone_e164,wa_jid,name,opt_in_status,source,created_at,last_inbound_at)
                 VALUES (?,?,?,?, 'in','inbound',NOW(),NOW())", [$cid, $from, $jid ?: null, (string) $in['name']]);
         $contact = db_row("SELECT * FROM contacts WHERE client_id=? AND phone_e164=?", [$cid, $from]);
-        // Same as the Cloud webhook: a first message is a new lead for the next salesperson.
+        // Same as the Cloud webhook: a first message is a new lead for the next salesperson —
+        // unless it arrived on a salesperson's OWN number, in which case it is already theirs.
         if ($contact) {
-            crm_on_new_inbound($client, (int) $contact['id'], 'inbound');
+            $ownerOfPhone = (int) ($client['__user_id'] ?? 0);
+            if ($ownerOfPhone > 0) {
+                if (crm_enabled($client)) crm_add_lead($client, (int) $contact['id'], 'inbound', $ownerOfPhone);
+            } else {
+                crm_on_new_inbound($client, (int) $contact['id'], 'inbound');
+            }
             $contact = db_row("SELECT * FROM contacts WHERE id=?", [(int) $contact['id']]);
         }
     } else {
@@ -158,8 +178,18 @@ function pw_handle_inbound(array $client, array $in): void
     }
     if (!$contact) return;
 
+    $ownerOfPhone = (int) ($client['__user_id'] ?? 0);
+    // An existing contact nobody owns yet, writing to a salesperson's own phone, becomes theirs.
+    // One a colleague already owns keeps its owner — a customer's choice of number does not
+    // reassign a lead behind the team's back.
+    if ($ownerOfPhone > 0 && $contact['owner_user_id'] === null && crm_enabled($client)) {
+        if ($contact['stage_id'] === null) crm_add_lead($client, (int) $contact['id'], 'inbound', $ownerOfPhone);
+        else crm_assign($client, (int) $contact['id'], $ownerOfPhone);
+    }
+
     msg_log($cid, (int) $contact['id'], 'in', $text !== '' ? $text : '[' . $type . ']', [
         'type' => $type, 'source' => 'inbound', 'wamid' => $in['wamid'] !== '' ? $in['wamid'] : null,
+        'via' => $ownerOfPhone > 0 ? 'own' : 'company_personal',
     ]);
 
     // Flag for a push; the worker sends it (a slow webhook gets retried).
@@ -170,6 +200,11 @@ function pw_handle_inbound(array $client, array $in): void
         db_run("UPDATE contacts SET opt_in_status='out', opted_out_at=NOW() WHERE id=?", [(int) $contact['id']]);
         return;
     }
+
+    /* No bots on a salesperson's own phone. That is their personal conversation with a
+       customer; an automation answering from their number, in their name, is the last thing
+       they would expect — and it would send from a session the automation does not own. */
+    if ($ownerOfPhone > 0) return;
 
     // A personal number has no interactive buttons, so a numbered reply ("2") or the button
     // title arrives as ordinary text; the engine's existing free-text matching resolves it.

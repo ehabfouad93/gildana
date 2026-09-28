@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/_init.php';
-require __DIR__ . '/../includes/ai.php';
+require_once __DIR__ . '/../includes/ai.php';
 require_once __DIR__ . '/../includes/channel.php';
 require_once __DIR__ . '/../includes/profile.php';
 require_once __DIR__ . '/../includes/google.php';

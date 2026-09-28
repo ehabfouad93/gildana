@@ -8,13 +8,13 @@ declare(strict_types=1);
  * session at all. The endpoint is an unguessable capability URL the push service already
  * holds, and this returns only a bare integer — no message text, names or phone numbers.
  */
-require __DIR__ . '/includes/config_loader.php';
-require __DIR__ . '/includes/helpers.php';
-require __DIR__ . '/includes/crypto.php';
-require __DIR__ . '/includes/db.php';
-require __DIR__ . '/includes/whatsapp.php';
-require __DIR__ . '/includes/credits.php';
-require __DIR__ . '/includes/inbox.php';
+require_once __DIR__ . '/includes/config_loader.php';
+require_once __DIR__ . '/includes/helpers.php';
+require_once __DIR__ . '/includes/crypto.php';
+require_once __DIR__ . '/includes/db.php';
+require_once __DIR__ . '/includes/whatsapp.php';
+require_once __DIR__ . '/includes/credits.php';
+require_once __DIR__ . '/includes/inbox.php';
 
 header('Content-Type: application/json; charset=UTF-8');
 header('Cache-Control: no-store');

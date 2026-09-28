@@ -212,8 +212,7 @@ function pw_rotate_hook_secret(array $client): array
     $old = trim((string) ($client['personal_hook_secret'] ?? ''));
     $new = bin2hex(random_bytes(16));
 
-    db_run("UPDATE clients SET personal_hook_secret=?, personal_hook_secret_prev=? WHERE id=?",
-        [$new, ($old !== '' ? $old : null), $cid]);
+    pw_store($client, "personal_hook_secret=?, personal_hook_secret_prev=?", [$new, ($old !== '' ? $old : null)]);
 
     $res = pw_set_webhook([
         'id' => $cid,
@@ -223,13 +222,38 @@ function pw_rotate_hook_secret(array $client): array
 
     if (empty($res['ok'])) {
         // Put it back exactly as it was — better the old secret than no working inbound.
-        db_run("UPDATE clients SET personal_hook_secret=?, personal_hook_secret_prev=NULL WHERE id=?",
-            [($old !== '' ? $old : null), $cid]);
+        pw_store($client, "personal_hook_secret=?, personal_hook_secret_prev=NULL", [($old !== '' ? $old : null)]);
         return ['ok' => false, 'error' => $res['error'] ?: 'The gateway did not accept the new webhook.'];
     }
 
-    db_run("UPDATE clients SET personal_hook_rotated_at=NOW() WHERE id=?", [$cid]);
+    pw_store($client, "personal_hook_rotated_at=NOW()", []);
     return ['ok' => true, 'error' => ''];
+}
+
+/**
+ * Save session state to whoever owns this session: the company, or one salesperson.
+ *
+ * Every function in this file takes a client row and reads the session (instance, secret, status)
+ * off it. A salesperson's own number reuses all of them by passing a client row with THEIR
+ * session swapped in (see sender_for() in includes/sending.php) — but these functions also wrote
+ * back to `clients` by id. Called that way, linking a salesperson's phone would have overwritten
+ * the company's own WhatsApp link. So the writes come through here: a row carrying
+ * __user_channel goes to that user_channels row, anything else to the clients row as before.
+ *
+ * $set is written with the clients column names; for a user row they are mapped across.
+ */
+function pw_store(array $client, string $set, array $params): void
+{
+    $uc = (int) ($client['__user_channel'] ?? 0);
+    if ($uc <= 0) {
+        db_run("UPDATE clients SET {$set} WHERE id=?", array_merge($params, [(int) $client['id']]));
+        return;
+    }
+    // Longest names first, so personal_hook_secret_prev is not half-rewritten as personal_hook_secret.
+    $map = ['personal_hook_secret_prev' => 'hook_secret_prev', 'personal_hook_rotated_at' => 'hook_rotated_at',
+            'personal_connected_at' => 'connected_at', 'personal_hook_secret' => 'hook_secret',
+            'personal_instance' => 'instance', 'personal_status' => 'status', 'personal_msisdn' => 'msisdn'];
+    db_run("UPDATE user_channels SET " . strtr($set, $map) . " WHERE id=?", array_merge($params, [$uc]));
 }
 
 /** Create this client's gateway instance and persist its name + webhook secret. */
@@ -262,9 +286,8 @@ function pw_instance_create(array $client): array
 
     // Keep the outgoing secret valid for a moment so anything the gateway sends mid-swap
     // still lands; webhook_personal.php drops it once the new one is proven working.
-    db_run("UPDATE clients SET personal_instance=?, personal_hook_secret=?, personal_hook_secret_prev=?,
-                   personal_hook_rotated_at=NOW() WHERE id=?",
-        [$inst, $secret, ($prev !== '' ? $prev : null), (int) $client['id']]);
+    pw_store($client, "personal_instance=?, personal_hook_secret=?, personal_hook_secret_prev=?, personal_hook_rotated_at=NOW()",
+        [$inst, $secret, ($prev !== '' ? $prev : null)]);
 
     // The create call's own webhook block is only honoured for a BRAND NEW instance — for
     // an existing one (the $exists branch above) the gateway ignored it entirely. Registering
@@ -332,9 +355,8 @@ function pw_status(array $client, bool $persist = true): array
 
     if ($persist) {
         $connectedAt = $state === 'connected' ? 'NOW()' : 'personal_connected_at';
-        db_run("UPDATE clients SET personal_status=?, personal_msisdn=COALESCE(NULLIF(?,''), personal_msisdn),
-                       personal_connected_at={$connectedAt} WHERE id=?",
-            [$state, $msisdn, (int) $client['id']]);
+        pw_store($client, "personal_status=?, personal_msisdn=COALESCE(NULLIF(?,''), personal_msisdn),
+                           personal_connected_at={$connectedAt}", [$state, $msisdn]);
     }
     return ['state' => $state, 'msisdn' => $msisdn ?: (string) ($client['personal_msisdn'] ?? ''), 'error' => ''];
 }
@@ -343,8 +365,7 @@ function pw_status(array $client, bool $persist = true): array
 function pw_logout(array $client): array
 {
     $res = pw_request('DELETE', pw_path('logout', pw_instance($client)));
-    db_run("UPDATE clients SET personal_status='disconnected', personal_connected_at=NULL WHERE id=?",
-        [(int) $client['id']]);
+    pw_store($client, "personal_status='disconnected', personal_connected_at=NULL", []);
     return ['ok' => $res['error'] === '', 'error' => $res['error']];
 }
 

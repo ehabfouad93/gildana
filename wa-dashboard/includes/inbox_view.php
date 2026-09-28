@@ -137,6 +137,7 @@ $IB_SEP = strpos($IB_ENDPOINT, '?') === false ? '?' : '&';
     <div class="ib-body" id="ib-body"><div class="ib-empty">Select a conversation to view messages.</div></div>
     <div class="ib-foot" id="ib-foot" style="display:none">
       <form id="ib-form"><textarea id="ib-text" rows="1" placeholder="Type a reply…"></textarea><button class="btn btn-primary" type="submit">Send</button></form>
+      <div class="ib-note" id="ib-nosend" hidden></div>
       <div class="ib-note" id="ib-closed" style="display:none">
         ⏱️ Outside the 24-hour window — only an approved template can reach this contact.
         <button class="ib-tpl-open" type="button">📄 Send a template</button>
@@ -241,8 +242,13 @@ async function pollThread(){
   ibOpen=!!d.window_open;
   const own = el('ib-owner');
   if (own && document.activeElement !== own) own.value = d.owner == null ? 'none' : String(d.owner);
-  el('ib-form').style.display = ibOpen?'flex':'none';
-  el('ib-closed').style.display = ibOpen?'none':'block';
+  /* Someone set up not to send — or whose own phone is not linked — sees why, instead of a
+     reply box that would only fail when they press Send. */
+  const blocked = d.can_send === false;
+  el('ib-form').style.display = ibOpen && !blocked ? 'flex' : 'none';
+  el('ib-closed').style.display = !ibOpen && !blocked ? 'block' : 'none';
+  const ns = el('ib-nosend');
+  if (ns) { ns.hidden = !blocked; ns.textContent = blocked ? '\u26a0 ' + (d.send_error || 'You cannot send from this account.') : ''; }
   setBotState(!!d.bot_paused);
 }
 /* ── live takeover: while paused the bot won't reply to this contact ── */

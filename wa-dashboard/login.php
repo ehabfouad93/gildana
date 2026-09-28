@@ -8,7 +8,7 @@ declare(strict_types=1);
  * page — an expired session landing on a hero section, with no password box in sight, is
  * how people conclude an app is broken.
  */
-require __DIR__ . '/includes/bootstrap.php';
+require_once __DIR__ . '/includes/bootstrap.php';
 
 // First run: no admin yet → go create one.
 if (!admin_exists()) {

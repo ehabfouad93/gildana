@@ -17,11 +17,11 @@ declare(strict_types=1);
 
 if (PHP_SAPI !== 'cli') { http_response_code(403); exit("Run this from the command line.\n"); }
 
-require __DIR__ . '/../includes/config_loader.php';
-require __DIR__ . '/../includes/helpers.php';
-require __DIR__ . '/../includes/crypto.php';
-require __DIR__ . '/../includes/db.php';
-require __DIR__ . '/../includes/personal_wa.php';
+require_once __DIR__ . '/../includes/config_loader.php';
+require_once __DIR__ . '/../includes/helpers.php';
+require_once __DIR__ . '/../includes/crypto.php';
+require_once __DIR__ . '/../includes/db.php';
+require_once __DIR__ . '/../includes/personal_wa.php';
 
 if (!pw_configured()) {
     fwrite(STDERR, "The WhatsApp gateway is not configured — nothing to rotate.\n");

@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/_init.php';
-require __DIR__ . '/../includes/campaign.php';
+require_once __DIR__ . '/../includes/campaign.php';
 
 $cid = (int) $CLIENT['id'];
 

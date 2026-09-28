@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/_init.php';
+require_once __DIR__ . '/../includes/sending.php';
 
 /**
  * The client's own team: who can log in, their role, and which modules each one sees.
@@ -40,6 +41,13 @@ function team_admin_count(int $cid): int
                            AND client_role='admin' AND status='active'", [$cid]);
 }
 
+/** How this person sends, from the form. Only the known choices are stored. */
+function team_send_via_from_post(): ?string
+{
+    $v = (string) ($_POST['send_via'] ?? '');
+    return $v !== '' && isset(send_via_labels()[$v]) ? $v : null;
+}
+
 $err = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     verify_csrf();
@@ -55,10 +63,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         elseif (strlen($pass) < 8)                                            $err = 'The password needs at least 8 characters.';
         elseif (db_val("SELECT COUNT(*) FROM users WHERE email=?", [$email])) $err = 'Someone already uses that email.';
         else {
-            db_insert("INSERT INTO users (client_id,email,name,password_hash,role,client_role,modules,status,created_at)
-                       VALUES (?,?,?,?, 'client', ?, ?, 'active', NOW())",
+            db_insert("INSERT INTO users (client_id,email,name,password_hash,role,client_role,modules,send_via,status,created_at)
+                       VALUES (?,?,?,?, 'client', ?, ?, ?, 'active', NOW())",
                 [$cid, $email, $name, password_hash($pass, PASSWORD_DEFAULT),     // name is NOT NULL: '' when blank
-                 $role, team_modules_from_post($clientHas)]);
+                 $role, team_modules_from_post($clientHas), team_send_via_from_post()]);
             flash(($name ?: $email) . ' added as ' . $roles[$role]['label'] . '.');
             redirect('team.php');
         }
@@ -81,8 +89,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 redirect('team.php');
             } else {
                 $status = ($_POST['status'] ?? 'active') === 'disabled' ? 'disabled' : 'active';
-                db_run("UPDATE users SET client_role=?, modules=?, status=?, name=? WHERE id=? AND client_id=?",
-                    [$role, team_modules_from_post($clientHas), $status,
+                db_run("UPDATE users SET client_role=?, modules=?, send_via=?, status=?, name=? WHERE id=? AND client_id=?",
+                    [$role, team_modules_from_post($clientHas), team_send_via_from_post(), $status,
                      trim((string) ($_POST['name'] ?? '')), $uid, $cid]);      // NOT NULL column
                 $pass = (string) ($_POST['password'] ?? '');
                 if ($pass !== '') {
@@ -110,7 +118,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 <div class="card card-flush">
   <div class="table-wrap">
     <table class="data">
-      <thead><tr><th>Person</th><th>Role</th><th>Sees</th><th>Last login</th><th></th></tr></thead>
+      <thead><tr><th>Person</th><th>Role</th><th>Sees</th><th>Sends from</th><th>Last login</th><th></th></tr></thead>
       <tbody>
       <?php foreach ($people as $p):
         $mods = user_modules($p + ['role' => 'client'], $CLIENT);
@@ -123,11 +131,20 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
           <td class="text-muted" style="font-size:12.5px">
             <?= e(implode(', ', array_map(fn($k) => perm_modules()[$k]['label'], $mods))) ?: '—' ?>
             <?= $custom ? '<span class="pill blue" style="margin-left:4px">custom</span>' : '' ?></td>
+          <td style="font-size:12.5px"><?php
+            $sv = (string) ($p['send_via'] ?? '');
+            echo e(send_via_labels()[$sv] ?? '—');
+            if ($sv === 'own') {
+                $pc = user_channel((int) $p['id']);
+                echo ($pc && $pc['status'] === 'connected')
+                    ? ' <span class="pill green">linked' . (!empty($pc['msisdn']) ? ' +' . e((string) $pc['msisdn']) : '') . '</span>'
+                    : ' <span class="pill gray" title="They link it from My WhatsApp">not linked yet</span>';
+            } ?></td>
           <td class="text-muted"><?= $p['last_login_at'] ? e(date('j M, H:i', strtotime((string) $p['last_login_at']))) : 'Never' ?></td>
           <td style="text-align:right;white-space:nowrap">
             <button class="btn btn-ghost btn-sm" onclick='teamOpen(<?= json_encode([
                 'id' => (int) $p['id'], 'email' => $p['email'], 'name' => $p['name'],
-                'role' => user_client_role($p), 'status' => $p['status'],
+                'role' => user_client_role($p), 'status' => $p['status'], 'send_via' => (string) ($p['send_via'] ?? ''),
                 'modules' => perm_parse($p['modules'] ?? null)], JSON_HEX_APOS | JSON_HEX_QUOT) ?>)'>Edit</button>
           </td>
         </tr>
@@ -167,6 +184,13 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
       </div>
       <span class="text-muted" style="font-size:11.5px">Only modules your account has are listed.</span>
     </div>
+
+    <div class="field"><span class="lbl">Sends messages from</span>
+      <select name="send_via" id="t-send">
+        <?php foreach (send_via_labels() as $k => $lbl): ?><option value="<?= e($k) ?>"><?= e($lbl) ?></option><?php endforeach; ?>
+      </select>
+      <span class="text-muted" style="font-size:11.5px">"Their own phone" — they link it themselves from My WhatsApp.
+        It can be banned by WhatsApp like any personal number.</span></div>
 
     <div class="field" id="t-status-wrap" hidden><span class="lbl">Access</span>
       <select name="status" id="t-status"><option value="active">Active</option><option value="disabled">Disabled — cannot sign in</option></select></div>
@@ -211,6 +235,7 @@ function teamOpen(p){
   $t('t-pass').required      = !edit;
   $t('t-pass-lbl').textContent = edit ? 'New password (leave empty to keep)' : 'Password';
   $t('t-role').value         = edit ? p.role : 'sales';
+  $t('t-send').value         = edit ? (p.send_via || '') : '';
   $t('t-status-wrap').hidden = !edit;
   $t('t-status').value       = edit ? p.status : 'active';
   $t('t-remove').hidden      = !edit;

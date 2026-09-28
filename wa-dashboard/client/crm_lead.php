@@ -2,6 +2,7 @@
 declare(strict_types=1);
 require __DIR__ . '/_init.php';
 require_once __DIR__ . '/../includes/crm.php';
+require_once __DIR__ . '/../includes/inbox.php';
 
 /**
  * One lead: who they are, where they stand, and everything that has happened with them —
@@ -56,6 +57,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         crm_add_note($CLIENT, $id, (string) ($_POST['body'] ?? ''), $me);
         redirect('crm_lead.php?id=' . $id . '#activity');
     }
+    if ($a === 'send') {
+        // Out through whatever this person's admin chose for them — see sender_for().
+        $r = inbox_send($CLIENT, $id, (string) ($_POST['message'] ?? ''));
+        if ($r['ok']) { flash('Sent.'); redirect('crm_lead.php?id=' . $id . '#activity'); }
+        $err = $r['error'] ?: 'The message could not be sent.';
+    }
     if ($a === 'add_to_crm') {
         crm_add_lead($CLIENT, $id, '', is_sales() ? $me : 'auto', null, $me);
         flash('Added to the pipeline.');
@@ -98,6 +105,12 @@ foreach (db_all("SELECT * FROM crm_events WHERE contact_id=? ORDER BY id DESC LI
     $feed[] = ['t' => $ev['created_at'], 'kind' => 'event', 'body' => $text, 'by' => $who($ev['user_id'])];
 }
 usort($feed, fn($a, $b) => strcmp((string) $b['t'], (string) $a['t']));
+
+/* What the send box can do for this person, worked out before drawing it. */
+$snd = sender_for($CLIENT, sending_user());
+$sendOpen = $snd['ok'] && inbox_window_open($lead, $snd['client']);
+$viaText = ['api' => 'the WhatsApp Business API number', 'company_personal' => 'the company\'s phone',
+            'own' => 'your own WhatsApp'][$snd['via']] ?? 'the account\'s number';
 
 $title = (string) ($lead['name'] ?: '+' . $lead['phone_e164']);
 client_header($title, 'crm', $CLIENT);
@@ -161,6 +174,27 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 
   <div class="card" id="activity">
     <h2>Activity</h2>
+    <?php if (can_write() && can_use('inbox')): ?>
+      <div class="lead-send" style="margin-bottom:14px">
+        <?php if (!$snd['ok']): ?>
+          <div class="note warn" id="lead-nosend"><?= e($snd['error']) ?>
+            <?php if ($snd['via'] === 'own'): ?> <a href="my_whatsapp.php">Open My WhatsApp</a><?php endif; ?></div>
+        <?php elseif (!$sendOpen): ?>
+          <div class="note warn" id="lead-nosend">It has been more than 24 hours since this lead last wrote, so WhatsApp only
+            allows an approved template from <?= e($viaText) ?>.
+            <a href="inbox.php?contact=<?= $id ?>">Send a template from the conversation</a></div>
+        <?php else: ?>
+          <form method="post" id="lead-send">
+            <?= csrf_field() ?><input type="hidden" name="action" value="send"><input type="hidden" name="id" value="<?= $id ?>">
+            <textarea name="message" rows="2" placeholder="Message on WhatsApp…" required></textarea>
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap" class="mt10">
+              <button class="btn btn-primary btn-sm">Send on WhatsApp</button>
+              <span class="text-muted" style="font-size:12px">Goes out from <?= e($viaText) ?></span>
+            </div>
+          </form>
+        <?php endif; ?>
+      </div>
+    <?php endif; ?>
     <?php if (can_write()): ?>
       <form method="post" style="margin-bottom:12px">
         <?= csrf_field() ?><input type="hidden" name="action" value="note"><input type="hidden" name="id" value="<?= $id ?>">

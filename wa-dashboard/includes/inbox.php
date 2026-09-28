@@ -11,6 +11,7 @@ require_once __DIR__ . '/whatsapp.php';
 require_once __DIR__ . '/channel.php';
 require_once __DIR__ . '/credits.php';
 require_once __DIR__ . '/crm.php';
+require_once __DIR__ . '/sending.php';
 
 /** Record one message. Returns the row id. $opts: type, wamid, status, error, source.
  *  Never throws — logging must not break sending if the `messages` table is missing
@@ -39,6 +40,9 @@ function msg_log(int $clientId, int $contactId, string $direction, string $body,
             'source_ref_id' => isset($opts['ref']) && (int) $opts['ref'] > 0 ? (int) $opts['ref'] : null,
             'template_id'   => isset($opts['template_id']) && (int) $opts['template_id'] > 0
                                  ? (int) $opts['template_id'] : null,
+            // Who sent it by hand, and through which number — see includes/sending.php.
+            'sent_by_user_id' => isset($opts['sent_by']) && (int) $opts['sent_by'] > 0 ? (int) $opts['sent_by'] : null,
+            'via'             => isset($opts['via']) && $opts['via'] !== '' ? substr((string) $opts['via'], 0, 20) : null,
         ] as $col => $val) {
             if (!db_has_column('messages', $col)) continue;
             $cols[] = $col; $vals[] = $val;
@@ -265,7 +269,10 @@ function inbox_handle_ajax(array $client): void
         $msgs = inbox_thread($cid, $contactId, $after);
         inbox_mark_read($cid, $contactId);
         json_out([
-            'ok' => true, 'messages' => $msgs, 'window_open' => inbox_window_open($contact, $client),
+            'ok' => true, 'messages' => $msgs,
+            // Judged against the number THIS person sends from — own/company phone has no window.
+            'window_open' => inbox_window_open($contact, ($s = sender_for($client, sending_user()))['ok'] ? $s['client'] : $client),
+            'can_send'    => $s['ok'], 'send_error' => $s['ok'] ? '' : (string) $s['error'],
             'name' => (string) $contact['name'], 'phone' => (string) $contact['phone_e164'],
             'bot_paused' => inbox_bot_paused($contact),
             // For the owner picker in the header — present only where it can be used.
@@ -616,14 +623,20 @@ function inbox_send_template(array $client, int $contactId, int $templateId,
     $cfg = ['vars' => $mk(array_values($vars)), 'header_vars' => $mk(array_values($headerVars))];
     if (trim($headerMedia) !== '') $cfg['header_media'] = trim($headerMedia);
 
+    $who = sending_user();
+    $snd = sender_for($client, $who);
+    if (!$snd['ok']) return ['ok' => false, 'error' => $snd['error']];
+    $via = $snd['client'];
+
     $category = (string) ($tpl['category'] ?: 'utility');
     $cost = function_exists('billing_message_credits')
-          ? billing_message_credits($client, (string) $contact['phone_e164'], $category) : 1;
+          ? billing_message_credits($via, (string) $contact['phone_e164'], $category) : 1;
     if (credits_adjust($cid, -$cost, 'inbox_template', null) === null) {
         return ['ok' => false, 'error' => 'No credits left.'];
     }
 
-    $res = channel_send_template($client, (string) $contact['phone_e164'], $tpl, $cfg, $contact);
+    // A personal number has no approved templates; channel_send_template renders it to text there.
+    $res = channel_send_template($via, (string) $contact['phone_e164'], $tpl, $cfg, $contact);
     if (empty($res['ok'])) {
         credits_adjust($cid, $cost, 'inbox_template_refund', null);
     } elseif (function_exists('billing_record_messages')) {
@@ -640,7 +653,7 @@ function inbox_send_template(array $client, int $contactId, int $templateId,
         'status' => !empty($res['ok']) ? 'sent' : 'failed',
         'wamid' => $res['wamid'] ?? null,
         'error' => $res['error_title'] ?? null, 'error_code' => (string) ($res['error_code'] ?? ''),
-        'template_id' => $templateId,
+        'template_id' => $templateId, 'sent_by' => (int) ($who['id'] ?? 0), 'via' => $snd['via'],
     ]);
     // An agent sending by hand is taking the conversation over, same as a typed reply.
     if (!empty($res['ok'])) inbox_take_over($cid, $contactId);
@@ -664,16 +677,24 @@ function inbox_send(array $client, int $contactId, string $body): array
     if ($body === '') return ['ok' => false, 'error' => 'Type a message first.'];
     $contact = db_row("SELECT * FROM contacts WHERE id=? AND client_id=?", [$contactId, (int) $client['id']]);
     if (!$contact) return ['ok' => false, 'error' => 'Contact not found.'];
-    if (!inbox_window_open($contact, $client)) {
+
+    // Out through THIS person's number: the API, the company phone, their own, or not at all.
+    $who = sending_user();
+    $snd = sender_for($client, $who);
+    if (!$snd['ok']) return ['ok' => false, 'error' => $snd['error']];
+    $via = $snd['client'];
+
+    // The 24-hour rule belongs to the Business API; a personal number (company or own) has none.
+    if (!inbox_window_open($contact, $via)) {
         return ['ok' => false, 'error' => 'Outside the 24-hour window — you can only reach this contact with an approved template (use Campaigns).'];
     }
     /* Only reachable inside the 24-hour window (checked just above), so this is always a
        service message — the category Meta does not charge for. */
     $cost = function_exists('billing_message_credits')
-          ? billing_message_credits($client, (string) $contact['phone_e164'], 'service') : 1;
+          ? billing_message_credits($via, (string) $contact['phone_e164'], 'service') : 1;
     $bal = credits_adjust((int) $client['id'], -$cost, 'inbox', null);
     if ($bal === null) return ['ok' => false, 'error' => 'No credits left.'];
-    $res = channel_send_text($client, (string) $contact['phone_e164'], $body);
+    $res = channel_send_text($via, (string) $contact['phone_e164'], $body);
     if (empty($res['ok'])) {
         credits_adjust((int) $client['id'], $cost, 'inbox_refund', null);
     } elseif (function_exists('billing_record_messages')) {
@@ -682,6 +703,8 @@ function inbox_send(array $client, int $contactId, string $body): array
     $id = msg_log((int) $client['id'], $contactId, 'out', $body, [
         'source' => 'manual', 'status' => !empty($res['ok']) ? 'sent' : 'failed',
         'wamid' => $res['wamid'] ?? null, 'error' => $res['error_title'] ?? null,
+        'error_code' => (string) ($res['error_code'] ?? ''),
+        'sent_by' => (int) ($who['id'] ?? 0), 'via' => $snd['via'],
     ]);
     // A human just replied → take the conversation over so the bot can't talk over them.
     if (!empty($res['ok'])) inbox_take_over((int) $client['id'], $contactId);

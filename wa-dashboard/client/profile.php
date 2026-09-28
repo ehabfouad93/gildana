@@ -48,6 +48,17 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 
 <?= profile_card_html(db_row("SELECT * FROM users WHERE id=?", [(int) $ME['id']]) ?: $ME, '../') ?>
 
+<?php if (($PERM_USER['send_via'] ?? '') === 'own'):
+  require_once __DIR__ . '/../includes/sending.php';
+  $myUc = user_channel((int) $PERM_USER['id']); $linked = ($myUc['status'] ?? '') === 'connected'; ?>
+<div class="card" id="my-wa-card">
+  <h2>My WhatsApp</h2>
+  <p class="text-muted" style="font-size:13px">Your admin set you up to message leads from your own phone.
+    <?= $linked ? 'It is linked' . (!empty($myUc['msisdn']) ? ' (+' . e((string) $myUc['msisdn']) . ')' : '') . '.' : 'It is not linked yet, so you cannot send.' ?></p>
+  <a class="btn <?= $linked ? 'btn-ghost' : 'btn-primary' ?> btn-sm" href="my_whatsapp.php"><?= $linked ? 'Manage' : 'Link my WhatsApp' ?></a>
+</div>
+<?php endif; ?>
+
 <div class="card">
   <h2>Change Password</h2>
   <form method="post" style="max-width:420px">

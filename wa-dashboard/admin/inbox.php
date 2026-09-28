@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/_init.php';
-require __DIR__ . '/../includes/inbox.php';
+require_once __DIR__ . '/../includes/inbox.php';
 
 $clients = db_all("SELECT id, name FROM clients ORDER BY name");
 $cid = (int) ($_GET['client'] ?? 0);
@@ -23,5 +23,5 @@ if (!$target) {
     exit;
 }
 $IB_ENDPOINT = 'inbox.php?client=' . $cid;
-require __DIR__ . '/../includes/inbox_view.php';
+require_once __DIR__ . '/../includes/inbox_view.php';
 layout_footer();

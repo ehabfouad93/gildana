@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/_init.php';
-require __DIR__ . '/../includes/inbox.php';
+require_once __DIR__ . '/../includes/inbox.php';
 
 // Live AJAX (threads / thread / send) — handled + exits before any output.
 inbox_handle_ajax($CLIENT);
@@ -19,5 +19,5 @@ if (($openId = (int) ($_GET['contact'] ?? 0)) > 0) {
     $oc = db_row("SELECT id, name, phone_e164, owner_user_id FROM contacts WHERE id=? AND client_id=?", [$openId, (int) $CLIENT['id']]);
     if ($oc && crm_can_see($oc)) $IB_OPEN = ['id' => (int) $oc['id'], 'name' => (string) $oc['name'], 'phone' => (string) $oc['phone_e164']];
 }
-require __DIR__ . '/../includes/inbox_view.php';
+require_once __DIR__ . '/../includes/inbox_view.php';
 layout_footer();

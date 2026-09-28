@@ -9,7 +9,7 @@ declare(strict_types=1);
  * URL it wanted — so the error below prints it.
  */
 
-require __DIR__ . '/includes/bootstrap.php';
+require_once __DIR__ . '/includes/bootstrap.php';
 require_once __DIR__ . '/includes/meta_leads.php';
 
 $row = meta_take_state((string) ($_GET['state'] ?? ''));    // single use: a replayed callback finds nothing

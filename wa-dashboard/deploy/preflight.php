@@ -12,10 +12,10 @@ declare(strict_types=1);
 
 if (PHP_SAPI !== 'cli') { http_response_code(403); exit("Run this from the command line.\n"); }
 
-require __DIR__ . '/../includes/config_loader.php';
-require __DIR__ . '/../includes/helpers.php';
-require __DIR__ . '/../includes/crypto.php';
-require __DIR__ . '/../includes/db.php';
+require_once __DIR__ . '/../includes/config_loader.php';
+require_once __DIR__ . '/../includes/helpers.php';
+require_once __DIR__ . '/../includes/crypto.php';
+require_once __DIR__ . '/../includes/db.php';
 
 $checks = [];
 $add = function (string $state, string $title, string $detail, string $fix = '') use (&$checks) {

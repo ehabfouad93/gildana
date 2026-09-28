@@ -14,7 +14,7 @@ declare(strict_types=1);
  *   - the plans, from Admin → Plans. The pricing section hides itself entirely while no
  *     plan is marked active, rather than showing an empty table.
  */
-require __DIR__ . '/includes/bootstrap.php';
+require_once __DIR__ . '/includes/bootstrap.php';
 require_once __DIR__ . '/includes/help.php';
 require_once __DIR__ . '/includes/video_view.php';
 require_once __DIR__ . '/includes/notify.php';

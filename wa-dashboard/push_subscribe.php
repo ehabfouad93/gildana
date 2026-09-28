@@ -8,7 +8,7 @@ declare(strict_types=1);
  *   POST action=subscribe  → {ok}                     (subscription JSON in `sub`)
  *   POST action=unsubscribe→ {ok}
  */
-require __DIR__ . '/includes/bootstrap.php';
+require_once __DIR__ . '/includes/bootstrap.php';
 require_once __DIR__ . '/includes/push.php';
 
 header('Content-Type: application/json; charset=UTF-8');

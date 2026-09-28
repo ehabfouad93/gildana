@@ -1,9 +1,9 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/_init.php';
-require __DIR__ . '/../includes/ai.php';
-require __DIR__ . '/../includes/notify.php';
-require __DIR__ . '/../includes/automation.php';
+require_once __DIR__ . '/../includes/ai.php';
+require_once __DIR__ . '/../includes/notify.php';
+require_once __DIR__ . '/../includes/automation.php';
 
 $cid  = (int) $CLIENT['id'];
 $fid  = (int) ($_GET['flow'] ?? 0);
