@@ -88,6 +88,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         redirect('settings.php#google');
     }
 
+    if ($action === 'save_meta') {
+        setting_set('meta_app_id', preg_replace('/\D+/', '', (string) ($_POST['meta_app_id'] ?? '')));
+        $sec = trim((string) ($_POST['meta_app_secret'] ?? ''));
+        if ($sec !== '') setting_set('meta_app_secret', encrypt_secret($sec));    // blank = keep
+        flash('Facebook lead form settings saved.');
+        redirect('settings.php#meta');
+    }
+
     if ($action === 'save_gateway') {
         setting_set('pw_base_url', trim((string) ($_POST['pw_base_url'] ?? '')));
         setting_set('pw_hook_base', trim((string) ($_POST['pw_hook_base'] ?? '')));
@@ -337,6 +345,47 @@ if ($ok):  ?><div class="alert success"><?= e($ok) ?></div><?php endif; ?>
         <input type="text" name="google_api_key" value="<?= e($gCfg['api_key']) ?>" placeholder="AIza…"></div>
     </div>
     <button type="submit" class="btn btn-primary">Save Google settings</button>
+  </form>
+</div>
+
+<?php
+  require_once __DIR__ . '/../includes/meta_leads.php';
+  $mCfg  = meta_cfg();
+  $mConn = 0;
+  try { $mConn = (int) db_val("SELECT COUNT(DISTINCT client_id) FROM meta_pages WHERE subscribed=1"); } catch (Throwable $e) {}
+?>
+<div class="card" id="meta">
+  <h2>Facebook &amp; Instagram lead forms</h2>
+  <p class="text-muted" style="font-size:12.5px;margin:-6px 0 14px">
+    Lets a client press <strong>Connect Facebook</strong> and have every lead-form submission land in their
+    CRM, assigned. One Meta app serves every client. <strong><?= $mConn ?></strong>
+    account<?= $mConn === 1 ? '' : 's' ?> receiving leads.
+  </p>
+  <div class="alert info" style="font-size:12.5px;margin-bottom:14px">
+    <strong>One-time setup</strong> at <span class="mono">developers.facebook.com</span> (the same app as WhatsApp is fine):
+    <ol style="margin:8px 0 0;padding-left:18px;line-height:1.8">
+      <li>Add the <strong>Facebook Login for Business</strong> product. Under Valid OAuth Redirect URIs add exactly:<br>
+          <span class="mono"><?= e(meta_redirect_uri()) ?></span></li>
+      <li><strong>Webhooks</strong> → choose <strong>Page</strong> → Callback URL:<br>
+          <span class="mono"><?= e(rtrim(app_base_url(), '/') . '/webhook_leads.php') ?></span><br>
+          Verify token: the same one the WhatsApp webhook uses. Then subscribe to the <strong>leadgen</strong> field.</li>
+      <li>Paste the App ID and App Secret below.</li>
+    </ol>
+    <div style="margin-top:8px"><strong>Before clients can use it:</strong> submit the app for <strong>App Review</strong> for
+      <span class="mono">leads_retrieval</span>, <span class="mono">pages_manage_metadata</span>,
+      <span class="mono">pages_show_list</span> and <span class="mono">pages_read_engagement</span>, with
+      <strong>Business Verification</strong>. Until it passes, only Pages managed by the app's own admins and testers
+      connect — enough to try it on your own Page. Review takes days to weeks, so start it early.</div>
+  </div>
+  <form method="post">
+    <?= csrf_field() ?><input type="hidden" name="action" value="save_meta">
+    <div class="grid2">
+      <div class="field"><span class="lbl">App ID</span>
+        <input type="text" name="meta_app_id" value="<?= e($mCfg['app_id']) ?>" inputmode="numeric" placeholder="1234567890123456"></div>
+      <div class="field"><span class="lbl">App Secret <?= $mCfg['app_secret'] !== '' ? '<span class="pill green" style="margin-left:6px">••• set</span>' : '' ?></span>
+        <input type="text" name="meta_app_secret" autocomplete="off" placeholder="<?= $mCfg['app_secret'] !== '' ? 'Leave blank to keep current' : 'Paste the app secret' ?>"></div>
+    </div>
+    <button type="submit" class="btn btn-primary">Save</button>
   </form>
 </div>
 

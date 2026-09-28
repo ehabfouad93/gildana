@@ -28,6 +28,7 @@ require_once __DIR__ . '/../includes/campaign.php';
 require_once __DIR__ . '/../includes/notify.php';
 require_once __DIR__ . '/../includes/ai.php';
 require_once __DIR__ . '/../includes/automation.php';
+require_once __DIR__ . '/../includes/meta_leads.php';
 require_once __DIR__ . '/../includes/push.php';
 
 if (PHP_SAPI !== 'cli') {
@@ -443,9 +444,12 @@ try {
             $followed = automation_campaign_followups();
             $outreach = automation_send_outreach();
             $noAns    = automation_sweep_no_answer((int) config('no_answer_hours', 24));
+            // Lead-form safety net: re-read connected forms for leads Meta never announced.
+            // Throttled per form inside meta_poll(), so this is cheap on most passes.
+            $formLeads = function_exists('meta_poll') ? meta_poll()['imported'] : 0;
             // One push per client with pending inbound, however many messages arrived.
             $pushes   = push_dispatch() + push_dispatch_users();   // + "a lead was assigned to you"
-            out("Automation: resumed={$resumed} sheet_leads={$leads} campaign_followups={$followed} outreach_sent={$outreach} no_answer={$noAns} pushes={$pushes}.");
+            out("Automation: resumed={$resumed} sheet_leads={$leads} campaign_followups={$followed} outreach_sent={$outreach} no_answer={$noAns} form_leads={$formLeads} pushes={$pushes}.");
         } finally {
             $pdo->query("SELECT RELEASE_LOCK('wa_automation')");
         }

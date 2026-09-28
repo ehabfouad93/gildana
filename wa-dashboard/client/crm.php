@@ -146,7 +146,8 @@ $actions = '';
 if ($canEdit) $actions .= '<button class="btn btn-primary btn-sm" onclick="crmAdd()">+ Add lead</button>';
 if ($canEdit && can_use('crm')) $actions .= '<a class="btn btn-ghost btn-sm" href="crm_import.php">Import</a>';
 $actions .= '<a class="btn btn-ghost btn-sm" href="crm_reports.php">Reports</a>';
-if ($isAdmin) $actions .= '<button class="btn btn-ghost btn-sm" onclick="crmStages()">Stages</button>';
+if ($isAdmin) $actions .= '<a class="btn btn-ghost btn-sm" href="meta_leads.php">Lead forms</a>'
+                        . '<button class="btn btn-ghost btn-sm" onclick="crmStages()">Stages</button>';
 
 client_header('CRM', 'crm', $CLIENT);
 page_head('CRM', $actions);
