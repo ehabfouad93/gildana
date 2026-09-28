@@ -364,6 +364,9 @@ if ($ok):  ?><div class="alert success"><?= e($ok) ?></div><?php endif; ?>
   <div class="alert info" style="font-size:12.5px;margin-bottom:14px">
     <strong>One-time setup</strong> at <span class="mono">developers.facebook.com</span> (the same app as WhatsApp is fine):
     <ol style="margin:8px 0 0;padding-left:18px;line-height:1.8">
+      <li><strong>App settings → Basic</strong>: add <span class="mono"><?= e((string) parse_url(app_base_url(), PHP_URL_HOST)) ?></span>
+          to <strong>App Domains</strong>, and under <strong>Add platform → Website</strong> set Site URL to
+          <span class="mono"><?= e(rtrim(app_base_url(), '/') . '/') ?></span>. Without this Facebook shows "Can't load URL".</li>
       <li>Add the <strong>Facebook Login for Business</strong> product. Under Valid OAuth Redirect URIs add exactly:<br>
           <span class="mono"><?= e(meta_redirect_uri()) ?></span></li>
       <li><strong>Webhooks</strong> → choose <strong>Page</strong> → Callback URL:<br>
@@ -373,7 +376,8 @@ if ($ok):  ?><div class="alert success"><?= e($ok) ?></div><?php endif; ?>
     </ol>
     <div style="margin-top:8px"><strong>Before clients can use it:</strong> submit the app for <strong>App Review</strong> for
       <span class="mono">leads_retrieval</span>, <span class="mono">pages_manage_metadata</span>,
-      <span class="mono">pages_show_list</span> and <span class="mono">pages_read_engagement</span>, with
+      <span class="mono">pages_show_list</span>, <span class="mono">pages_read_engagement</span> and
+      <span class="mono">business_management</span>, with
       <strong>Business Verification</strong>. Until it passes, only Pages managed by the app's own admins and testers
       connect — enough to try it on your own Page. Review takes days to weeks, so start it early.</div>
   </div>
