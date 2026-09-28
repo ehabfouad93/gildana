@@ -26,6 +26,8 @@ function import_fields(): array
         'owner'    => ['label' => 'Owner (email or name)', 'guess' => ['owner', 'agent', 'sales', 'assigned', 'assignee', 'المسؤول', 'السيلز']],
         'followup' => ['label' => 'Next follow-up',   'guess' => ['follow up', 'followup', 'follow-up', 'next', 'موعد']],
         'note'     => ['label' => 'Note',             'guess' => ['note', 'notes', 'comment', 'comments', 'ملاحظات']],
+        'project'  => ['label' => 'Project',          'guess' => ['project', 'compound', 'development', 'المشروع', 'مشروع', 'الكمبوند']],
+        'unit_type'=> ['label' => 'Unit type',        'guess' => ['unit type', 'unit_type', 'property type', 'نوع الوحدة', 'الوحدة']],
     ];
 }
 
@@ -211,6 +213,8 @@ function import_contacts(array $client, array $header, array $rows, array $map, 
     $stages = crm_stage_map($cid);
     $stageByName = [];
     foreach ($stages as $sid => $s) $stageByName[mb_strtolower(trim((string) $s['name']))] = $sid;
+    $projByName = [];
+    foreach (crm_projects($cid) as $pj) $projByName[mb_strtolower(trim((string) $pj['name']))] = (int) $pj['id'];
     $users = [];
     foreach (crm_assignable_users($cid) as $u) {
         $users[mb_strtolower((string) $u['email'])] = (int) $u['id'];
@@ -289,6 +293,20 @@ function import_contacts(array $client, array $header, array $rows, array $map, 
             else $problem($line, "no teammate called \"{$col($r, 'owner')}\" — assigned by the batch rule instead.");
         }
 
+        // Project and unit type first, so the assignment rules can see them when the lead is dealt.
+        if (db_has_column('contacts', 'project_id')) {
+            $pv = mb_strtolower($col($r, 'project'));
+            $pid = null;
+            if ($pv !== '') {
+                $pid = $projByName[$pv] ?? null;
+                if ($pid === null) $problem($line, "no project called \"{$col($r, 'project')}\" — add it in Projects & lists, or fix the sheet.");
+            }
+            $uv = $col($r, 'unit_type');
+            if ($pid !== null || $uv !== '') {
+                db_run("UPDATE contacts SET project_id=COALESCE(?, project_id), unit_type=COALESCE(NULLIF(?,''), unit_type) WHERE id=?",
+                       [$pid, mb_substr($uv, 0, 80), $contactId]);
+            }
+        }
         $isNew = crm_add_lead($client, $contactId, $source, $rowOwner, $stageId, $by);
         if ($isNew) $sum['leads']++;
         elseif ($stageId) crm_set_stage($client, $contactId, $stageId, $by);   // already a lead: honour the sheet's stage

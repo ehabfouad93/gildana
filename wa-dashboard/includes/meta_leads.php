@@ -28,7 +28,8 @@ const META_SCOPES = 'pages_show_list,pages_read_engagement,pages_manage_metadata
 function meta_targets(): array
 {
     return ['phone' => 'Phone (required)', 'name' => 'Full name', 'first_name' => 'First name', 'last_name' => 'Last name',
-            'email' => 'Email', 'attr' => 'Keep as a detail on the lead', 'ignore' => 'Don\'t import'];
+            'email' => 'Email', 'unit_type' => 'Unit type', 'budget' => 'Budget',
+            'attr' => 'Keep as a detail on the lead', 'ignore' => 'Don\'t import'];
 }
 
 function meta_setting(string $k): string
@@ -192,7 +193,7 @@ function meta_sync_forms(array $page): array
  */
 function meta_map_fields(array $fieldData, ?array $mapping = null): array
 {
-    $out = ['phone' => '', 'name' => '', 'email' => '', 'attrs' => []];
+    $out = ['phone' => '', 'name' => '', 'email' => '', 'unit_type' => '', 'budget' => '', 'attrs' => []];
     $first = $last = '';
     $mapping = $mapping ? array_change_key_case($mapping, CASE_LOWER) : null;
     foreach ($fieldData as $f) {
@@ -208,6 +209,8 @@ function meta_map_fields(array $fieldData, ?array $mapping = null): array
                 case 'first_name': $first = $val; continue 2;
                 case 'last_name':  $last = $val; continue 2;
                 case 'email':      $out['email'] = $val; continue 2;
+                case 'unit_type':  $out['unit_type'] = $val; continue 2;
+                case 'budget':     $out['budget'] = $val; continue 2;
                 case 'attr':       $out['attrs'][$key] = $val; continue 2;
             }
         }
@@ -295,11 +298,28 @@ function meta_process_lead(array $page, string $leadgenId, string $via, ?array $
                                [$cid, $phone, $m['name'], $m['email'] !== '' ? $m['email'] : null, json_encode($attrs, JSON_UNESCAPED_UNICODE)]);
     }
 
+    // Unit type and budget, when the form asks them — never overwriting what a salesperson recorded.
+    if (($m['unit_type'] !== '' || $m['budget'] !== '') && db_has_column('contacts', 'unit_type')) {
+        db_run("UPDATE contacts SET unit_type=COALESCE(unit_type, NULLIF(?,'')), budget=COALESCE(budget, NULLIF(?,'')) WHERE id=?",
+               [mb_substr($m['unit_type'], 0, 80), mb_substr($m['budget'], 0, 80), $contactId]);
+    }
+    // The form's project files the lead under it, unless the lead already has one.
+    if (!empty($form['project_id']) && db_has_column('contacts', 'project_id')) {
+        db_run("UPDATE contacts SET project_id=COALESCE(project_id, ?) WHERE id=?", [(int) $form['project_id'], $contactId]);
+    }
+    $wasLead = $existing && $existing['stage_id'] !== null;
+
     // The form's own rule, else the Page's. A number that is already someone's lead keeps its owner.
     $rule  = (string) (($form['owner_rule'] ?? null) ?: $page['owner_rule'] ?: 'auto');
     $owner = ctype_digit($rule) ? (int) $rule : $rule;
     $stage = (int) (($form['stage_id'] ?? null) ?: $page['stage_id'] ?: 0) ?: null;
+    if ($owner === 'auto' && !$wasLead) {
+        // Assignment rules can match on the form, so hand the engine the form id alongside the lead.
+        $row = db_row("SELECT * FROM contacts WHERE id=?", [$contactId]) ?: [];
+        $owner = crm_assign_next($client, $row + ['__form_id' => $formId]) ?? 'none';
+    }
     $isNew = crm_add_lead($client, $contactId, 'meta_form', $owner, $stage);
+    if ($wasLead) crm_resubmitted($client, $contactId, 'meta_form');
 
     $answers = [];
     foreach ($m['attrs'] as $k => $v) $answers[] = ucfirst($k) . ': ' . $v;

@@ -29,6 +29,7 @@ require_once __DIR__ . '/../includes/notify.php';
 require_once __DIR__ . '/../includes/ai.php';
 require_once __DIR__ . '/../includes/automation.php';
 require_once __DIR__ . '/../includes/meta_leads.php';
+require_once __DIR__ . '/../includes/crm_auto.php';
 require_once __DIR__ . '/../includes/push.php';
 
 if (PHP_SAPI !== 'cli') {
@@ -447,9 +448,12 @@ try {
             // Lead-form safety net: re-read connected forms for leads Meta never announced.
             // Throttled per form inside meta_poll(), so this is cheap on most passes.
             $formLeads = function_exists('meta_poll') ? meta_poll()['imported'] : 0;
+            // The CRM's clock: follow-up reminders, the morning summary, response-time alerts,
+            // taking back leads nobody contacted, stale leads, and fresh scores.
+            $crm = function_exists('crm_auto_tick') ? crm_auto_tick() : [];
             // One push per client with pending inbound, however many messages arrived.
             $pushes   = push_dispatch() + push_dispatch_users();   // + "a lead was assigned to you"
-            out("Automation: resumed={$resumed} sheet_leads={$leads} campaign_followups={$followed} outreach_sent={$outreach} no_answer={$noAns} form_leads={$formLeads} pushes={$pushes}.");
+            out("Automation: resumed={$resumed} sheet_leads={$leads} campaign_followups={$followed} outreach_sent={$outreach} no_answer={$noAns} form_leads={$formLeads} crm=" . json_encode($crm) . " pushes={$pushes}.");
         } finally {
             $pdo->query("SELECT RELEASE_LOCK('wa_automation')");
         }

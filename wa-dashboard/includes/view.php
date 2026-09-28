@@ -143,8 +143,19 @@ function nav_children(string $group): array
     ];
     if ($write) $items[] = ['Import leads', 'crm_import.php', 'crm_import.php'];
     if ($admin) {
-        $items[] = ['Lead forms', 'meta_leads.php', 'meta_leads.php'];
-        $items[] = ['Stages',     'crm.php?stages=1', 'crm.php?stages'];
+        $items[] = ['Team & transfer',  'crm_team.php',  'crm_team.php'];
+        $items[] = ['Assignment rules', 'crm_rules.php', 'crm_rules.php'];
+        $items[] = ['Lead forms',       'meta_leads.php', 'meta_leads.php'];
+        $items[] = ['Projects & lists', 'crm_setup.php', 'crm_setup.php'];
+        $items[] = ['Stages',           'crm.php?stages=1', 'crm.php?stages'];
+    }
+    // How many follow-ups are due today or late, for this person (or the team, for a manager).
+    if (function_exists('crm_alert_counts') && isset($GLOBALS['CLIENT']['id'])) {
+        try {
+            $a = crm_alert_counts($GLOBALS['CLIENT'], $admin ? null : (function_exists('crm_actor_id') ? crm_actor_id() : null));
+            $items[1][3] = $a['due'];   // shown as a badge
+            $items[1][4] = $a['overdue'] > 0;
+        } catch (Throwable $e) {}
     }
     return $items;
 }
@@ -317,7 +328,8 @@ $barH   = max(58, $logoH + 22);
           </div>
           <div class="sb-sub">
             <?php foreach ($kids as $kid): ?>
-              <a class="sb-sublink <?= $open && nav_child_active($kid) ? 'active' : '' ?>" href="<?= e($navBase . $kid[1]) ?>"><?= e($kid[0]) ?></a>
+              <a class="sb-sublink <?= $open && nav_child_active($kid) ? 'active' : '' ?>" href="<?= e($navBase . $kid[1]) ?>"><?= e($kid[0]) ?>
+                <?php if (!empty($kid[3])): ?><span class="sb-count <?= !empty($kid[4]) ? 'late' : '' ?>"><?= (int) $kid[3] ?></span><?php endif; ?></a>
             <?php endforeach; ?>
           </div>
         </div>

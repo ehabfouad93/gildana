@@ -29,7 +29,18 @@ $stages  = crm_stages($cid);
 $people  = crm_assignable_users($cid);
 $kinds   = crm_activity_kinds();
 $outcomes = crm_activity_outcomes();
+$projects = crm_projects($cid);
+$pnames   = array_column($projects, 'name', 'id');
+$units    = crm_options($cid, 'unit_type');
+$reasons  = crm_options($cid, 'lost_reason');
 $err = '';
+/** A move to a lost stage carries its reason, or is refused when the account asks for one. */
+$stageMove = function (int $stageId) use ($CLIENT, $cid, $id, $me, &$err): bool {
+    $reason = trim((string) ($_POST['lost_reason'] ?? ''));
+    if ($reason === '__other') $reason = trim((string) ($_POST['lost_other'] ?? ''));
+    if (crm_needs_lost_reason($cid, $stageId) && $reason === '') { $err = 'Say why this lead was lost — choose a reason.'; return false; }
+    return crm_set_stage($CLIENT, $id, $stageId, $me, $reason !== '' ? $reason : null, (string) ($_POST['lost_note'] ?? ''));
+};
 $back = fn(string $anchor = '') => redirect('crm_lead.php?id=' . $id . $anchor);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -45,6 +56,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             db_run("UPDATE contacts SET name=?, email=?, deal_value=? WHERE id=? AND client_id=?",
                 [trim((string) ($_POST['name'] ?? '')), $email !== '' ? $email : null,
                  $val !== '' ? (float) preg_replace('/[^\d.]/', '', $val) : null, $id, $cid]);
+            if (db_has_column('contacts', 'project_id')) {
+                $pj = (int) ($_POST['project_id'] ?? 0);
+                $pay = (string) ($_POST['payment_pref'] ?? '');
+                db_run("UPDATE contacts SET project_id=?, unit_type=?, budget=?, payment_pref=? WHERE id=? AND client_id=?",
+                       [isset($pnames[$pj]) ? $pj : null, mb_substr(trim((string) ($_POST['unit_type'] ?? '')), 0, 80) ?: null,
+                        mb_substr(trim((string) ($_POST['budget'] ?? '')), 0, 80) ?: null,
+                        in_array($pay, ['cash', 'installments'], true) ? $pay : null, $id, $cid]);
+                crm_rescore($id);
+            }
             if ($isAdmin && isset($_POST['owner'])) {
                 $o = (string) $_POST['owner'];
                 crm_assign($CLIENT, $id, $o === 'none' ? null : ($o === 'auto' ? crm_assign_next($CLIENT) : (int) $o), $me);
@@ -65,13 +85,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } elseif ($next !== '' && !strtotime($next)) {
             $err = 'That follow-up date does not look right.';
         } else {
+            $st = (int) ($_POST['stage_id'] ?? 0);
+            $moving = $st && $st !== (int) $lead['stage_id'];
+            if ($moving && crm_needs_lost_reason($cid, $st) && trim((string) ($_POST['lost_reason'] ?? '')) === '') {
+                $err = 'Say why this lead was lost — choose a reason.';
+            } else {
             crm_log_activity($CLIENT, $id, $kind, $kind === 'note' ? null : $outcome, $body, $me);
             if ($next !== '') crm_set_followup($CLIENT, $id, $next, (string) ($_POST['next_note'] ?? ''), $me);
             elseif (!empty($_POST['clear_followup'])) crm_set_followup($CLIENT, $id, null, '', $me);
-            $st = (int) ($_POST['stage_id'] ?? 0);
-            if ($st && $st !== (int) $lead['stage_id']) crm_set_stage($CLIENT, $id, $st, $me);
+            if ($moving) $stageMove($st);
             flash(($kinds[$kind] ?? 'Activity') . ' logged' . ($next !== '' ? ', next follow-up ' . date('D j M, H:i', strtotime($next)) : '') . '.');
             $back('#timeline');
+            }
         }
     }
     if ($a === 'followup') {
@@ -86,8 +111,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $back();
     }
     if ($a === 'stage') {
-        if ((int) ($_POST['stage_id'] ?? 0)) crm_set_stage($CLIENT, $id, (int) $_POST['stage_id'], $me);
-        $back();
+        if ((int) ($_POST['stage_id'] ?? 0) && $stageMove((int) $_POST['stage_id'])) $back();
+    }
+    if ($a === 'merge' && $isAdmin) {
+        $other = (int) ($_POST['other'] ?? 0);
+        if (crm_merge($CLIENT, $id, $other, $me)) { flash('Merged. Everything from the other contact is now on this lead.'); $back(); }
+        $err = 'Those two could not be merged.';
     }
     if ($a === 'send') {
         // Out through whatever this person's admin chose for them — see sender_for().
@@ -136,6 +165,11 @@ foreach (db_all("SELECT * FROM crm_events WHERE contact_id=? ORDER BY id DESC LI
                      : 'Reassigned from ' . $un($ev['from_val']) . ' to ' . $un($ev['to_val'])),
         'followup' => $ev['to_val'] ? 'Follow-up set for ' . date('D j M, H:i', strtotime((string) $ev['to_val'])) : 'Follow-up cleared',
         'removed'  => 'Removed from the pipeline',
+        'lost'     => 'Lost — ' . $ev['to_val'],
+        'reclaimed'=> 'Not contacted in time — passed from ' . $un($ev['from_val']) . ' to ' . $un($ev['to_val']),
+        'sla'      => 'Not contacted within ' . (int) $ev['to_val'] . ' minutes — owner alerted',
+        'resubmitted' => 'Came in again (' . crm_source_label($ev['to_val']) . ')',
+        'merged'   => 'Merged with the duplicate contact ' . $ev['to_val'],
         default    => $ev['kind'],
     };
     $feed[] = ['t' => $ev['created_at'], 'group' => 'history', 'kind' => 'event', 'body' => $text, 'by' => $who($ev['user_id'])];
@@ -154,6 +188,15 @@ $dueState = !$due ? '' : ($due < time() ? 'late' : (date('Y-m-d', $due) === date
 $curStage = $lead['stage_id'] !== null ? ($stageMap[(int) $lead['stage_id']] ?? null) : null;
 $phone = (string) $lead['phone_e164'];
 $canW  = can_write();
+
+// Heat is about open leads; a won or lost one has its answer already.
+$isOpen = $lead['stage_id'] !== null && crm_stage_kind($cid, (int) $lead['stage_id']) === 'open';
+[$score, $why] = $isOpen ? crm_score_compute($lead) : [null, []];
+[$heatCls, $heatWord] = crm_heat($score);
+$dups = crm_duplicates($lead);
+$lostIds = array_map('intval', array_keys(array_filter(crm_stage_map($cid), fn($st) => $st['kind'] === 'lost')));
+$askLost = (int) crm_settings($cid)['require_lost_reason'] === 1;
+$subs = (int) ($lead['submissions'] ?? 1);
 
 $title = (string) ($lead['name'] ?: '+' . $phone);
 client_header($title, 'crm', $CLIENT);
@@ -174,11 +217,22 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
     <div>
       <div class="lead-contact">
         <a href="tel:+<?= e($phone) ?>" class="lead-phone">+<?= e($phone) ?></a>
+        <?php if ($heatCls): ?>
+          <details class="lead-heat"><summary><span class="heat <?= $heatCls ?>" id="lead-score"><?= e($heatWord) ?> · <?= (int) $score ?></span></summary>
+            <div class="lead-heat-why"><strong>Why <?= (int) $score ?></strong>
+              <?php foreach ($why as [$label, $pts]): ?><div><span><?= e($label) ?></span><span class="num"><?= $pts > 0 && $label !== 'Starting point' ? '+' : '' ?><?= (int) $pts ?></span></div><?php endforeach; ?>
+            </div></details>
+        <?php endif; ?>
+        <?php if ($subs > 1): ?><span class="crm-flag" title="Filled in a form or came in again">Came in <?= $subs ?>×</span><?php endif; ?>
         <?php if (!empty($lead['email'])): ?><a href="mailto:<?= e((string) $lead['email']) ?>" class="text-muted"><?= e((string) $lead['email']) ?></a><?php endif; ?>
       </div>
       <div class="lead-meta">
         <span><span class="text-muted">Owner</span> <?= e(crm_user_name($lead['owner_user_id'] !== null ? (int) $lead['owner_user_id'] : null)) ?></span>
         <span><span class="text-muted">Came from</span> <?= e(crm_source_label($lead['source'])) ?></span>
+        <?php if (!empty($lead['project_id'])): ?><span><span class="text-muted">Project</span> <?= e((string) ($pnames[(int) $lead['project_id']] ?? '—')) ?></span><?php endif; ?>
+        <?php if (!empty($lead['unit_type'])): ?><span><span class="text-muted">Wants</span> <?= e((string) $lead['unit_type']) ?></span><?php endif; ?>
+        <?php if (!empty($lead['budget'])): ?><span><span class="text-muted">Budget</span> <?= e((string) $lead['budget']) ?></span><?php endif; ?>
+        <?php if (!empty($lead['payment_pref'])): ?><span><span class="text-muted">Pays</span> <?= $lead['payment_pref'] === 'cash' ? 'Cash' : 'Instalments' ?></span><?php endif; ?>
         <?php if ($lead['deal_value'] !== null): ?><span><span class="text-muted">Value</span> <?= e(number_format((float) $lead['deal_value'])) ?></span><?php endif; ?>
         <span><span class="text-muted">Added</span> <?= e(date('j M Y', strtotime((string) $lead['created_at']))) ?></span>
       </div>
@@ -190,6 +244,9 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
     </div>
   </div>
 
+  <?php if (!empty($lead['lost_reason']) && in_array((int) $lead['stage_id'], $lostIds, true)): ?>
+    <p class="lead-lost">Lost: <strong><?= e((string) $lead['lost_reason']) ?></strong><?= !empty($lead['lost_note']) ? ' — ' . e((string) $lead['lost_note']) : '' ?></p>
+  <?php endif; ?>
   <?php if ($lead['stage_id'] !== null): ?>
   <form method="post" class="lead-stages" aria-label="Stage">
     <?= csrf_field() ?><input type="hidden" name="action" value="stage"><input type="hidden" name="id" value="<?= $id ?>">
@@ -198,6 +255,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
       $cls = $isCur ? 'cur ' . $s['kind'] : ($passed && $s['kind'] === 'open' ? 'done' : '');
       if ($isCur) $passed = false; ?>
       <button name="stage_id" value="<?= (int) $s['id'] ?>" class="lead-stage <?= $cls ?>" <?= $canW ? '' : 'disabled' ?>
+              <?= $askLost && !$isCur && $s['kind'] === 'lost' ? 'type="button" data-lost="' . (int) $s['id'] . '"' : '' ?>
               title="<?= $isCur ? 'Current stage' : 'Move to ' . e($s['name']) ?>"><?= e($s['name']) ?></button>
     <?php endforeach; ?>
   </form>
@@ -269,6 +327,11 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
           <div class="field"><span class="lbl">Move to stage</span><select name="stage_id">
             <?php foreach ($stages as $s): ?><option value="<?= (int) $s['id'] ?>" <?= (int) $s['id'] === (int) $lead['stage_id'] ? 'selected' : '' ?>><?= e($s['name']) ?><?= (int) $s['id'] === (int) $lead['stage_id'] ? ' (current)' : '' ?></option><?php endforeach; ?>
           </select></div>
+          <div class="grid2" id="act-lost" hidden>
+            <div class="field"><span class="lbl">Why was it lost?</span><select name="lost_reason"><option value="">Choose a reason…</option>
+              <?php foreach ($reasons as $r): ?><option><?= e($r) ?></option><?php endforeach; ?></select></div>
+            <div class="field"><span class="lbl">Anything to add</span><input name="lost_note" maxlength="255" placeholder="Bought in another compound"></div>
+          </div>
           <?php endif; ?>
         </details>
         <button class="btn btn-primary mt10">Save activity</button>
@@ -311,6 +374,17 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
           <div class="field"><span class="lbl">Email</span><input name="email" type="email" value="<?= e((string) ($lead['email'] ?? '')) ?>"></div>
           <div class="field"><span class="lbl">Deal value</span><input name="value" inputmode="decimal"
                value="<?= $lead['deal_value'] !== null ? e(number_format((float) $lead['deal_value'], 0, '.', '')) : '' ?>"></div>
+          <div class="field"><span class="lbl">Project</span><select name="project_id"><option value="0">—</option>
+            <?php foreach ($projects as $p): if (!(int) $p['active'] && (int) $p['id'] !== (int) ($lead['project_id'] ?? 0)) continue; ?>
+              <option value="<?= (int) $p['id'] ?>" <?= (int) $p['id'] === (int) ($lead['project_id'] ?? 0) ? 'selected' : '' ?>><?= e($p['name']) ?></option><?php endforeach; ?></select>
+            <?php if (!$projects && $isAdmin): ?><span class="text-muted" style="font-size:12px"><a href="crm_setup.php">Add your projects</a></span><?php endif; ?></div>
+          <div class="field"><span class="lbl">Unit type</span><select name="unit_type"><option value="">—</option>
+            <?php $ut = (string) ($lead['unit_type'] ?? ''); foreach (array_unique(array_merge($units, $ut !== '' ? [$ut] : [])) as $u): ?>
+              <option <?= $u === $ut ? 'selected' : '' ?>><?= e($u) ?></option><?php endforeach; ?></select></div>
+          <div class="field"><span class="lbl">Budget</span><input name="budget" maxlength="80" value="<?= e((string) ($lead['budget'] ?? '')) ?>" placeholder="5–7M"></div>
+          <div class="field"><span class="lbl">Paying</span><select name="payment_pref"><option value="">—</option>
+            <option value="cash" <?= ($lead['payment_pref'] ?? '') === 'cash' ? 'selected' : '' ?>>Cash</option>
+            <option value="installments" <?= ($lead['payment_pref'] ?? '') === 'installments' ? 'selected' : '' ?>>Instalments</option></select></div>
           <div class="field"><span class="lbl">Owner</span>
             <?php if ($isAdmin): ?>
               <select name="owner"><option value="none" <?= $lead['owner_user_id'] === null ? 'selected' : '' ?>>Unassigned</option>
@@ -336,6 +410,27 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
           <button class="btn-link" style="color:var(--danger)">Remove from pipeline</button></form>
       <?php endif; ?>
     </details>
+
+    <?php if ($dups): ?>
+    <!-- Probably the same person -->
+    <div class="card" id="dups">
+      <h2>Possible duplicates</h2>
+      <p class="text-muted" style="font-size:12.5px;margin-top:-4px">Same name, email, or the same number written another way.
+        <?= $isAdmin ? 'Merging moves their messages, notes and answers onto this lead and removes the other one.' : 'An Admin can merge them.' ?></p>
+      <?php foreach ($dups as $d): ?>
+        <div class="dup-row">
+          <div><a href="crm_lead.php?id=<?= (int) $d['id'] ?>"><strong><?= e((string) ($d['name'] ?: '+' . $d['phone_e164'])) ?></strong></a>
+            <span class="text-muted" style="display:block;font-size:12px">+<?= e((string) $d['phone_e164']) ?><?= $d['email'] ? ' · ' . e((string) $d['email']) : '' ?>
+              · <?= e($d['stage_name'] ?: 'Not in the pipeline') ?> · <?= e(crm_user_name($d['owner_user_id'] !== null ? (int) $d['owner_user_id'] : null)) ?></span></div>
+          <?php if ($isAdmin): ?>
+          <form method="post" onsubmit="return confirm('Merge this contact into the lead you are looking at? The other one will be removed.')">
+            <?= csrf_field() ?><input type="hidden" name="action" value="merge"><input type="hidden" name="id" value="<?= $id ?>"><input type="hidden" name="other" value="<?= (int) $d['id'] ?>">
+            <button class="btn btn-ghost btn-sm">Merge into this lead</button></form>
+          <?php endif; ?>
+        </div>
+      <?php endforeach; ?>
+    </div>
+    <?php endif; ?>
   </div>
 
   <!-- Everything that happened -->
@@ -369,8 +464,46 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
   </div>
 </div>
 
+<?php if ($canW && $askLost && $lostIds): ?>
+<dialog id="lost-dlg" class="lost-dlg" aria-labelledby="lost-title">
+  <form method="post">
+    <?= csrf_field() ?><input type="hidden" name="action" value="stage"><input type="hidden" name="id" value="<?= $id ?>">
+    <input type="hidden" name="stage_id" id="lost-stage">
+    <h2 id="lost-title" style="margin-top:0">Why was this lead lost?</h2>
+    <div class="lost-reasons">
+      <?php foreach ($reasons as $r): ?><label class="act-kind"><input type="radio" name="lost_reason" value="<?= e($r) ?>" required><span><?= e($r) ?></span></label><?php endforeach; ?>
+      <label class="act-kind"><input type="radio" name="lost_reason" value="__other"><span>Something else</span></label>
+    </div>
+    <div class="field" id="lost-other-wrap" hidden><span class="lbl">What happened</span><input name="lost_other" maxlength="80"></div>
+    <div class="field"><span class="lbl">Anything to add (optional)</span><input name="lost_note" maxlength="255" placeholder="Bought in another compound"></div>
+    <div style="display:flex;gap:8px"><button class="btn btn-primary">Mark as lost</button>
+      <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">Cancel</button></div>
+  </form>
+</dialog>
+<?php endif; ?>
 <script>
 (function(){
+  /* Lost needs a reason: the stage bar opens the question, and the activity form shows it. */
+  const LOST = <?= json_encode($askLost ? $lostIds : []) ?>;
+  const dlg = document.getElementById('lost-dlg');
+  document.querySelectorAll('[data-lost]').forEach(b => b.addEventListener('click', () => {
+    document.getElementById('lost-stage').value = b.dataset.lost; dlg.showModal();
+  }));
+  if (dlg) dlg.querySelectorAll('input[name=lost_reason]').forEach(r => r.addEventListener('change', () => {
+    const other = dlg.querySelector('input[value=__other]').checked;
+    document.getElementById('lost-other-wrap').hidden = !other;
+    dlg.querySelector('input[name=lost_other]').required = other;
+  }));
+  const actStage = document.querySelector('#act-form select[name=stage_id]');
+  if (actStage) {
+    const syncLost = () => {
+      const lost = LOST.includes(parseInt(actStage.value, 10)) && !actStage.selectedOptions[0].text.includes('(current)');
+      document.getElementById('act-lost').hidden = !lost;
+      document.querySelector('#act-lost select').required = lost;
+    };
+    actStage.addEventListener('change', syncLost); syncLost();
+  }
+
   /* Quick picks for a follow-up: the times salespeople actually choose. */
   const pad = n => String(n).padStart(2, '0');
   const local = d => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());

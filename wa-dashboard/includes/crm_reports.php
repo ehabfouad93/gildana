@@ -43,6 +43,7 @@ function crm_report_where(int $clientId, array $f): array
     [$scope, $sp] = crm_scope('c');
     $sql .= $scope; $p = array_merge($p, $sp);
     if (!empty($f['source'])) { $sql .= " AND c.source = ?"; $p[] = (string) $f['source']; }
+    if (!empty($f['project']) && db_has_column('contacts', 'project_id')) { $sql .= " AND c.project_id = ?"; $p[] = (int) $f['project']; }
     if (($f['owner'] ?? '') === 'none') $sql .= " AND c.owner_user_id IS NULL";
     elseif (!empty($f['owner'])) { $sql .= " AND c.owner_user_id = ?"; $p[] = (int) $f['owner']; }
     return [$sql, $p];
@@ -285,4 +286,63 @@ function crm_report_weekly(int $clientId, array $f): array
     }
     ksort($weeks);
     return array_values($weeks);
+}
+
+
+/**
+ * Each project: how many leads it brought in the period, how many were won and lost, for how much.
+ * Leads not filed under a project are one row of their own, so the totals still add up.
+ */
+function crm_report_projects(int $clientId, array $f): array
+{
+    if (!db_has_column('contacts', 'project_id')) return [];
+    $from = $f['from'] . ' 00:00:00'; $to = $f['to'] . ' 23:59:59';
+    $kinds = crm_stage_kinds($clientId);
+    [$w, $p] = crm_report_where($clientId, $f);
+    $won = $kinds['won'] ?: [0]; $lost = $kinds['lost'] ?: [0];
+    $phw = implode(',', array_fill(0, count($won), '?')); $phl = implode(',', array_fill(0, count($lost), '?'));
+    $rows = db_all("SELECT c.project_id, COUNT(*) AS leads, SUM(c.stage_id IN ($phw)) AS won, SUM(c.stage_id IN ($phl)) AS lost,
+                           SUM(CASE WHEN c.stage_id IN ($phw) THEN COALESCE(c.deal_value,0) ELSE 0 END) AS won_value,
+                           SUM(c.score >= 70 AND c.stage_id NOT IN ($phw) AND c.stage_id NOT IN ($phl)) AS hot
+                      FROM contacts c WHERE c.crm_added_at BETWEEN ? AND ? AND {$w}
+                     GROUP BY c.project_id ORDER BY leads DESC",
+                   array_merge($won, $lost, $won, $won, $lost, [$from, $to], $p));
+    $names = crm_project_names($clientId);
+    foreach ($rows as &$r) {
+        $r['label'] = $r['project_id'] !== null ? ($names[(int) $r['project_id']] ?? 'A removed project') : 'No project';
+        $r['rate']  = $r['leads'] ? round(100 * $r['won'] / $r['leads'], 1) : null;
+    }
+    unset($r);
+    return $rows;
+}
+
+/**
+ * Why deals were lost in the period: each reason, how often, and in which projects most.
+ * Counted from the moment of losing (the history), so a lead lost this month counts this month
+ * even if it arrived last quarter.
+ */
+function crm_report_lost(int $clientId, array $f): array
+{
+    if (!db_has_column('contacts', 'lost_reason')) return [];
+    $from = $f['from'] . ' 00:00:00'; $to = $f['to'] . ' 23:59:59';
+    [$w, $p] = crm_report_where($clientId, $f);
+    $rows = db_all("SELECT COALESCE(NULLIF(c.lost_reason,''), 'No reason given') AS reason, c.project_id, COUNT(DISTINCT c.id) AS n
+                      FROM crm_events e JOIN contacts c ON c.id = e.contact_id JOIN crm_stages s ON s.id = c.stage_id
+                     WHERE e.kind='stage' AND s.kind='lost' AND e.to_val = CAST(c.stage_id AS CHAR)
+                       AND e.created_at BETWEEN ? AND ? AND {$w}
+                     GROUP BY reason, c.project_id", array_merge([$from, $to], $p));
+    $names = crm_project_names($clientId);
+    $by = [];
+    foreach ($rows as $r) {
+        $k = (string) $r['reason'];
+        $by[$k] ??= ['reason' => $k, 'n' => 0, 'projects' => []];
+        $by[$k]['n'] += (int) $r['n'];
+        $pl = $r['project_id'] !== null ? ($names[(int) $r['project_id']] ?? 'A removed project') : 'No project';
+        $by[$k]['projects'][$pl] = ($by[$k]['projects'][$pl] ?? 0) + (int) $r['n'];
+    }
+    $total = array_sum(array_column($by, 'n'));
+    foreach ($by as &$r) { arsort($r['projects']); $r['share'] = $total ? round(100 * $r['n'] / $total) : 0; }
+    unset($r);
+    usort($by, fn($a, $b) => $b['n'] <=> $a['n']);
+    return $by;
 }

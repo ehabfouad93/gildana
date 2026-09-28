@@ -9,7 +9,7 @@
  * conversations; a cached copy could be shown to the wrong account after a logout/login
  * on a shared phone, or long after the data changed. Only the offline shell is stored.
  */
-const VERSION = 'revenect-v4';   // bumped so installed devices pick up the lead notification
+const VERSION = 'revenect-v5';   // bumped so installed devices pick up the lead notification
 const OFFLINE = './offline.html';
 const PRECACHE = [OFFLINE, './assets/icons/icon-192.png', './manifest.webmanifest'];
 
@@ -79,7 +79,13 @@ async function showInboxNotification() {
         const d = await res.json();
         const n = parseInt(d.count, 10);
         const leads = parseInt(d.new_leads, 10);
-        if (leads > 0) {
+        const nt = d.notice;
+        const words = noticeWords(nt);
+        if (words) {
+          // A CRM reminder or alert is about a specific thing to do now, so it wins.
+          title = words[0]; body = words[1];
+          url = nt.lead ? './client/crm_lead.php?id=' + nt.lead : (words[2] || './client/crm.php');
+        } else if (leads > 0) {
           // A lead was just handed to this person and nobody has answered it yet — that is
           // the thing to act on, so it wins over the generic message count.
           title = leads === 1 ? 'A new lead is yours' : leads + ' new leads are yours';
@@ -101,6 +107,30 @@ async function showInboxNotification() {
     renotify: true,
     data: { url: url }
   });
+}
+
+/* The server sends a kind and counts; the words are made here, so no lead details travel. */
+function noticeWords(nt) {
+  if (!nt || !nt.kind) return null;
+  const n = parseInt(nt.n, 10) || 1, d = nt.data || {}, s = (k, one, many) => (k === 1 ? one : many);
+  switch (nt.kind) {
+    case 'followup':  return [s(n, 'Follow-up due now', n + ' follow-ups due now'), 'Tap to open ' + s(n, 'the lead', 'your follow-ups') + '.', './client/crm.php?view=table&due=overdue'];
+    case 'sla':       return [s(n, 'A new lead is waiting for you', n + ' new leads are waiting for you'), 'Contact ' + s(n, 'it', 'them') + ' now, before ' + s(n, 'it is', 'they are') + ' passed to a colleague.'];
+    case 'sla_team':  return [(d.n || n) + ' ' + s(d.n || n, 'lead was', 'leads were') + ' not contacted in time', 'Tap to see who is waiting.', './client/crm_team.php'];
+    case 'reclaimed': return [s(n, 'A lead was passed to a colleague', n + ' leads were passed to colleagues'), 'Not contacted in time.', './client/crm.php'];
+    case 'resubmit':  return [s(n, 'One of your leads came in again', n + ' of your leads came in again'), 'They filled in a form again — a good moment to call.'];
+    case 'stale':     return [(d.n || n) + ' ' + s(d.n || n, 'lead has', 'leads have') + ' had no activity for ' + (d.days || 'some') + ' days', 'Tap to follow up.', './client/crm.php'];
+    case 'digest': {
+      const parts = [];
+      if (d.due_today) parts.push(d.due_today + ' follow-up' + s(d.due_today, '', 's') + ' today');
+      if (d.overdue)   parts.push(d.overdue + ' overdue');
+      if (d.new)       parts.push(d.new + ' new lead' + s(d.new, '', 's'));
+      if (d.late)      parts.push(d.late + ' not contacted in time');
+      if (d.team && d.unassigned) parts.push(d.unassigned + ' unassigned');
+      return [d.team ? 'Your team today' : 'Your day', parts.join(' · ') || 'Open your CRM.', './client/crm.php'];
+    }
+  }
+  return null;
 }
 
 self.addEventListener('push', (event) => {

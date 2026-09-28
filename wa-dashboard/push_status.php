@@ -15,6 +15,7 @@ require_once __DIR__ . '/includes/db.php';
 require_once __DIR__ . '/includes/whatsapp.php';
 require_once __DIR__ . '/includes/credits.php';
 require_once __DIR__ . '/includes/inbox.php';
+require_once __DIR__ . '/includes/crm_auto.php';
 
 header('Content-Type: application/json; charset=UTF-8');
 header('Cache-Control: no-store');
@@ -37,4 +38,6 @@ echo json_encode([
     'count'     => inbox_unread_total((int) $sub['client_id'], $owner),
     // Still bare integers — no names, numbers or message text leave through this endpoint.
     'new_leads' => $uid ? push_new_leads($uid) : 0,
+    // A CRM reminder or alert: its kind and counts, and at most a lead's id to open. No names.
+    'notice'    => $uid ? crm_notice_summary($uid) : null,
 ]);

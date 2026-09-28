@@ -240,7 +240,7 @@ table.data tr:hover td { background: rgba(124,58,237,.04); }
 .field { margin-bottom: 15px; }
 .field > .lbl, label > .lbl { display: block; font-size: 12px; font-weight: 600; color: var(--brown); margin-bottom: 6px; letter-spacing: .01em; }
 .field .hint { font-size: 11.5px; color: var(--muted); margin-top: 5px; line-height: 1.45; }
-input[type=text], input[type=email], input[type=password], input[type=tel],
+input:not([type]), input[type=text], input[type=email], input[type=password], input[type=tel],
 input[type=number], input[type=datetime-local], input[type=search], textarea, select {
   width: 100%; padding: 10px 12px; border: 1px solid var(--line-strong);
   background: var(--white); border-radius: 8px; transition: border-color .14s, box-shadow .14s;
@@ -972,3 +972,41 @@ td.ck input, th.ck input { width: auto; margin: 0; cursor: pointer; }
 /* A file input's built-in button + filename has a fixed intrinsic width and will not shrink,
    which pushed the profile page (and Settings before it) wider than a phone. */
 input[type="file"] { max-width: 100%; min-width: 0; }
+
+/* ── CRM manager pages ── */
+.muted-row td { opacity: .6; }
+.avail-form { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.avail-form input[type=number] { padding: 5px 8px; }
+.timers .timer-row { padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; }
+.timers .timer-row:last-of-type { border-bottom: 0; margin-bottom: 10px; }
+.timers .timer-row .mod-all { display: inline-flex; gap: 8px; align-items: center; margin: 0 6px 0 0; }
+.timers input[type=number] { width: 80px; display: inline-block; padding: 5px 8px; }
+.timers select { width: auto; display: inline-block; padding: 5px 8px; }
+.timers .text-muted { font-size: 12px; margin: 4px 0 0 24px; }
+.setup-lists { align-items: start; }
+/* Lead heat: tells hot from cold at a glance; the word is always shown too, never colour alone. */
+.heat { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; font-variant-numeric: tabular-nums; }
+.heat.hot  { background: #FDECEC; color: #B42318; }
+.heat.warm { background: #FFF4E5; color: #9A4A00; }
+.heat.cold { background: #EAF2FB; color: #1F5FA8; }
+.crm-flag { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 8px; background: rgba(13,19,33,.06); color: var(--slate); }
+.crm-flag.late { background: var(--danger-bg); color: var(--danger); }
+.sb-sublink { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+.sb-count { font-size: 11px; font-weight: 700; min-width: 20px; text-align: center; padding: 1px 6px; border-radius: 999px; background: var(--brand-tint); color: var(--brand); }
+.sb-count.late { background: var(--danger-bg); color: var(--danger); }
+.lead-heat { position: relative; display: inline-block; }
+.lead-heat summary { list-style: none; cursor: pointer; }
+.lead-heat summary::-webkit-details-marker { display: none; }
+.lead-heat-why { position: absolute; z-index: 20; top: 28px; left: 0; width: 270px; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; box-shadow: 0 10px 30px rgba(13,19,33,.12); padding: 10px 12px; font-size: 12.5px; }
+.lead-heat-why div { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0; border-top: 1px solid var(--line); }
+.lead-heat-why strong { display: block; margin-bottom: 4px; }
+.lead-lost { margin: 12px 0 0; font-size: 13px; color: #B5461C; }
+.dup-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.lost-dlg { border: 0; border-radius: 14px; padding: 22px; width: min(520px, calc(100vw - 32px)); box-shadow: 0 20px 60px rgba(13,19,33,.25); }
+.lost-dlg::backdrop { background: rgba(13,19,33,.45); }
+.lost-reasons { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.crm-card-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+
+/* "hidden" always wins over a layout rule — a .grid2 or flex container would otherwise show it. */
+[hidden] { display: none !important; }

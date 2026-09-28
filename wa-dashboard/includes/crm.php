@@ -11,6 +11,7 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/permissions.php';
+require_once __DIR__ . '/crm_manager.php';     // rules, scoring, notices, merge — the manager's side
 
 /** The pipeline a client starts with. Real-estate shaped, because that is who uses this. */
 function crm_default_stages(): array
@@ -116,27 +117,11 @@ function crm_rotation(array $client): array
  * lock, two leads arriving in the same second both read the same pointer and both land on the
  * same person — which is exactly when fairness matters, because a burst is a campaign landing.
  */
-function crm_assign_next(array $client): ?int
+function crm_assign_next(array $client, ?array $lead = null, array $exclude = []): ?int
 {
-    $rotation = crm_rotation($client);
-    if (!$rotation) return null;
-
-    $pdo = db();
-    $own = !$pdo->inTransaction();
-    if ($own) $pdo->beginTransaction();
-    try {
-        $ptr  = (int) db_val("SELECT COALESCE(rr_pointer,0) FROM clients WHERE id=? FOR UPDATE", [(int) $client['id']]);
-        $next = $rotation[0];
-        foreach ($rotation as $id) {
-            if ($id > $ptr) { $next = $id; break; }          // the first one after the last dealt
-        }
-        db_run("UPDATE clients SET rr_pointer=? WHERE id=?", [$next, (int) $client['id']]);
-        if ($own) $pdo->commit();
-        return $next;
-    } catch (Throwable $e) {
-        if ($own && $pdo->inTransaction()) $pdo->rollBack();
-        throw $e;
-    }
+    // The assignment rules decide (crm_manager.php); with none, the whole sales team in turn.
+    [$uid] = crm_pick_owner($client, $lead, $exclude);
+    return $uid;
 }
 
 /** Ask the worker to ping this one person's devices. Collapses like the client outbox does. */
@@ -174,21 +159,41 @@ function crm_assign(array $client, int $contactId, ?int $userId, ?int $by = null
     }
     db_run("UPDATE contacts SET owner_user_id=?, assigned_at=IF(? IS NULL, NULL, NOW()) WHERE id=? AND client_id=?",
            [$userId, $userId, $contactId, $cid]);
+    // A new owner gets a fresh clock: the response alert and the stale alert start over for them.
+    if (db_has_column('contacts', 'sla_alerted_at')) {
+        db_run("UPDATE contacts SET sla_alerted_at=NULL, stale_alerted_at=NULL" . ($by !== null ? ", reclaims=0" : "") . " WHERE id=?", [$contactId]);
+    }
     crm_log($cid, $contactId, 'assigned', $from !== null ? (string) $from : null,
             $userId !== null ? (string) $userId : null, $by);
     if ($userId !== null && $userId !== $by) crm_notify_user($userId, $cid);
 }
 
-function crm_set_stage(array $client, int $contactId, int $stageId, ?int $by = null): bool
+function crm_set_stage(array $client, int $contactId, int $stageId, ?int $by = null,
+                       ?string $lostReason = null, ?string $lostNote = null): bool
 {
     $cid = (int) $client['id'];
-    if (!isset(crm_stage_map($cid)[$stageId])) return false;
+    $map = crm_stage_map($cid);
+    if (!isset($map[$stageId])) return false;
     $cur = db_row("SELECT stage_id FROM contacts WHERE id=? AND client_id=?", [$contactId, $cid]);
     if (!$cur) return false;
     if ((int) $cur['stage_id'] === $stageId) return true;
     db_run("UPDATE contacts SET stage_id=? WHERE id=? AND client_id=?", [$stageId, $contactId, $cid]);
     crm_log($cid, $contactId, 'stage', $cur['stage_id'] !== null ? (string) $cur['stage_id'] : null, (string) $stageId, $by);
+    if ($map[$stageId]['kind'] === 'lost' && db_has_column('contacts', 'lost_reason')) {
+        $lostReason = $lostReason !== null ? mb_substr(trim($lostReason), 0, 80) : null;
+        db_run("UPDATE contacts SET lost_reason=?, lost_note=? WHERE id=?",
+               [$lostReason ?: null, $lostNote !== null && trim($lostNote) !== '' ? mb_substr(trim($lostNote), 0, 255) : null, $contactId]);
+        if ($lostReason) crm_log($cid, $contactId, 'lost', null, $lostReason, $by);
+    }
+    if ($by !== null) crm_touch($contactId);
+    crm_rescore($contactId);
     return true;
+}
+
+/** Moving to this stage needs a reason first (a lost stage, when the account asks for one). */
+function crm_needs_lost_reason(int $clientId, int $stageId): bool
+{
+    return crm_stage_kind($clientId, $stageId) === 'lost' && (int) crm_settings($clientId)['require_lost_reason'] === 1;
 }
 
 function crm_add_note(array $client, int $contactId, string $body, ?int $by = null): void
@@ -234,6 +239,8 @@ function crm_log_activity(array $client, int $contactId, string $kind, ?string $
     db_insert("INSERT INTO crm_notes (client_id,contact_id,user_id,kind,outcome,body,created_at) VALUES (?,?,?,?,?,?,NOW())",
               [(int) $client['id'], $contactId, $by, $kind, $outcome, mb_substr($body, 0, 5000)]);
     if ($kind !== 'note') crm_mark_response($contactId, 'crm');
+    if ($by !== null) crm_touch($contactId);
+    crm_rescore($contactId);
     return true;
 }
 
@@ -273,9 +280,10 @@ function crm_add_lead(array $client, int $contactId, string $source = '', $owner
            [$stage, $source, $contactId, $cid]);
     crm_log($cid, $contactId, 'added', null, (string) $stage, $by);
 
-    $userId = $owner === 'auto' ? crm_assign_next($client)
+    $userId = $owner === 'auto' ? crm_assign_next($client, db_row("SELECT * FROM contacts WHERE id=?", [$contactId]) ?: null)
             : ($owner === 'none' || $owner === null ? null : (int) $owner);
     if ($userId !== null) crm_assign($client, $contactId, $userId, $by);
+    crm_rescore($contactId);
     return true;
 }
 
@@ -356,7 +364,24 @@ function crm_leads(int $clientId, array $f = []): array
         $sql .= " AND (c.name LIKE ? OR c.phone_e164 LIKE ? OR c.email LIKE ?)";
         array_push($p, "%$q%", "%$q%", "%$q%");
     }
-    $sql .= " ORDER BY c.next_followup_at IS NULL, c.next_followup_at, c.id DESC LIMIT 2000";
+    $m039 = db_has_column('contacts', 'score');
+    if ($m039) {
+        if (!empty($f['project'])) { $sql .= " AND c.project_id = ?"; $p[] = (int) $f['project']; }
+        $heat = (string) ($f['heat'] ?? '');
+        if ($heat === 'hot')  $sql .= " AND c.score >= 70";
+        if ($heat === 'warm') $sql .= " AND c.score >= 40 AND c.score < 70";
+        if ($heat === 'cold') $sql .= " AND c.score < 40";
+        $st = (string) ($f['status'] ?? '');
+        if ($st === 'not_contacted') $sql .= " AND c.first_response_at IS NULL AND s.kind = 'open'";
+        if ($st === 'again')         $sql .= " AND c.submissions > 1";
+        if ($st === 'no_followup')   $sql .= " AND c.next_followup_at IS NULL AND s.kind = 'open'";
+    }
+    $order = [
+        'hot'    => $m039 ? "c.score IS NULL, c.score DESC, c.id DESC" : "c.id DESC",
+        'newest' => "c.id DESC",
+        'value'  => "c.deal_value IS NULL, c.deal_value DESC, c.id DESC",
+    ][(string) ($f['sort'] ?? '')] ?? "c.next_followup_at IS NULL, c.next_followup_at, c.id DESC";
+    $sql .= " ORDER BY $order LIMIT 2000";
     return db_all($sql, $p);
 }
 

@@ -56,7 +56,10 @@ function msg_log(int $clientId, int $contactId, string $direction, string $body,
         // A person answering a lead — the sales report's first-response time.
         if ($direction === 'out' && ($opts['status'] ?? '') !== 'failed') {
             crm_mark_response($contactId, (string) ($opts['source'] ?? ''));
+            if (in_array((string) ($opts['source'] ?? ''), ['manual', 'crm'], true)) crm_touch($contactId);
         }
+        // They wrote to us: a warmer lead. Cheap enough to do per message; a no-op off the pipeline.
+        if ($direction === 'in' && function_exists('crm_rescore')) crm_rescore($contactId);
         return $id;
     } catch (Throwable $e) {
         error_log('msg_log skipped: ' . $e->getMessage());

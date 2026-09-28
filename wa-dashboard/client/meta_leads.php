@@ -27,7 +27,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['ajax'] ?? '') !== '') {
         if (!$page) json_out(['ok' => false, 'error' => 'Choose a Page first.']);
         $r = meta_page_forms($page);
         $mine = [];
-        foreach (db_all("SELECT form_id, mapping, owner_rule, stage_id, enabled FROM meta_forms WHERE client_id=? AND page_id=?",
+        foreach (db_all("SELECT * FROM meta_forms WHERE client_id=? AND page_id=?",
                         [$cid, (string) $page['page_id']]) as $f) $mine[$f['form_id']] = $f;
         foreach ($r['forms'] as &$f) {
             $saved = $mine[$f['id']] ?? null;
@@ -35,6 +35,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['ajax'] ?? '') !== '') {
             $f['mapping']   = $saved ? json_decode((string) $saved['mapping'], true) : null;
             $f['owner_rule'] = $saved['owner_rule'] ?? null;
             $f['stage_id']   = $saved['stage_id'] ?? null;
+            $f['project_id'] = $saved['project_id'] ?? null;
         }
         unset($f);
         json_out($r);
@@ -73,6 +74,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['ajax'] ?? '') !== '') {
                 $rule, $stage ?: null, json_encode($map, JSON_UNESCAPED_UNICODE),
                 ($_POST['leads_count'] ?? '') !== '' ? (int) $_POST['leads_count'] : null]);
         flash('Saved "' . ((string) ($_POST['form_name'] ?? '') ?: 'the form') . '". New leads will arrive by themselves — press Sync leads to bring in the ones already on it.');
+        if (db_has_column('meta_forms', 'project_id')) {
+            $pj = (int) ($_POST['project_id'] ?? 0);
+            db_run("UPDATE meta_forms SET project_id=? WHERE client_id=? AND form_id=?",
+                   [isset(crm_project_names($cid)[$pj]) ? $pj : null, $cid, $formId]);
+        }
         json_out(['ok' => true]);
     }
     json_out(['ok' => false, 'error' => 'Unknown action.']);
@@ -126,6 +132,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $pages = db_all("SELECT * FROM meta_pages WHERE client_id=? ORDER BY name", [$cid]);
 $pageName = array_column($pages, 'name', 'page_id');
 $pagesById = array_column($pages, 'id', 'page_id');
+$projNames = crm_project_names($cid);
 $forms = db_all("SELECT f.*, (SELECT COUNT(*) FROM meta_lead_log l WHERE l.client_id=f.client_id AND l.form_id=f.form_id AND l.outcome='imported') AS imported
                    FROM meta_forms f JOIN meta_pages p ON p.client_id=f.client_id AND p.page_id=f.page_id AND p.subscribed=1
                   WHERE f.client_id=? AND (f.mapping IS NOT NULL OR f.enabled=1)
@@ -191,6 +198,10 @@ page_head('Facebook & Instagram lead forms', '<a class="btn btn-ghost btn-sm" hr
         <option value="auto">Share out between the sales team</option>
         <option value="none">Nobody yet — an Admin assigns</option>
         <?php foreach ($people as $u): ?><option value="<?= (int) $u['id'] ?>">All to <?= e((string) $u['name']) ?></option><?php endforeach; ?></select></div>
+      <?php $mfProjects = crm_projects($cid, true); if ($mfProjects): ?>
+      <div class="field"><span class="lbl">Project these leads are for</span><select id="mf-project"><option value="0">— Not one project</option>
+        <?php foreach ($mfProjects as $pj): ?><option value="<?= (int) $pj['id'] ?>"><?= e($pj['name']) ?></option><?php endforeach; ?></select></div>
+      <?php endif; ?>
       <div class="field"><span class="lbl">Stage they start in</span><select id="mf-stage">
         <?php foreach ($stages as $s): ?><option value="<?= (int) $s['id'] ?>"><?= e($s['name']) ?></option><?php endforeach; ?></select></div>
     </div>
@@ -234,7 +245,7 @@ page_head('Facebook & Instagram lead forms', '<a class="btn btn-ghost btn-sm" hr
     <?php foreach ($forms as $f): ?>
       <tr data-form="<?= e((string) $f['form_id']) ?>">
         <td><strong><?= e((string) ($f['name'] ?: $f['form_id'])) ?></strong>
-          <span class="text-muted" style="display:block;font-size:12px"><?= e((string) ($pageName[$f['page_id']] ?? '')) ?></span>
+          <span class="text-muted" style="display:block;font-size:12px"><?= e((string) ($pageName[$f['page_id']] ?? '')) ?><?= !empty($f['project_id']) && isset($projNames[(int) $f['project_id']]) ? ' · ' . e($projNames[(int) $f['project_id']]) : '' ?></span>
           <?php if (!(int) $f['enabled']): ?><span class="pill gray">Stopped</span><?php endif; ?></td>
         <td class="num" data-l="On Facebook"><?= $f['leads_count'] !== null ? (int) $f['leads_count'] : '—' ?></td>
         <td class="num" data-l="In your CRM"><?= (int) $f['imported'] ?></td>
@@ -322,6 +333,7 @@ function showMap(){
     : '<tr><td colspan="2" class="text-muted">Facebook did not list this form\'s questions. Standard ones (name, phone, email) are still recognised.</td></tr>';
   if (f.owner_rule) $('mf-owner').value = f.owner_rule;
   if (f.stage_id) $('mf-stage').value = f.stage_id;
+  if ($('mf-project')) $('mf-project').value = f.project_id || '0';
   $('mf-save').textContent = f.connected ? 'Save changes' : 'Save form';
 }
 $('mf-page').addEventListener('change', () => loadForms());
@@ -332,7 +344,8 @@ $('mf-save').addEventListener('click', async () => {
   if (!f.questions.length) { map['phone_number'] = 'phone'; }
   $('mf-save').disabled = true; $('mf-save-msg').textContent = 'Saving…';
   const d = await mf('save_form', {page: $('mf-page').value, form_id: f.id, form_name: f.name, leads_count: f.leads_count ?? '',
-                                   owner_rule: $('mf-owner').value, stage_id: $('mf-stage').value, map});
+                                   owner_rule: $('mf-owner').value, stage_id: $('mf-stage').value,
+                                   project_id: $('mf-project') ? $('mf-project').value : '0', map});
   $('mf-save').disabled = false;
   if (!d.ok) { $('mf-save-msg').innerHTML = '<span style="color:var(--danger)">' + esc(d.error) + '</span>'; return; }
   location.href = 'meta_leads.php?saved=' + Date.now() + '#mf-list';   // a new URL, so the page really reloads

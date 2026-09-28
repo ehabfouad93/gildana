@@ -16,6 +16,7 @@ $f = [
     'to'     => preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) ($_GET['to'] ?? ''))   ? $_GET['to']   : date('Y-m-d'),
     'owner'  => is_sales() ? '' : (string) ($_GET['owner'] ?? ''),
     'source' => (string) ($_GET['source'] ?? ''),
+    'project'=> (int) ($_GET['project'] ?? 0) ?: '',
 ];
 if ($f['from'] > $f['to']) [$f['from'], $f['to']] = [$f['to'], $f['from']];
 
@@ -25,6 +26,9 @@ $sources = crm_report_sources($cid, $f);
 $ads     = crm_report_ads($cid, $f);
 $tis     = crm_report_time_in_stage($cid, $f);
 $weekly  = crm_report_weekly($cid, $f);
+$byProject = crm_report_projects($cid, $f);
+$lostWhy   = crm_report_lost($cid, $f);
+$projList  = crm_projects($cid);
 
 /* ── CSV export: the same numbers as the screen, never more ── */
 if (($x = (string) ($_GET['export'] ?? '')) !== '') {
@@ -102,6 +106,10 @@ page_head('CRM reports', '<a class="btn btn-ghost btn-sm" href="crm.php">&larr; 
   <?php endif; ?>
   <select name="source"><option value="">Every source</option>
     <?php foreach ($srcAll as $s): ?><option value="<?= e($s) ?>" <?= $f['source'] === $s ? 'selected' : '' ?>><?= e(crm_source_label($s)) ?></option><?php endforeach; ?></select>
+  <?php if ($projList): ?>
+  <select name="project"><option value="">Every project</option>
+    <?php foreach ($projList as $pj): ?><option value="<?= (int) $pj['id'] ?>" <?= (int) $f['project'] === (int) $pj['id'] ? 'selected' : '' ?>><?= e($pj['name']) ?></option><?php endforeach; ?></select>
+  <?php endif; ?>
   <button class="btn btn-ghost btn-sm">Apply</button>
 </form>
 
@@ -217,6 +225,39 @@ page_head('CRM reports', '<a class="btn btn-ghost btn-sm" href="crm.php">&larr; 
         <td class="num"><?= number_format((float) $r['won_value']) ?></td><td class="num"><?= $r['rate'] !== null ? $r['rate'] . '%' : '—' ?></td></tr>
     <?php endforeach; ?>
     </tbody></table></div>
+</div>
+
+<?php if ($projList): ?>
+<div class="card card-flush" style="margin-top:16px" id="by-project">
+  <div style="padding:14px 18px"><h2 style="border:0;padding:0;margin:0">Projects</h2>
+    <p class="text-muted" style="font-size:12.5px;margin:4px 0 0">Leads that arrived in this period, by the project they are for.</p></div>
+  <div class="table-wrap"><table class="data">
+    <thead><tr><th>Project</th><th class="num">Leads</th><th class="num">Hot now</th><th class="num">Won</th><th class="num">Lost</th><th class="num">Won value</th><th class="num">Conversion</th></tr></thead>
+    <tbody>
+    <?php if (!$byProject): ?><tr><td colspan="7"><div class="empty">No leads in this period.</div></td></tr><?php endif; ?>
+    <?php foreach ($byProject as $r): ?>
+      <tr><td><?= e($r['label']) ?></td><td class="num"><?= (int) $r['leads'] ?></td><td class="num"><?= (int) $r['hot'] ?></td>
+        <td class="num"><?= (int) $r['won'] ?></td><td class="num"><?= (int) $r['lost'] ?></td>
+        <td class="num"><?= number_format((float) $r['won_value']) ?></td><td class="num"><?= $r['rate'] !== null ? $r['rate'] . '%' : '—' ?></td></tr>
+    <?php endforeach; ?></tbody></table></div>
+</div>
+<?php endif; ?>
+
+<div class="card viz" style="margin-top:16px" id="lost-why">
+  <h2>Why deals were lost</h2>
+  <?php if (!$lostWhy): ?><p class="text-muted">No leads were lost in this period.</p>
+  <?php else: $maxN = max(array_column($lostWhy, 'n')); ?>
+    <div class="viz-bars" role="list">
+    <?php foreach ($lostWhy as $r): $top = array_slice($r['projects'], 0, 2, true); ?>
+      <div class="viz-row" role="listitem" data-tip="<?= e($r['reason'] . ': ' . $r['n'] . ' (' . $r['share'] . '%)' . ($top ? ' — most in ' . implode(', ', array_map(fn($k, $v) => "$k ($v)", array_keys($top), $top)) : '')) ?>">
+        <span class="viz-lbl"><?= e($r['reason']) ?></span>
+        <span class="viz-track"><span class="viz-fill" style="background:var(--lost);width:<?= round(100 * $r['n'] / $maxN, 1) ?>%"></span></span>
+        <span class="viz-val"><strong><?= (int) $r['n'] ?></strong> · <?= $r['share'] ?>%</span>
+      </div>
+    <?php endforeach; ?>
+    </div>
+    <p class="text-muted" style="font-size:12px;margin:10px 0 0">Hover a reason to see which projects it happens in most.</p>
+  <?php endif; ?>
 </div>
 
 <?php if ($ads): ?>

@@ -32,7 +32,8 @@ function perm_modules(): array
     return [
         'inbox'       => ['label' => 'Inbox',          'pages' => ['inbox.php', 'upload_media.php']],
         'crm'         => ['label' => 'CRM',            'pages' => ['crm.php', 'crm_lead.php', 'crm_import.php',
-                                                                   'crm_reports.php', 'meta_leads.php']],
+                                                                   'crm_reports.php', 'meta_leads.php',
+                                                                   'crm_team.php', 'crm_rules.php', 'crm_setup.php']],
         'contacts'    => ['label' => 'Contacts',       'pages' => ['contacts.php']],
         'lists'       => ['label' => 'Lists',          'pages' => ['lists.php', 'contact_search.php']],
         'templates'   => ['label' => 'Templates',      'pages' => ['templates.php']],

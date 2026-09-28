@@ -38,7 +38,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['ajax'])) {
         $ids = $mine((array) ($_POST['ids'] ?? [$_POST['id'] ?? 0]));
         $sid = (int) ($_POST['stage_id'] ?? 0);
         if (!$ids || !isset($stageMap[$sid])) json_out(['ok' => false, 'error' => 'Nothing to move.']);
-        foreach ($ids as $id) crm_set_stage($CLIENT, $id, $sid, $me);
+        $reason = trim((string) ($_POST['lost_reason'] ?? ''));
+        if (crm_needs_lost_reason($cid, $sid) && $reason === '') json_out(['ok' => false, 'need_reason' => true]);
+        foreach ($ids as $id) crm_set_stage($CLIENT, $id, $sid, $me, $reason !== '' ? $reason : null, (string) ($_POST['lost_note'] ?? ''));
         json_out(['ok' => true, 'n' => count($ids)]);
     }
 
@@ -49,7 +51,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['ajax'])) {
         $ids = $mine((array) ($_POST['ids'] ?? [$_POST['id'] ?? 0]));
         $to  = (string) ($_POST['user_id'] ?? '');
         foreach ($ids as $id) {
-            if ($to === 'auto') crm_assign($CLIENT, $id, crm_assign_next($CLIENT), $me);
+            // "Share out" goes through the assignment rules, as a new lead would.
+            if ($to === 'auto') crm_assign($CLIENT, $id, crm_assign_next($CLIENT, db_row("SELECT * FROM contacts WHERE id=?", [$id])), $me);
             else crm_assign($CLIENT, $id, $to === '' || $to === 'none' ? null : (int) $to, $me);
         }
         json_out(['ok' => true, 'n' => count($ids)]);
@@ -78,6 +81,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['ajax'])) {
         } else {
             $contactId = db_insert("INSERT INTO contacts (client_id,phone_e164,name,email,opt_in_status,source,created_at)
                                     VALUES (?,?,?,?, 'in','manual',NOW())", [$cid, $phone, $name, $email !== '' ? $email : null]);
+        }
+        if (db_has_column('contacts', 'project_id')) {
+            $pj = (int) ($_POST['project_id'] ?? 0);
+            db_run("UPDATE contacts SET project_id=?, unit_type=NULLIF(?,''), budget=NULLIF(?,'') WHERE id=?",
+                   [isset(crm_project_names($cid)[$pj]) ? $pj : null, mb_substr(trim((string) ($_POST['unit_type'] ?? '')), 0, 80),
+                    mb_substr(trim((string) ($_POST['budget'] ?? '')), 0, 80), $contactId]);
         }
         $owner = is_sales() ? $me : (string) ($_POST['owner'] ?? 'auto');
         crm_add_lead($CLIENT, $contactId, 'manual', $owner === '' ? 'auto' : $owner, (int) ($_POST['stage_id'] ?? 0) ?: null, $me);
@@ -133,7 +142,16 @@ $f = [
     'owner'  => (string) ($_GET['owner'] ?? ''),
     'source' => (string) ($_GET['source'] ?? ''),
     'due'    => (string) ($_GET['due'] ?? ''),
+    'project'=> (int) ($_GET['project'] ?? 0) ?: '',
+    'heat'   => (string) ($_GET['heat'] ?? ''),
+    'status' => (string) ($_GET['status'] ?? ''),
+    'sort'   => (string) ($_GET['sort'] ?? ''),
 ];
+$projects = crm_projects($cid);
+$pnames   = array_column($projects, 'name', 'id');
+$alerts   = crm_alert_counts($CLIENT, is_sales() ? $me : null);
+$lostIds  = array_map('intval', array_keys(array_filter($stageMap, fn($st) => $st['kind'] === 'lost')));
+$askLost  = (int) crm_settings($cid)['require_lost_reason'] === 1;
 if (is_sales()) $f['owner'] = '';                       // scoped already; the filter would only confuse
 $leads = crm_leads($cid, $f);
 $byStage = [];
@@ -177,6 +195,16 @@ function crm_when(?string $d): string {
   <select name="due"><option value="">Any follow-up</option>
     <option value="today" <?= $f['due'] === 'today' ? 'selected' : '' ?>>Due today</option>
     <option value="overdue" <?= $f['due'] === 'overdue' ? 'selected' : '' ?>>Overdue</option></select>
+  <?php if ($projects): ?>
+  <select name="project"><option value="">Any project</option>
+    <?php foreach ($projects as $pj): ?><option value="<?= (int) $pj['id'] ?>" <?= (int) $f['project'] === (int) $pj['id'] ? 'selected' : '' ?>><?= e($pj['name']) ?></option><?php endforeach; ?></select>
+  <?php endif; ?>
+  <select name="heat"><option value="">Hot, warm and cold</option>
+    <?php foreach (['hot' => 'Hot only', 'warm' => 'Warm only', 'cold' => 'Cold only'] as $k => $l): ?><option value="<?= $k ?>" <?= $f['heat'] === $k ? 'selected' : '' ?>><?= $l ?></option><?php endforeach; ?></select>
+  <select name="status"><option value="">Any status</option>
+    <?php foreach (['not_contacted' => 'Not contacted yet', 'no_followup' => 'No follow-up planned', 'again' => 'Came in more than once'] as $k => $l): ?><option value="<?= $k ?>" <?= $f['status'] === $k ? 'selected' : '' ?>><?= $l ?></option><?php endforeach; ?></select>
+  <select name="sort" aria-label="Order"><option value="">Next follow-up first</option>
+    <?php foreach (['hot' => 'Hottest first', 'newest' => 'Newest first', 'value' => 'Biggest value first'] as $k => $l): ?><option value="<?= $k ?>" <?= $f['sort'] === $k ? 'selected' : '' ?>><?= $l ?></option><?php endforeach; ?></select>
   <button class="btn btn-ghost btn-sm">Filter</button>
   <span class="crm-view">
     <a href="?<?= e(http_build_query(['view' => 'board'] + $f)) ?>" class="<?= $view === 'board' ? 'on' : '' ?>">Board</a>
@@ -184,6 +212,14 @@ function crm_when(?string $d): string {
   </span>
 </form>
 
+<?php if ($alerts['late'] && $f['status'] !== 'not_contacted'): ?>
+  <div class="alert error" style="font-size:12.5px" id="crm-late"><strong><?= $alerts['late'] ?></strong> lead<?= $alerts['late'] === 1 ? ' has' : 's have' ?> not been contacted in time.
+    <a href="?<?= e(http_build_query(['view' => 'table', 'status' => 'not_contacted', 'sort' => 'newest'])) ?>">Show them</a></div>
+<?php endif; ?>
+<?php if (!is_sales() && $alerts['unassigned'] && $f['owner'] !== 'none'): ?>
+  <div class="alert info" style="font-size:12.5px"><?= $alerts['unassigned'] ?> open lead<?= $alerts['unassigned'] === 1 ? ' has' : 's have' ?> no owner.
+    <a href="?<?= e(http_build_query(['view' => 'table', 'owner' => 'none'])) ?>">Show them</a><?= $isAdmin ? ' · <a href="crm_team.php#transfer">Share them out</a>' : '' ?></div>
+<?php endif; ?>
 <?php if ($overdue && $f['due'] !== 'overdue'): ?>
   <div class="alert warn" style="font-size:12.5px"><?= $overdue ?> follow-up<?= $overdue === 1 ? ' is' : 's are' ?> overdue.
     <a href="?<?= e(http_build_query(['view' => $view, 'due' => 'overdue'])) ?>">Show them</a></div>
@@ -210,6 +246,17 @@ function crm_when(?string $d): string {
             <article class="crm-card" draggable="<?= $canEdit ? 'true' : 'false' ?>" data-id="<?= (int) $l['id'] ?>">
               <a class="crm-card-name" href="crm_lead.php?id=<?= (int) $l['id'] ?>"><?= e((string) ($l['name'] ?: '+' . $l['phone_e164'])) ?></a>
               <?php if ($l['name']): ?><div class="crm-card-phone">+<?= e((string) $l['phone_e164']) ?></div><?php endif; ?>
+              <?php [$hc, $hw] = crm_heat(isset($l['score']) && $l['score'] !== null ? (int) $l['score'] : null);
+                    $notYet = $l['stage_kind'] === 'open' && $l['owner_user_id'] !== null && empty($l['first_response_at']);
+                    $proj = !empty($l['project_id']) ? ($pnames[(int) $l['project_id']] ?? '') : ''; ?>
+              <?php if ($hc || $proj || $notYet || (int) ($l['submissions'] ?? 1) > 1): ?>
+              <div class="crm-card-tags">
+                <?php if ($hc && $l['stage_kind'] === 'open'): ?><span class="heat <?= $hc ?>"><?= $hw ?></span><?php endif; ?>
+                <?php if ($proj): ?><span class="crm-flag"><?= e($proj) ?></span><?php endif; ?>
+                <?php if ((int) ($l['submissions'] ?? 1) > 1): ?><span class="crm-flag">×<?= (int) $l['submissions'] ?></span><?php endif; ?>
+                <?php if ($notYet): ?><span class="crm-flag late">Not contacted</span><?php endif; ?>
+              </div>
+              <?php endif; ?>
               <?php if ($l['last_body']): ?><div class="crm-card-last"><?= e(mb_substr((string) $l['last_body'], 0, 70)) ?></div><?php endif; ?>
               <div class="crm-card-foot">
                 <?php if ($l['deal_value'] !== null): ?><span class="crm-val"><?= crm_money($l['deal_value']) ?></span><?php endif; ?>
@@ -234,7 +281,7 @@ function crm_when(?string $d): string {
     <select id="crm-bulk-stage"><option value="">Move to stage…</option>
       <?php foreach ($stages as $s): ?><option value="<?= (int) $s['id'] ?>"><?= e($s['name']) ?></option><?php endforeach; ?></select>
     <?php if ($isAdmin): ?>
-    <select id="crm-bulk-owner"><option value="">Assign to…</option><option value="auto">Share out (round-robin)</option><option value="none">Nobody</option>
+    <select id="crm-bulk-owner"><option value="">Assign to…</option><option value="auto">Share out by the assignment rules</option><option value="none">Nobody</option>
       <?php foreach ($people as $u): ?><option value="<?= (int) $u['id'] ?>"><?= e($u['name']) ?></option><?php endforeach; ?></select>
     <?php endif; ?>
   </div>
@@ -243,7 +290,7 @@ function crm_when(?string $d): string {
     <table class="data">
       <thead><tr>
         <?php if ($canEdit): ?><th style="width:28px"><input type="checkbox" id="crm-all" aria-label="Select all"></th><?php endif; ?>
-        <th>Lead</th><th>Stage</th><?php if (!is_sales()): ?><th>Owner</th><?php endif; ?><th>Value</th><th>Follow-up</th><th>Source</th><th>Last activity</th></tr></thead>
+        <th>Lead</th><th>Stage</th><th>Heat</th><?php if ($projects): ?><th>Project</th><?php endif; ?><?php if (!is_sales()): ?><th>Owner</th><?php endif; ?><th>Value</th><th>Follow-up</th><th>Source</th><th>Last activity</th></tr></thead>
       <tbody>
       <?php foreach ($leads as $l):
         $late = $l['next_followup_at'] && strtotime((string) $l['next_followup_at']) < time() && $l['stage_kind'] === 'open'; ?>
@@ -251,7 +298,11 @@ function crm_when(?string $d): string {
           <?php if ($canEdit): ?><td><input type="checkbox" class="crm-pick" value="<?= (int) $l['id'] ?>"></td><?php endif; ?>
           <td><a href="crm_lead.php?id=<?= (int) $l['id'] ?>"><strong><?= e((string) ($l['name'] ?: '+' . $l['phone_e164'])) ?></strong></a>
             <span class="text-muted d-block">+<?= e((string) $l['phone_e164']) ?></span></td>
-          <td><span class="pill <?= $l['stage_kind'] === 'won' ? 'green' : ($l['stage_kind'] === 'lost' ? 'red' : 'gray') ?>"><?= e((string) $l['stage_name']) ?></span></td>
+          <td><span class="pill <?= $l['stage_kind'] === 'won' ? 'green' : ($l['stage_kind'] === 'lost' ? 'red' : 'gray') ?>"><?= e((string) $l['stage_name']) ?></span>
+            <?php if ($l['stage_kind'] === 'lost' && !empty($l['lost_reason'])): ?><span class="text-muted" style="display:block;font-size:11.5px"><?= e((string) $l['lost_reason']) ?></span><?php endif; ?></td>
+          <td><?php [$hc, $hw] = crm_heat(isset($l['score']) && $l['score'] !== null ? (int) $l['score'] : null);
+                if ($hc && $l['stage_kind'] === 'open'): ?><span class="heat <?= $hc ?>"><?= $hw ?> · <?= (int) $l['score'] ?></span><?php endif; ?></td>
+          <?php if ($projects): ?><td><?= e((string) ($pnames[(int) ($l['project_id'] ?? 0)] ?? '')) ?><?= !empty($l['unit_type']) ? '<span class="text-muted" style="display:block;font-size:11.5px">' . e((string) $l['unit_type']) . '</span>' : '' ?></td><?php endif; ?>
           <?php if (!is_sales()): ?><td><?= $l['owner_name'] ? e((string) $l['owner_name']) : '<span class="text-muted">Unassigned</span>' ?></td><?php endif; ?>
           <td class="num"><?= crm_money($l['deal_value']) ?></td>
           <td class="<?= $late ? 'crm-late' : '' ?>"><?= e(crm_when($l['next_followup_at'])) ?></td>
@@ -281,6 +332,13 @@ function crm_when(?string $d): string {
         <?php foreach ($people as $u): ?><option value="<?= (int) $u['id'] ?>"><?= e($u['name']) ?></option><?php endforeach; ?></select></div>
       <?php endif; ?>
       <div class="field"><span class="lbl">Next follow-up</span><input name="followup" type="datetime-local"></div>
+      <?php if ($projects): ?>
+      <div class="field"><span class="lbl">Project</span><select name="project_id"><option value="0">—</option>
+        <?php foreach ($projects as $pj): if (!(int) $pj['active']) continue; ?><option value="<?= (int) $pj['id'] ?>"><?= e($pj['name']) ?></option><?php endforeach; ?></select></div>
+      <?php endif; ?>
+      <div class="field"><span class="lbl">Unit type</span><select name="unit_type"><option value="">—</option>
+        <?php foreach (crm_options($cid, 'unit_type') as $u): ?><option><?= e($u) ?></option><?php endforeach; ?></select></div>
+      <div class="field"><span class="lbl">Budget</span><input name="budget" maxlength="80" placeholder="5–7M"></div>
     </div>
     <div class="field"><span class="lbl">Note</span><textarea name="note" rows="2" placeholder="What they asked about, budget, timing…"></textarea></div>
     <div class="alert error" id="add-err" hidden></div>
@@ -308,6 +366,19 @@ function crm_when(?string $d): string {
 </div>
 <?php endif; ?>
 
+<?php if ($canEdit && $askLost && $lostIds): ?>
+<dialog id="lost-dlg" class="lost-dlg" aria-labelledby="lost-title">
+  <form onsubmit="return lostSave(event)">
+    <h2 id="lost-title" style="margin-top:0">Why <span id="lost-what">was this lead</span> lost?</h2>
+    <div class="lost-reasons">
+      <?php foreach (crm_options($cid, 'lost_reason') as $r): ?><label class="act-kind"><input type="radio" name="lost_reason" value="<?= e($r) ?>" required><span><?= e($r) ?></span></label><?php endforeach; ?>
+    </div>
+    <div class="field"><span class="lbl">Anything to add (optional)</span><input name="lost_note" maxlength="255"></div>
+    <div style="display:flex;gap:8px"><button class="btn btn-primary">Mark as lost</button>
+      <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close(); location.reload()">Cancel</button></div>
+  </form>
+</dialog>
+<?php endif; ?>
 <script>
 const CSRF = <?= json_encode(csrf_token()) ?>;
 const STAGES = <?= json_encode(array_map(fn($s) => ['id' => (int) $s['id'], 'name' => $s['name'], 'kind' => $s['kind']], $stages)) ?>;
@@ -319,9 +390,22 @@ async function crmPost(data){
   const r = await fetch('crm.php', {method:'POST', body:fd});
   return r.json().catch(() => ({ok:false, error:'Something went wrong.'}));
 }
-async function crmMove(ids, stageId){
-  const d = await crmPost({action:'stage', ids, stage_id:stageId});
+async function crmMove(ids, stageId, extra){
+  const d = await crmPost(Object.assign({action:'stage', ids, stage_id:stageId}, extra || {}));
+  if (d.need_reason && $m('lost-dlg')) {
+    // Moving to Lost asks why first; the move happens when the reason is given.
+    LOST_PENDING = {ids, stageId};
+    $m('lost-what').textContent = ids.length === 1 ? 'was this lead' : 'were these ' + ids.length + ' leads';
+    $m('lost-dlg').querySelector('form').reset(); $m('lost-dlg').showModal(); return;
+  }
   if (d.ok) location.reload(); else alert(d.error || 'Could not move it.');
+}
+let LOST_PENDING = null;
+function lostSave(e){
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  crmMove(LOST_PENDING.ids, LOST_PENDING.stageId, {lost_reason: fd.get('lost_reason'), lost_note: fd.get('lost_note') || ''});
+  return false;
 }
 
 /* Board drag and drop. Cards also carry a stage <select>, because touch screens do not drag. */
