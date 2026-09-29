@@ -14,7 +14,7 @@ declare(strict_types=1);
 function crm_list_filter_keys(): array
 {
     return ['q', 'stage', 'sub', 'state', 'owner', 'team', 'source', 'platform', 'campaign', 'project', 'unit', 'dtype', 'qual',
-            'heat', 'status', 'due', 'added', 'from', 'to', 'idle', 'noans', 'sort', 'dir'];
+            'heat', 'status', 'due', 'added', 'from', 'to', 'idle', 'noans', 'mfrom', 'mto', 'sort', 'dir'];
 }
 
 /** The filters in a request, cleaned. Custom-field filters arrive as cf_<key>. */
@@ -113,6 +113,13 @@ function crm_list_where(int $clientId, array $f): array
     }
     if ($g('from') !== '' && strtotime($g('from'))) { $w .= " AND $added >= ?"; $p[] = date('Y-m-d 00:00:00', strtotime($g('from'))); }
     if ($g('to') !== '' && strtotime($g('to')))     { $w .= " AND $added <= ?"; $p[] = date('Y-m-d 23:59:59', strtotime($g('to'))); }
+    // Moved into the stage they are in now between these dates — "won in September" from a report.
+    if ($g('mfrom') !== '' || $g('mto') !== '') {
+        $w .= " AND EXISTS (SELECT 1 FROM crm_events me WHERE me.contact_id = c.id AND me.kind IN ('stage','added')
+                             AND me.to_val = CAST(c.stage_id AS CHAR) AND me.created_at BETWEEN ? AND ?)";
+        $p[] = $g('mfrom') !== '' && strtotime($g('mfrom')) ? date('Y-m-d 00:00:00', strtotime($g('mfrom'))) : '2000-01-01 00:00:00';
+        $p[] = $g('mto') !== '' && strtotime($g('mto')) ? date('Y-m-d 23:59:59', strtotime($g('mto'))) : '2100-01-01 00:00:00';
+    }
     // Nothing done with them for N days: no activity, no message either way.
     if (($idle = (int) $g('idle')) > 0) {
         $w .= " AND s.kind = 'open' AND GREATEST(COALESCE(c.last_touch_at, '2000-01-01'), COALESCE(c.last_inbound_at, '2000-01-01'),

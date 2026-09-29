@@ -399,6 +399,8 @@ $chip = function (string $k, string $v) use ($stageMap, $people, $pnames, $teamN
         $k === 'from'     => 'Added from ' . date('j M Y', strtotime($v)),
         $k === 'to'       => 'Added until ' . date('j M Y', strtotime($v)),
         $k === 'idle'     => 'Quiet for ' . (int) $v . '+ days',
+        $k === 'mfrom'    => 'Reached this stage from ' . date('j M Y', strtotime($v)),
+        $k === 'mto'      => 'Reached this stage until ' . date('j M Y', strtotime($v)),
         $k === 'noans'    => 'No answer ' . (int) $v . '+ times',
         str_starts_with($k, 'cf_') => (array_column($cfields, 'label', 'fkey')[substr($k, 3)] ?? $k) . ': ' . $v,
         default           => $k . ': ' . $v,

@@ -46,6 +46,15 @@ function crm_report_where(int $clientId, array $f): array
     if (!empty($f['project']) && db_has_column('contacts', 'project_id')) { $sql .= " AND c.project_id = ?"; $p[] = (int) $f['project']; }
     if (($f['owner'] ?? '') === 'none') $sql .= " AND c.owner_user_id IS NULL";
     elseif (!empty($f['owner'])) { $sql .= " AND c.owner_user_id = ?"; $p[] = (int) $f['owner']; }
+    // The rest of the shared report filters (crm_library.php): team, fresh/cold, platform, campaign, qualified.
+    if (!empty($f['team']) && function_exists('crm_team_member_ids')) {
+        $ids = crm_team_member_ids((int) $f['team']);
+        $sql .= $ids ? " AND c.owner_user_id IN (" . implode(',', array_map('intval', $ids)) . ")" : " AND 1=0";
+    }
+    foreach (['dtype' => 'data_type', 'platform' => 'platform', 'qual' => 'qualification'] as $k => $col) {
+        if (!empty($f[$k]) && db_has_column('contacts', $col)) { $sql .= " AND c.$col = ?"; $p[] = (string) $f[$k]; }
+    }
+    if (!empty($f['campaign']) && db_has_column('contacts', 'campaign')) { $sql .= " AND c.campaign LIKE ?"; $p[] = '%' . $f['campaign'] . '%'; }
     return [$sql, $p];
 }
 

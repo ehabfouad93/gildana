@@ -206,17 +206,29 @@ function crm_split(int $clientId, array $f, string $dim): array
     $kinds = crm_stage_kinds($clientId);
     $won = $kinds['won'] ?: [0]; $lost = $kinds['lost'] ?: [0];
     $phw = implode(',', array_fill(0, count($won), '?')); $phl = implode(',', array_fill(0, count($lost), '?'));
-    $col = ['source' => 'c.source', 'project' => 'c.project_id', 'owner' => 'c.owner_user_id'][$dim] ?? 'c.source';
+    $col = ['source' => 'c.source', 'project' => 'c.project_id', 'owner' => 'c.owner_user_id', 'campaign' => "NULLIF(c.campaign,'')",
+            'platform' => 'c.platform', 'dtype' => 'c.data_type', 'team' => 'tu.team_id', 'unit' => "NULLIF(c.unit_type,'')",
+            'qual' => 'c.qualification'][$dim] ?? 'c.source';
     if ($dim === 'project' && !db_has_column('contacts', 'project_id')) return [];
+    if (in_array($dim, ['campaign', 'platform', 'dtype', 'qual'], true) && !db_has_column('contacts', 'campaign')) return [];
+    $join = $dim === 'team' ? " LEFT JOIN users tu ON tu.id = c.owner_user_id" : '';
+    $limit = in_array($dim, ['campaign', 'owner'], true) ? 50 : 20;
     $rows = db_all("SELECT $col AS k, COUNT(*) leads, SUM(c.stage_id IN ($phw)) won, SUM(c.stage_id IN ($phl)) lost,
                            SUM(CASE WHEN c.stage_id IN ($phw) THEN COALESCE(c.deal_value,0) ELSE 0 END) won_value
-                      FROM contacts c WHERE c.crm_added_at BETWEEN ? AND ? AND {$w} GROUP BY $col ORDER BY leads DESC LIMIT 20",
+                      FROM contacts c{$join} WHERE c.crm_added_at BETWEEN ? AND ? AND {$w} GROUP BY $col ORDER BY leads DESC LIMIT $limit",
                    array_merge($won, $lost, $won, [$f['from'] . ' 00:00:00', $f['to'] . ' 23:59:59'], $p));
     $pn = $dim === 'project' ? crm_project_names($clientId) : [];
+    $tn = $dim === 'team' && function_exists('crm_team_names') ? crm_team_names($clientId) : [];
     foreach ($rows as &$r) {
         $r['label'] = match ($dim) {
             'source'  => crm_source_label($r['k']),
             'project' => $r['k'] !== null ? ($pn[(int) $r['k']] ?? 'A removed project') : 'No project',
+            'campaign'=> $r['k'] !== null ? (string) $r['k'] : 'No campaign',
+            'platform'=> $r['k'] !== null ? crm_platform_label((string) $r['k']) : 'Not known',
+            'dtype'   => crm_data_types()[(string) $r['k']] ?? 'Not set',
+            'qual'    => crm_qualifications()[(string) $r['k']] ?? 'Not decided',
+            'unit'    => $r['k'] !== null ? (string) $r['k'] : 'Not said',
+            'team'    => $r['k'] !== null ? ($tn[(int) $r['k']] ?? 'A removed team') : 'No team',
             default   => crm_user_name($r['k'] !== null ? (int) $r['k'] : null),
         };
         $r['rate'] = (int) $r['leads'] ? round(100 * $r['won'] / $r['leads'], 1) : null;
