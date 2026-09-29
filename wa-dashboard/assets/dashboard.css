@@ -1122,3 +1122,14 @@ input[type="file"] { max-width: 100%; min-width: 0; }
 .capi-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px 16px; }
 .capi-grid label { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px; align-items: center; font-size: 13px; }
 .capi-grid input { padding: 6px 9px; }
+
+/* ── AI summary on the lead ── */
+.ai-summary { margin: 8px 0 0; font-size: 13.5px; line-height: 1.6; white-space: normal; }
+.ai-facts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.ai-fact { font-size: 12.5px; background: rgba(13,19,33,.04); border-radius: 8px; padding: 4px 9px; }
+.ai-fact.wide { flex-basis: 100%; }
+.ai-fact .text-muted { font-size: 11.5px; margin-right: 3px; }
+.ai-when { font-size: 11.5px; margin: 10px 0 0; }
+.ai-reading { animation: ai-pulse 1.4s ease-in-out infinite; }
+@keyframes ai-pulse { 50% { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { .ai-reading { animation: none; } }

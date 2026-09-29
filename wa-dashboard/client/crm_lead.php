@@ -3,6 +3,7 @@ declare(strict_types=1);
 require __DIR__ . '/_init.php';
 require_once __DIR__ . '/../includes/crm.php';
 require_once __DIR__ . '/../includes/inbox.php';
+require_once __DIR__ . '/../includes/crm_ai.php';
 
 /**
  * One lead: who they are, where they stand, what happens next, and everything that has happened —
@@ -46,6 +47,16 @@ $back = fn(string $anchor = '') => redirect('crm_lead.php?id=' . $id . $anchor);
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     verify_csrf();
     $a = (string) ($_POST['action'] ?? '');
+
+    // AI, asked for by the page itself: JSON back, no reload.
+    if ($a === 'ai_summary') {
+        $r = crm_ai_summarize($CLIENT, $lead, $me);
+        json_out($r + ['filled_words' => !empty($r['filled']) ? 'Filled in from the chat: ' . implode(', ', $r['filled']) . '.' : '']);
+    }
+    if ($a === 'ai_reply') {
+        $fresh = db_row("SELECT * FROM contacts WHERE id=?", [$id]) ?: $lead;
+        json_out(crm_ai_reply($CLIENT, $fresh, (string) (($PERM_USER['name'] ?? '') ?: 'the salesperson'), (string) ($_POST['hint'] ?? '')));
+    }
 
     if ($a === 'save') {
         $email = trim((string) ($_POST['email'] ?? ''));
@@ -213,6 +224,7 @@ foreach (db_all("SELECT * FROM crm_events WHERE contact_id=? ORDER BY id DESC LI
         'sla'      => 'Not contacted within ' . (int) $ev['to_val'] . ' minutes — owner alerted',
         'resubmitted' => 'Came in again (' . crm_source_label($ev['to_val']) . ')',
         'merged'   => 'Merged with the duplicate contact ' . $ev['to_val'],
+        'ai_fill'  => 'AI filled in from the chat: ' . $ev['to_val'],
         'visit'    => 'Site visit booked for ' . date('D j M, H:i', strtotime((string) $ev['to_val'])),
         'visit_moved' => 'Site visit moved from ' . date('D j M, H:i', strtotime((string) $ev['from_val'])) . ' to ' . date('D j M, H:i', strtotime((string) $ev['to_val'])),
         'seq_start'=> 'Joined the follow-up sequence "' . ($seqNames[(int) $ev['to_val']] ?? 'a removed sequence') . '"',
@@ -244,6 +256,10 @@ $dups = crm_duplicates($lead);
 $lostIds = array_map('intval', array_keys(array_filter(crm_stage_map($cid), fn($st) => $st['kind'] === 'lost')));
 $askLost = (int) crm_settings($cid)['require_lost_reason'] === 1;
 $subs = (int) ($lead['submissions'] ?? 1);
+
+$aiOn = ai_configured($CLIENT);
+$aiFacts = json_decode((string) ($lead['ai_facts'] ?? ''), true) ?: [];
+$aiStale = $aiOn && $canW && crm_ai_stale($lead);
 
 $title = (string) ($lead['name'] ?: '+' . $phone);
 client_header($title, 'crm', $CLIENT);
@@ -311,6 +327,28 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 
 <div class="lead-grid">
   <div class="lead-col">
+
+    <!-- The conversation in a few lines -->
+    <?php if ($aiOn || !empty($lead['ai_summary'])): ?>
+    <div class="card ai-card" id="ai">
+      <div class="row-between" style="flex-wrap:wrap;gap:8px"><h2 style="margin:0;border:0;padding:0">Summary</h2>
+        <?php if ($aiOn && $canW): ?><button type="button" class="btn-link" id="ai-refresh">Read the chat again</button><?php endif; ?></div>
+      <div id="ai-body">
+        <?php if (!empty($lead['ai_summary'])): ?>
+          <p class="ai-summary" id="ai-summary"><?= nl2br(e((string) $lead['ai_summary'])) ?></p>
+        <?php elseif (!$aiStale): ?>
+          <p class="text-muted" style="font-size:13px;margin:8px 0 0">A summary appears once the lead has written to you.</p>
+        <?php endif; ?>
+      </div>
+      <div class="ai-facts" id="ai-facts">
+        <?php foreach (['interest' => 'Interest', 'next_step' => 'Next step', 'budget' => 'Budget', 'unit_type' => 'Wants', 'payment' => 'Pays'] as $k => $l):
+          if (empty($aiFacts[$k])) continue; ?>
+          <span class="ai-fact <?= $k === 'next_step' ? 'wide' : '' ?>"><span class="text-muted"><?= $l ?></span> <?= e($k === 'payment' ? ($aiFacts[$k] === 'cash' ? 'Cash' : 'Instalments') : ucfirst((string) $aiFacts[$k])) ?></span>
+        <?php endforeach; ?>
+      </div>
+      <p class="text-muted ai-when" id="ai-when"><?= !empty($lead['ai_summary_at']) ? 'Read by AI ' . e(date('j M, H:i', strtotime((string) $lead['ai_summary_at']))) . ' — check anything important in the chat.' : '' ?></p>
+    </div>
+    <?php endif; ?>
 
     <!-- What happens next -->
     <div class="card lead-next <?= $dueState ?>" id="next">
@@ -457,9 +495,10 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
       <?php else: ?>
         <form method="post" id="lead-send">
           <?= csrf_field() ?><input type="hidden" name="action" value="send"><input type="hidden" name="id" value="<?= $id ?>">
-          <textarea name="message" rows="2" placeholder="Message on WhatsApp…" required></textarea>
+          <textarea name="message" id="send-text" rows="3" placeholder="Message on WhatsApp…" required></textarea>
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap" class="mt10">
             <button class="btn btn-primary btn-sm">Send on WhatsApp</button>
+            <?php if ($aiOn): ?><button type="button" class="btn btn-ghost btn-sm" id="ai-suggest" title="Write a reply from the conversation — check it before sending">Suggest a reply</button><?php endif; ?>
             <span class="text-muted" style="font-size:12px">Goes out from <?= e($viaText) ?></span>
           </div>
         </form>
@@ -607,6 +646,35 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 <?php endif; ?>
 <script>
 (function(){
+  /* AI: summary and suggested reply, asked for in the background. */
+  const CSRF = <?= json_encode(csrf_token()) ?>;
+  const aiPost = async (action, extra) => {
+    const fd = new FormData(); fd.append('action', action); fd.append('id', '<?= $id ?>'); fd.append('csrf_token', CSRF);
+    for (const [k, v] of Object.entries(extra || {})) fd.append(k, v);
+    return (await fetch('crm_lead.php?id=<?= $id ?>', {method: 'POST', body: fd})).json().catch(() => ({ok: false, error: 'Something went wrong.'}));
+  };
+  const escH = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  async function aiRead(){
+    const body = document.getElementById('ai-body'); if (!body) return;
+    body.innerHTML = '<p class="text-muted ai-reading" style="font-size:13px;margin:8px 0 0">Reading the conversation…</p>';
+    const d = await aiPost('ai_summary');
+    if (!d.ok) { body.innerHTML = '<p class="text-muted" style="font-size:13px;margin:8px 0 0">' + escH(d.error) + '</p>'; return; }
+    body.innerHTML = '<p class="ai-summary" id="ai-summary">' + escH(d.summary).replace(/\n/g, '<br>') + '</p>';
+    const f = d.facts || {}, words = {interest: 'Interest', next_step: 'Next step', budget: 'Budget', unit_type: 'Wants', payment: 'Pays'};
+    document.getElementById('ai-facts').innerHTML = Object.entries(words).filter(([k]) => f[k]).map(([k, l]) =>
+      `<span class="ai-fact ${k === 'next_step' ? 'wide' : ''}"><span class="text-muted">${l}</span> ${escH(k === 'payment' ? (f[k] === 'cash' ? 'Cash' : 'Instalments') : f[k].charAt(0).toUpperCase() + f[k].slice(1))}</span>`).join('');
+    document.getElementById('ai-when').textContent = 'Read by AI just now — check anything important in the chat.' + (d.filled_words ? ' ' + d.filled_words : '');
+  }
+  document.getElementById('ai-refresh')?.addEventListener('click', aiRead);
+  <?php if ($aiStale): ?>aiRead();<?php endif; ?>
+  document.getElementById('ai-suggest')?.addEventListener('click', async e => {
+    const btn = e.target, box = document.getElementById('send-text');
+    btn.disabled = true; btn.textContent = 'Writing…';
+    const d = await aiPost('ai_reply', {hint: box.value});
+    btn.disabled = false; btn.textContent = 'Suggest another';
+    if (d.ok) { box.value = d.text; box.focus(); } else alert(d.error || 'Could not write a reply.');
+  });
+
   /* A project's address fills "Where", unless something was typed there. */
   const vp = document.getElementById('visit-project'), vpl = document.getElementById('visit-place');
   if (vp) vp.addEventListener('change', () => { const a = vp.selectedOptions[0].dataset.addr || '';

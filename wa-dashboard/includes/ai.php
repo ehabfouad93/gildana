@@ -87,7 +87,7 @@ function ai_complete(array $client, string $system, array $messages, int $maxTok
 
     if ($cfg['provider'] === 'claude') {
         $res = ai_http(
-            'https://api.anthropic.com/v1/messages',
+            rtrim((string) config('ai_claude_base', 'https://api.anthropic.com'), '/') . '/v1/messages',
             ['x-api-key: ' . $cfg['key'], 'anthropic-version: ' . AI_ANTHROPIC_VERSION],
             [
                 'model'      => $cfg['model'],
@@ -110,7 +110,7 @@ function ai_complete(array $client, string $system, array $messages, int $maxTok
     // OpenAI
     $msgs = array_merge([['role' => 'system', 'content' => $system]], array_values($messages));
     $res  = ai_http(
-        'https://api.openai.com/v1/chat/completions',
+        rtrim((string) config('ai_openai_base', 'https://api.openai.com'), '/') . '/v1/chat/completions',
         ['Authorization: Bearer ' . $cfg['key']],
         ['model' => $cfg['model'], 'max_tokens' => $maxTokens, 'messages' => $msgs]
     );
