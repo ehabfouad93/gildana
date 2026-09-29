@@ -32,6 +32,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         redirect('crm_team.php');
     }
+    /* Teams: a leader, and the people under them. One team per person. */
+    if ($a === 'team_save' || $a === 'team_add') {
+        $tid  = (int) ($_POST['team'] ?? 0);
+        $name = mb_substr(trim((string) ($_POST['name'] ?? '')), 0, 80);
+        $lead = (int) ($_POST['leader'] ?? 0);
+        $lead = isset($names[$lead]) ? $lead : null;
+        if ($name === '') { flash('Give the team a name.', 'error'); redirect('crm_team.php#teams'); }
+        if ($a === 'team_add') {
+            $tid = db_insert("INSERT INTO crm_teams (client_id,name,leader_user_id,sort,created_at) VALUES (?,?,?,?,NOW())",
+                             [$cid, $name, $lead, (int) db_val("SELECT COALESCE(MAX(sort),0)+10 FROM crm_teams WHERE client_id=?", [$cid])]);
+        } elseif (db_val("SELECT COUNT(*) FROM crm_teams WHERE id=? AND client_id=?", [$tid, $cid])) {
+            db_run("UPDATE crm_teams SET name=?, leader_user_id=? WHERE id=? AND client_id=?", [$name, $lead, $tid, $cid]);
+        } else { redirect('crm_team.php#teams'); }
+        $members = array_values(array_filter(array_map('intval', (array) ($_POST['members'] ?? [])), fn($u) => isset($names[$u])));
+        db_run("UPDATE users SET team_id=NULL WHERE client_id=? AND team_id=?", [$cid, $tid]);
+        if ($lead && !in_array($lead, $members, true)) $members[] = $lead;
+        if ($members) db_run("UPDATE users SET team_id=? WHERE client_id=? AND id IN (" . implode(',', array_fill(0, count($members), '?')) . ")",
+                             array_merge([$tid, $cid], $members));
+        flash('Saved ' . $name . '.');
+        redirect('crm_team.php#teams');
+    }
+    if ($a === 'team_delete') {
+        $tid = (int) ($_POST['team'] ?? 0);
+        db_run("UPDATE users SET team_id=NULL WHERE client_id=? AND team_id=?", [$cid, $tid]);
+        db_run("DELETE FROM crm_teams WHERE id=? AND client_id=?", [$tid, $cid]);
+        flash('Team removed. Its people keep their leads.');
+        redirect('crm_team.php#teams');
+    }
     if ($a === 'transfer') {
         $from = (string) ($_POST['from'] ?? '');
         $to   = (string) ($_POST['to'] ?? '');
@@ -50,7 +78,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $s = crm_settings($cid);
 $late = (int) ($s['first_contact_minutes'] ?? 0);
 $rows = [];
-foreach (db_all("SELECT id, COALESCE(NULLIF(name,''), email) name, client_role, crm_available, crm_capacity FROM users
+$hasTeams = db_has_column('users', 'team_id');
+foreach (db_all("SELECT id, COALESCE(NULLIF(name,''), email) name, client_role, crm_available, crm_capacity" . ($hasTeams ? ", team_id" : "") . " FROM users
                   WHERE client_id=? AND role='client' AND status='active' ORDER BY client_role='sales' DESC, name", [$cid]) as $u) {
     $rows[(int) $u['id']] = $u + ['open' => 0, 'new' => 0, 'late' => 0, 'overdue' => 0, 'hot' => 0, 'won30' => 0];
 }
@@ -67,6 +96,8 @@ if ($late) foreach ($q("AND s.kind='open' AND c.first_response_at IS NULL AND c.
     if (isset($rows[(int) $r['uid']])) $rows[(int) $r['uid']]['late'] = (int) $r['n'];
 $unassigned = (int) db_val("SELECT COUNT(*) FROM contacts c JOIN crm_stages s ON s.id=c.stage_id WHERE c.client_id=? AND s.kind='open' AND c.owner_user_id IS NULL", [$cid]);
 $hasSales = (bool) array_filter($rows, fn($r) => $r['client_role'] === 'sales');
+$teams = crm_teams($cid);
+$teamNames = array_column($teams, 'name', 'id');
 
 client_header('Team & transfer', 'crm', $CLIENT);
 page_head('Team & transfer', '<a class="btn btn-ghost btn-sm" href="crm_rules.php">Assignment rules</a>');
@@ -90,7 +121,7 @@ page_head('Team & transfer', '<a class="btn btn-ghost btn-sm" href="crm_rules.ph
       <th class="num">Overdue follow-ups</th><th class="num">Hot</th><th class="num">Won (30 days)</th><th>Taking leads</th></tr></thead><tbody>
     <?php foreach ($rows as $uid => $r): ?>
       <tr><td><a href="crm.php?view=table&owner=<?= $uid ?>"><strong><?= e((string) $r['name']) ?></strong></a>
-          <span class="text-muted" style="display:block;font-size:11.5px"><?= e(ucfirst((string) $r['client_role'])) ?></span></td>
+          <span class="text-muted" style="display:block;font-size:11.5px"><?= e(ucfirst((string) $r['client_role'])) ?><?= !empty($r['team_id']) && isset($teamNames[(int) $r['team_id']]) ? ' · ' . e($teamNames[(int) $r['team_id']]) : '' ?></span></td>
         <td class="num"><?= $r['open'] ?></td>
         <td class="num"><?= $r['new'] ?></td>
         <?php if ($late): ?><td class="num <?= $r['late'] ? 'crm-late' : '' ?>"><?= $r['late'] ?></td><?php endif; ?>
@@ -106,6 +137,49 @@ page_head('Team & transfer', '<a class="btn btn-ghost btn-sm" href="crm_rules.ph
           </form></td></tr>
     <?php endforeach; ?></tbody></table></div>
 </div>
+
+<?php if ($hasTeams): ?>
+<div class="card" id="teams">
+  <h2>Teams</h2>
+  <p class="text-muted" style="font-size:12.5px;margin-top:-4px">Group salespeople under a team leader. A leader sees their team's leads as well as
+    their own, and can move leads between the people on their team. Reports and assignment rules can then work by team.</p>
+  <?php foreach ($teams as $t): $tid = (int) $t['id']; ?>
+    <form method="post" class="team-box">
+      <?= csrf_field() ?><input type="hidden" name="action" value="team_save"><input type="hidden" name="team" value="<?= $tid ?>">
+      <div class="grid2">
+        <div class="field"><span class="lbl">Team name</span><input name="name" value="<?= e((string) $t['name']) ?>" maxlength="80" required></div>
+        <div class="field"><span class="lbl">Team leader</span><select name="leader"><option value="0">—</option>
+          <?php foreach ($rows as $uid => $r): ?><option value="<?= $uid ?>" <?= (int) $t['leader_user_id'] === $uid ? 'selected' : '' ?>><?= e((string) $r['name']) ?></option><?php endforeach; ?></select></div>
+      </div>
+      <span class="lbl">People on the team</span>
+      <div class="team-members">
+        <?php foreach ($rows as $uid => $r): $inOther = !empty($r['team_id']) && (int) $r['team_id'] !== $tid; ?>
+          <label class="mod-all"><input type="checkbox" name="members[]" value="<?= $uid ?>" <?= (int) ($r['team_id'] ?? 0) === $tid ? 'checked' : '' ?>>
+            <?= e((string) $r['name']) ?><?= $inOther ? ' <span class="text-muted">(' . e($teamNames[(int) $r['team_id']] ?? '') . ')</span>' : '' ?></label>
+        <?php endforeach; ?>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center" class="mt10">
+        <button class="btn btn-primary btn-sm">Save team</button>
+        <button class="btn-link" style="color:var(--danger)" name="action" value="team_delete" onclick="return confirm('Remove this team? Its people keep their leads.')">Remove team</button>
+      </div>
+    </form>
+  <?php endforeach; ?>
+  <details <?= $teams ? '' : 'open' ?>><summary class="btn btn-ghost btn-sm">+ New team</summary>
+    <form method="post" class="team-box mt10">
+      <?= csrf_field() ?><input type="hidden" name="action" value="team_add">
+      <div class="grid2">
+        <div class="field"><span class="lbl">Team name</span><input name="name" maxlength="80" placeholder="New Cairo team" required></div>
+        <div class="field"><span class="lbl">Team leader</span><select name="leader"><option value="0">—</option>
+          <?php foreach ($rows as $uid => $r): ?><option value="<?= $uid ?>"><?= e((string) $r['name']) ?></option><?php endforeach; ?></select></div>
+      </div>
+      <span class="lbl">People on the team</span>
+      <div class="team-members">
+        <?php foreach ($rows as $uid => $r): ?><label class="mod-all"><input type="checkbox" name="members[]" value="<?= $uid ?>"> <?= e((string) $r['name']) ?><?= !empty($r['team_id']) ? ' <span class="text-muted">(' . e($teamNames[(int) $r['team_id']] ?? '') . ')</span>' : '' ?></label><?php endforeach; ?>
+      </div>
+      <button class="btn btn-primary btn-sm mt10">Create team</button>
+    </form></details>
+</div>
+<?php endif; ?>
 
 <div class="card" id="transfer">
   <h2>Move leads</h2>

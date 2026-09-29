@@ -323,6 +323,8 @@ function crm_score_compute(array $c): array
     if (!empty($c['project_id'])) $r[] = ['Knows which project', 8];
     if (!empty($c['unit_type'])) $r[] = ['Knows the unit type', 5];
     if (!empty($c['budget'])) $r[] = ['Gave a budget', 8];
+    if (($c['qualification'] ?? '') === 'qualified')     $r[] = ['Qualified by sales', 15];
+    if (($c['qualification'] ?? '') === 'not_qualified') $r[] = ['Not qualified', -25];
     $answers = count(json_decode((string) ($c['attributes'] ?? ''), true) ?: []);
     if ($answers) $r[] = ['Answered ' . $answers . ' question' . ($answers === 1 ? '' : 's'), min(8, $answers * 2)];
     $subs = (int) ($c['submissions'] ?? 1);
@@ -397,6 +399,8 @@ function crm_resubmitted(array $client, int $contactId, string $source): void
     $c = db_row("SELECT owner_user_id, stage_id FROM contacts WHERE id=?", [$contactId]);
     if (!$c || $c['stage_id'] === null) return;
     db_run("UPDATE contacts SET submissions=submissions+1, last_submitted_at=NOW() WHERE id=?", [$contactId]);
+    // Asking again, now, makes old data fresh again: it is a live lead from today's campaign.
+    if (db_has_column('contacts', 'data_type')) db_run("UPDATE contacts SET data_type='fresh' WHERE id=?", [$contactId]);
     crm_log((int) $client['id'], $contactId, 'resubmitted', null, $source, null);
     if ($c['owner_user_id'] !== null) crm_notice((int) $client['id'], (int) $c['owner_user_id'], 'resubmit', $contactId);
     crm_rescore($contactId);

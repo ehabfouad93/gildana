@@ -13,6 +13,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/permissions.php';
 require_once __DIR__ . '/crm_manager.php';     // rules, scoring, notices, merge — the manager's side
 require_once __DIR__ . '/crm_notify.php';      // what those notices say, in the app and on WhatsApp
+require_once __DIR__ . '/crm_fields.php';      // code, sub-status, fresh/cold, campaign, teams, the account's own fields
 
 /** The pipeline a client starts with. Real-estate shaped, because that is who uses this. */
 function crm_default_stages(): array
@@ -180,6 +181,12 @@ function crm_set_stage(array $client, int $contactId, int $stageId, ?int $by = n
     if (!$cur) return false;
     if ((int) $cur['stage_id'] === $stageId) return true;
     db_run("UPDATE contacts SET stage_id=? WHERE id=? AND client_id=?", [$stageId, $contactId, $cid]);
+    // The detail belonged to the old stage ("No answer" means nothing once they are Negotiating).
+    // Lost keeps its reason as its detail, so the reports read one column for both.
+    if (db_has_column('contacts', 'substatus')) {
+        $lostLabel = $map[$stageId]['kind'] === 'lost' && $lostReason !== null && trim($lostReason) !== '' ? mb_substr(trim($lostReason), 0, 80) : null;
+        db_run("UPDATE contacts SET substatus=? WHERE id=?", [$lostLabel, $contactId]);
+    }
     crm_log($cid, $contactId, 'stage', $cur['stage_id'] !== null ? (string) $cur['stage_id'] : null, (string) $stageId, $by);
     if ($map[$stageId]['kind'] === 'lost' && db_has_column('contacts', 'lost_reason')) {
         $lostReason = $lostReason !== null ? mb_substr(trim($lostReason), 0, 80) : null;
@@ -302,6 +309,12 @@ function crm_add_lead(array $client, int $contactId, string $source = '', $owner
                    source=COALESCE(NULLIF(?,''), source) WHERE id=? AND client_id=?",
            [$stage, $source, $contactId, $cid]);
     crm_log($cid, $contactId, 'added', null, (string) $stage, $by);
+    if (db_has_column('contacts', 'data_type')) {
+        $row = db_row("SELECT * FROM contacts WHERE id=?", [$contactId]);
+        $src = $source !== '' ? $source : (string) $row['source'];
+        db_run("UPDATE contacts SET code=COALESCE(code, ?), data_type=COALESCE(data_type, ?), platform=COALESCE(platform, ?) WHERE id=?",
+               [crm_code($contactId), crm_data_type_for($cid, $row, $src), crm_platform_for_source($src), $contactId]);
+    }
 
     $userId = $owner === 'auto' ? crm_assign_next($client, db_row("SELECT * FROM contacts WHERE id=?", [$contactId]) ?: null)
             : ($owner === 'none' || $owner === null ? null : (int) $owner);
@@ -351,16 +364,20 @@ function crm_mark_response(int $contactId, string $source): void
  */
 function crm_scope(string $alias = 'c'): array
 {
-    if (!function_exists('is_sales') || !is_sales()) return ['', []];
+    $ids = crm_visible_owner_ids();
+    if ($ids === null) return ['', []];
     $col = ($alias !== '' ? $alias . '.' : '') . 'owner_user_id';
-    return [" AND {$col} = ?", [(int) crm_actor_id()]];
+    // A team leader also sees their team's leads; everyone else in Sales, only their own.
+    if (count($ids) === 1) return [" AND {$col} = ?", $ids];
+    return [" AND {$col} IN (" . implode(',', array_fill(0, count($ids), '?')) . ")", $ids];
 }
 
-/** May the current user see this contact? Only their own, if they are Sales. */
+/** May the current user see this contact? Sales: their own (and their team's, if they lead one). */
 function crm_can_see(array $contact): bool
 {
-    if (!function_exists('is_sales') || !is_sales()) return true;
-    return (int) ($contact['owner_user_id'] ?? 0) === (int) crm_actor_id();
+    $ids = crm_visible_owner_ids();
+    if ($ids === null) return true;
+    return in_array((int) ($contact['owner_user_id'] ?? 0), $ids, true);
 }
 
 /** Every lead for a client, scoped to the viewer, with what the board and table need. */
@@ -385,8 +402,16 @@ function crm_leads(int $clientId, array $f = []): array
     if (($f['due'] ?? '') === 'today')       { $sql .= " AND DATE(c.next_followup_at) = CURDATE()"; }
     elseif (($f['due'] ?? '') === 'overdue') { $sql .= " AND c.next_followup_at < NOW() AND s.kind = 'open'"; }
     if (($q = trim((string) ($f['q'] ?? ''))) !== '') {
-        $sql .= " AND (c.name LIKE ? OR c.phone_e164 LIKE ? OR c.email LIKE ?)";
-        array_push($p, "%$q%", "%$q%", "%$q%");
+        if (($code = crm_code_from_search($q)) !== '' && db_has_column('contacts', 'code')) {
+            $sql .= " AND (c.code = ? OR c.name LIKE ? OR c.phone_e164 LIKE ?)";
+            array_push($p, $code, "%$q%", "%$q%");
+        } else {
+            $digits = preg_replace('/\D+/', '', $q);
+            $sql .= " AND (c.name LIKE ? OR c.phone_e164 LIKE ? OR c.email LIKE ?" . (strlen($digits) >= 6 ? " OR c.phone_e164 LIKE ?" : "") . ")";
+            array_push($p, "%$q%", "%$q%", "%$q%");
+            // 010 1234 5678 typed the local way still finds +20 10 1234 5678.
+            if (strlen($digits) >= 6) $p[] = '%' . ltrim($digits, '0') . '%';
+        }
     }
     $m039 = db_has_column('contacts', 'score');
     if ($m039) {

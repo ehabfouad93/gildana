@@ -72,6 +72,9 @@ function ads_record(int $clientId, int $contactId, array $referral): string
                  mb_substr(trim((string) ($referral['ctwa_clid'] ?? '')), 0, 255) ?: null,
                  $contactId, $clientId]
             );
+            // The ad id, where the campaign reports look for it; its campaign is filled in once the
+            // account's ad spend is read from Meta. A post or a page link is not an ad.
+            if (function_exists('crm_set_origin')) crm_set_origin($contactId, $type === 'ad' ? ['meta_ad_id' => $sourceId, 'platform' => 'whatsapp_ad'] : []);
         }
     } catch (Throwable $e) {
         // Attribution is worth having, not worth dropping an inbound message for. The

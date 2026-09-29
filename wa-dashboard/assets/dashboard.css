@@ -1152,3 +1152,21 @@ input[type="file"] { max-width: 100%; min-width: 0; }
 .ib-media.gone .ib-media-gone { display: block; }
 .ib-file { display: inline-block; padding: 6px 10px; border-radius: 8px; background: rgba(13,19,33,.05); font-size: 13px; }
 .ib-caption { display: block; }
+
+/* ── Teams (CRM → Team & transfer) ── */
+.team-box { border: 1px solid var(--line-strong); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; }
+.team-members { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 4px; }
+.team-members .mod-all { margin: 0; font-size: 13px; }
+.sub-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-bottom: 10px; }
+.field-row { display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; }
+.field-row input[name="label"] { max-width: 220px; }
+.field-row textarea { flex: 1; min-width: 200px; }
+.setup-jump { font-size: 13px; }
+/* Lead code and sub-status (lead page) */
+.lead-code { font: 600 12.5px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .04em; background: var(--bg);
+  border: 1px solid var(--line-strong); color: var(--text); border-radius: 6px; padding: 5px 8px; cursor: copy; }
+.lead-code.copied::after { content: ' ✓'; color: var(--success); }
+.lead-subs { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; font-size: 12.5px; }
+.lead-sub { border: 1px solid var(--line-strong); background: transparent; color: var(--text); border-radius: 999px; padding: 4px 10px; font-size: 12.5px; cursor: pointer; }
+.lead-sub:hover { border-color: var(--brand); }
+.lead-sub.on { background: var(--brand); border-color: var(--brand); color: #fff; }

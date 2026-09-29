@@ -43,6 +43,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         db_run("UPDATE crm_projects SET active=1-active WHERE id=? AND client_id=?", [$pid, $cid]);
         redirect('crm_setup.php');
     }
+    if ($a === 'substatus') {
+        foreach (crm_stages($cid) as $st) {
+            if ($st['kind'] === 'lost' || !isset($_POST['sub'][(int) $st['id']])) continue;
+            crm_substatuses_save($cid, (int) $st['id'], preg_split('/\r\n|\r|\n/', (string) $_POST['sub'][(int) $st['id']]) ?: []);
+        }
+        flash('Sub-statuses saved.');
+        redirect('crm_setup.php#substatus');
+    }
+    if ($a === 'general') {
+        $cur = strtoupper((string) ($_POST['currency'] ?? 'EGP'));
+        $days = (int) ($_POST['fresh_days'] ?? 30);
+        crm_settings_set($cid, ['currency' => isset(crm_currencies()[$cur]) ? $cur : 'EGP', 'fresh_days' => max(1, min(365, $days))]);
+        flash('Saved.');
+        redirect('crm_setup.php#general');
+    }
+    if ($a === 'field_add' || $a === 'field_save') {
+        $label = mb_substr(trim((string) ($_POST['label'] ?? '')), 0, 80);
+        $type  = (string) ($_POST['type'] ?? 'text');
+        $type  = isset(crm_field_types()[$type]) ? $type : 'text';
+        $opts  = trim((string) ($_POST['options'] ?? ''));
+        if ($label === '') flash('Give the field a name.', 'error');
+        elseif ($type === 'list' && $opts === '') flash('A pick-list field needs its choices, one per line.', 'error');
+        elseif ($a === 'field_add') {
+            db_insert("INSERT INTO crm_fields (client_id,fkey,label,type,options,sort,active,created_at) VALUES (?,?,?,?,?,?,1,NOW())",
+                      [$cid, crm_field_key($cid, $label), $label, $type, $type === 'list' ? $opts : null,
+                       (int) db_val("SELECT COALESCE(MAX(sort),0)+10 FROM crm_fields WHERE client_id=?", [$cid])]);
+            flash('Added ' . $label . '. It shows on every lead, in the filters and in exports.');
+        } else {
+            // The key stays: renaming a field must not orphan what is already filled in.
+            db_run("UPDATE crm_fields SET label=?, type=?, options=? WHERE id=? AND client_id=?",
+                   [$label, $type, $type === 'list' ? $opts : null, (int) ($_POST['field'] ?? 0), $cid]);
+            flash('Saved ' . $label . '.');
+        }
+        redirect('crm_setup.php#fields');
+    }
+    if ($a === 'field_toggle') {
+        db_run("UPDATE crm_fields SET active=1-active WHERE id=? AND client_id=?", [(int) ($_POST['field'] ?? 0), $cid]);
+        redirect('crm_setup.php#fields');
+    }
     if (in_array($a, ['unit_type', 'lost_reason'], true)) {
         crm_options_save($cid, $a, preg_split('/\r\n|\r|\n/', (string) ($_POST['labels'] ?? '')) ?: []);
         flash('Saved.');
@@ -51,12 +90,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 $projects = crm_projects($cid);
+$stagesAll = crm_stages($cid);
+$subs = crm_substatuses($cid);
+$fields = crm_fields($cid, false);
+$settings = crm_settings($cid);
 $counts = [];
 foreach (db_all("SELECT project_id, COUNT(*) n FROM contacts WHERE client_id=? AND project_id IS NOT NULL AND stage_id IS NOT NULL GROUP BY project_id", [$cid]) as $r)
     $counts[(int) $r['project_id']] = (int) $r['n'];
 
 client_header('Projects & lists', 'crm', $CLIENT);
-page_head('Projects & lists');
+page_head('Projects & lists', '<span class="setup-jump"><a href="#projects">Projects</a> · <a href="#substatus">Sub-statuses</a> · <a href="#fields">Your fields</a> · <a href="#unit_type">Lists</a> · <a href="#general">Currency</a></span>');
 ?>
 <div class="card card-flush" id="projects">
   <div style="padding:14px 18px"><h2 style="border:0;padding:0;margin:0">Projects</h2>
@@ -95,5 +138,63 @@ page_head('Projects & lists');
       <button class="btn btn-primary btn-sm mt10">Save</button></form>
   </div>
   <?php endforeach; ?>
+</div>
+
+<div class="card" id="substatus">
+  <h2>Sub-statuses</h2>
+  <p class="text-muted" style="font-size:12.5px;margin-top:-4px">The detail under each stage — what actually happened. Salespeople pick one when
+    they log a call or move a lead, and the reports count stage × sub-status, so you can see how many leads are "Contacted — no answer"
+    rather than just "Contacted". One per line. <strong>Lost</strong> uses the lost reasons below as its sub-statuses.</p>
+  <form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="substatus">
+    <div class="sub-grid">
+      <?php foreach ($stagesAll as $st): if ($st['kind'] === 'lost') continue; ?>
+        <div class="field"><span class="lbl"><?= e((string) $st['name']) ?></span>
+          <textarea name="sub[<?= (int) $st['id'] ?>]" rows="6" placeholder="One per line"><?= e(implode("\n", $subs[(int) $st['id']] ?? [])) ?></textarea></div>
+      <?php endforeach; ?>
+    </div>
+    <button class="btn btn-primary btn-sm">Save sub-statuses</button></form>
+</div>
+
+<div class="card card-flush" id="fields">
+  <div style="padding:14px 18px"><h2 style="border:0;padding:0;margin:0">Your own fields</h2>
+    <p class="text-muted" style="font-size:12.5px;margin:4px 0 0">Anything else you record about a lead — nationality, job, broker, preferred floor.
+      Each field appears on the lead page, as a column and a filter in the leads list, and in imports and exports. Hiding a field keeps what was filled in.</p></div>
+  <?php if ($fields): ?>
+  <div class="table-wrap"><table class="data">
+    <thead><tr><th>Field</th><th>Type</th><th>Choices</th><th></th></tr></thead><tbody>
+    <?php foreach ($fields as $f): ?>
+      <tr><td colspan="3"><form method="post" class="field-row">
+            <?= csrf_field() ?><input type="hidden" name="action" value="field_save"><input type="hidden" name="field" value="<?= (int) $f['id'] ?>">
+            <input name="label" value="<?= e((string) $f['label']) ?>" maxlength="80" aria-label="Field name" required>
+            <select name="type" aria-label="Type"><?php foreach (crm_field_types() as $k => $l): ?><option value="<?= $k ?>" <?= $f['type'] === $k ? 'selected' : '' ?>><?= $l ?></option><?php endforeach; ?></select>
+            <textarea name="options" rows="2" aria-label="Choices, one per line" placeholder="Choices, one per line (pick-list only)"><?= e((string) ($f['options'] ?? '')) ?></textarea>
+            <button class="btn btn-ghost btn-sm">Save</button>
+            <?php if (!(int) $f['active']): ?><span class="pill gray">Hidden</span><?php endif; ?></form></td>
+        <td style="text-align:right"><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="field_toggle"><input type="hidden" name="field" value="<?= (int) $f['id'] ?>">
+          <button class="btn-link"><?= (int) $f['active'] ? 'Hide' : 'Show again' ?></button></form></td></tr>
+    <?php endforeach; ?></tbody></table></div>
+  <?php endif; ?>
+  <form method="post" class="field-row" style="padding:14px 18px">
+    <?= csrf_field() ?><input type="hidden" name="action" value="field_add">
+    <input name="label" maxlength="80" placeholder="Nationality" required aria-label="New field name">
+    <select name="type" aria-label="Type" onchange="this.form.options.hidden = this.value !== 'list'"><?php foreach (crm_field_types() as $k => $l): ?><option value="<?= $k ?>"><?= $l ?></option><?php endforeach; ?></select>
+    <textarea name="options" rows="2" placeholder="Choices, one per line" hidden aria-label="Choices"></textarea>
+    <button class="btn btn-primary btn-sm">Add field</button>
+  </form>
+</div>
+
+<div class="card" id="general" style="max-width:640px">
+  <h2>Money and fresh leads</h2>
+  <form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="general">
+    <div class="grid2">
+      <div class="field"><span class="lbl">Currency</span><select name="currency">
+        <?php foreach (crm_currencies() as $k => $l): ?><option value="<?= $k ?>" <?= ($settings['currency'] ?? 'EGP') === $k ? 'selected' : '' ?>><?= $k ?> — <?= e($l) ?></option><?php endforeach; ?></select>
+        <span class="text-muted" style="font-size:12px">Used for deal values in the CRM, the dashboard and every report.</span></div>
+      <div class="field"><span class="lbl">Fresh for (days)</span><input type="number" name="fresh_days" min="1" max="365" value="<?= (int) ($settings['fresh_days'] ?? 30) ?>">
+        <span class="text-muted" style="font-size:12px">A lead is <strong>fresh</strong> when it arrives from an ad, a form, a message or is added by hand.
+          Imported data is <strong>cold</strong>, and so is a contact you already had for longer than this before it became a lead.
+          Someone cold who fills in a form again becomes fresh.</span></div>
+    </div>
+    <button class="btn btn-primary btn-sm">Save</button></form>
 </div>
 <?php layout_footer();

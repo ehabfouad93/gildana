@@ -57,7 +57,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else {
             $read = import_read($path, (string) $job['name']);
             $map = [];
-            foreach (array_keys(import_fields()) as $field) {
+            foreach (array_keys(import_fields($cid)) as $field) {
                 $v = (string) ($_POST['map'][$field] ?? '');
                 if ($v !== '') $map[$field] = (int) $v;
             }
@@ -70,6 +70,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'owner'    => (string) ($_POST['owner'] ?? 'auto'),
                     'stage_id' => (int) ($_POST['stage_id'] ?? 0) ?: null,
                     'extras'   => !empty($_POST['extras']),
+                    'data_type'=> (string) ($_POST['data_type'] ?? 'cold'),
                     'country'  => preg_replace('/\D+/', '', (string) ($_POST['country'] ?? '')) ?: (string) ($CLIENT['default_country'] ?? ''),
                 ]);
                 @unlink($path);
@@ -84,7 +85,7 @@ if ($step === 'map' && !$read) {
     $job = $_SESSION['crm_import'] ?? null;
     if ($job) $read = import_read(crm_import_path((string) $job['token']), (string) $job['name']);
 }
-$guess = $read && !empty($read['ok']) ? import_guess_mapping($read['header']) : [];
+$guess = $read && !empty($read['ok']) ? import_guess_mapping($read['header'], $cid) : [];
 
 client_header('Import leads', 'crm', $CLIENT);
 page_head('Import leads', '<a class="btn btn-ghost btn-sm" href="crm.php">&larr; CRM</a>');
@@ -114,7 +115,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
       headings — check them against the first rows before importing.</p>
 
     <div class="grid2">
-      <?php foreach (import_fields() as $field => $fd): ?>
+      <?php foreach (import_fields($cid) as $field => $fd): ?>
         <div class="field"><span class="lbl"><?= e($fd['label']) ?><?= $field === 'phone' ? ' *' : '' ?></span>
           <select name="map[<?= e($field) ?>]">
             <option value="">— not in this file —</option>
@@ -144,6 +145,9 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
       <?php else: ?>
       <div class="field"><span class="lbl">Owner</span><input value="You" disabled></div>
       <?php endif; ?>
+      <div class="field"><span class="lbl">This data is</span><select name="data_type">
+        <option value="cold">Cold data — old leads, a list from before</option>
+        <option value="fresh">Fresh — new leads from this week's campaign</option></select></div>
       <div class="field"><span class="lbl">Country code for local numbers</span>
         <input name="country" value="<?= e((string) ($CLIENT['default_country'] ?? '')) ?>" inputmode="numeric" placeholder="20"></div>
     </div>

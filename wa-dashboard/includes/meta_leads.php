@@ -25,6 +25,9 @@ require_once __DIR__ . '/whatsapp.php';
 const META_SCOPES = 'pages_show_list,pages_read_engagement,pages_manage_metadata,pages_manage_ads,leads_retrieval,business_management';
 
 /** Where a form's answer can go. */
+/** What we read about each lead: the answers, and which campaign, ad set, ad and platform brought it. */
+const META_LEAD_FIELDS = 'id,created_time,field_data,form_id,ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,platform,is_organic';
+
 function meta_targets(): array
 {
     return ['phone' => 'Phone (required)', 'name' => 'Full name', 'first_name' => 'First name', 'last_name' => 'Last name',
@@ -259,7 +262,7 @@ function meta_process_lead(array $page, string $leadgenId, string $via, ?array $
     if (!$client || !crm_enabled($client)) { meta_log($cid, $leadgenId, 'skipped', 'The CRM is not switched on for this account.'); return 'skipped'; }
 
     if ($lead === null) {
-        $r = meta_http('GET', $leadgenId, ['fields' => 'id,created_time,field_data,form_id,ad_id,ad_name,campaign_name',
+        $r = meta_http('GET', $leadgenId, ['fields' => META_LEAD_FIELDS,
                                            'access_token' => meta_page_token($page)]);
         if (!$r['ok']) {
             // Release the claim so the poller can try again, rather than marking it lost forever.
@@ -318,6 +321,11 @@ function meta_process_lead(array $page, string $leadgenId, string $via, ?array $
         $row = db_row("SELECT * FROM contacts WHERE id=?", [$contactId]) ?: [];
         $owner = crm_assign_next($client, $row + ['__form_id' => $formId]) ?? 'none';
     }
+    // Which campaign and platform: the leads list filters by them, the campaign reports count them.
+    crm_set_origin($contactId, ['platform' => crm_platform_from_meta((string) ($lead['platform'] ?? '')) ?? 'facebook',
+        'campaign' => $lead['campaign_name'] ?? '', 'meta_campaign_id' => $lead['campaign_id'] ?? '',
+        'adset' => $lead['adset_name'] ?? '', 'meta_adset_id' => $lead['adset_id'] ?? '',
+        'ad_name' => $lead['ad_name'] ?? '', 'meta_ad_id' => $lead['ad_id'] ?? '']);
     $isNew = crm_add_lead($client, $contactId, 'meta_form', $owner, $stage);
     if ($wasLead) crm_resubmitted($client, $contactId, 'meta_form');
 
@@ -356,7 +364,7 @@ function meta_poll(int $everyMinutes = 5, int $maxForms = 50): array
         // A little overlap with the previous window, so a lead created at the boundary is not missed.
         $since = $f['last_polled_at'] ? strtotime((string) $f['last_polled_at']) - 300 : time() - 3 * 86400;
         $r = meta_http('GET', $f['form_id'] . '/leads', [
-            'fields'       => 'id,created_time,field_data,form_id,ad_id,ad_name,campaign_name',
+            'fields'       => META_LEAD_FIELDS,
             'filtering'    => json_encode([['field' => 'time_created', 'operator' => 'GREATER_THAN', 'value' => $since]]),
             'limit'        => 100,
             'access_token' => meta_page_token($page),
@@ -433,7 +441,7 @@ function meta_sync_form(array $form, int $max = 1000): array
     $sum = ['ok' => true, 'error' => '', 'imported' => 0, 'already' => 0, 'skipped' => 0, 'more' => false];
     $page = db_row("SELECT * FROM meta_pages WHERE client_id=? AND page_id=?", [(int) $form['client_id'], (string) $form['page_id']]);
     if (!$page) return ['ok' => false, 'error' => 'The Page for this form is no longer connected.'] + $sum;
-    $params = ['fields' => 'id,created_time,field_data,form_id,ad_id,ad_name,campaign_name', 'limit' => 100,
+    $params = ['fields' => META_LEAD_FIELDS, 'limit' => 100,
                'access_token' => meta_page_token($page)];
     $seen = 0;
     while (true) {

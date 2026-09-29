@@ -15,9 +15,9 @@ declare(strict_types=1);
 require_once __DIR__ . '/crm.php';
 
 /** Fields a column can be mapped to, and the header words that suggest each. */
-function import_fields(): array
+function import_fields(?int $clientId = null): array
 {
-    return [
+    $f = [
         'phone'    => ['label' => 'Phone',            'guess' => ['phone', 'mobile', 'number', 'whatsapp', 'msisdn', 'tel', 'رقم', 'موبايل', 'تليفون', 'هاتف']],
         'name'     => ['label' => 'Name',             'guess' => ['name', 'full name', 'full_name', 'fullname', 'contact', 'client', 'الاسم', 'اسم']],
         'email'    => ['label' => 'Email',            'guess' => ['email', 'e-mail', 'mail', 'البريد']],
@@ -28,7 +28,15 @@ function import_fields(): array
         'note'     => ['label' => 'Note',             'guess' => ['note', 'notes', 'comment', 'comments', 'ملاحظات']],
         'project'  => ['label' => 'Project',          'guess' => ['project', 'compound', 'development', 'المشروع', 'مشروع', 'الكمبوند']],
         'unit_type'=> ['label' => 'Unit type',        'guess' => ['unit type', 'unit_type', 'property type', 'نوع الوحدة', 'الوحدة']],
+        'substatus'=> ['label' => 'Sub-status',       'guess' => ['sub status', 'substatus', 'sub-status', 'الحالة الفرعية']],
+        'campaign' => ['label' => 'Campaign',         'guess' => ['campaign', 'الحملة', 'حملة']],
+        'qualification' => ['label' => 'Qualified (yes/no)', 'guess' => ['qualified', 'qualification', 'مؤهل']],
     ];
+    // The account's own fields can be filled from a column too.
+    if ($clientId && function_exists('crm_fields')) {
+        foreach (crm_fields($clientId) as $cf) $f['cf:' . $cf['fkey']] = ['label' => $cf['label'], 'guess' => [mb_strtolower((string) $cf['label'])]];
+    }
+    return $f;
 }
 
 /**
@@ -160,10 +168,10 @@ function import_read_xlsx(string $path): ?array
 }
 
 /** Best guess of which column holds what, from the header words. field => column index. */
-function import_guess_mapping(array $header): array
+function import_guess_mapping(array $header, ?int $clientId = null): array
 {
     $map = [];
-    foreach (import_fields() as $field => $f) {
+    foreach (import_fields($clientId) as $field => $f) {
         foreach ($header as $i => $h) {
             $h = mb_strtolower(trim((string) $h));
             if ($h === '' || in_array($i, $map, true)) continue;
@@ -310,6 +318,23 @@ function import_contacts(array $client, array $header, array $rows, array $map, 
         $isNew = crm_add_lead($client, $contactId, $source, $rowOwner, $stageId, $by);
         if ($isNew) $sum['leads']++;
         elseif ($stageId) crm_set_stage($client, $contactId, $stageId, $by);   // already a lead: honour the sheet's stage
+
+        // Fresh or cold, as the person importing said — the sheet is theirs to judge.
+        if ($isNew && isset($opts['data_type']) && isset(crm_data_types()[$opts['data_type']])) {
+            db_run("UPDATE contacts SET data_type=? WHERE id=?", [$opts['data_type'], $contactId]);
+        }
+        if (($cv = $col($r, 'campaign')) !== '') crm_set_origin($contactId, ['campaign' => $cv]);
+        if (($sv2 = $col($r, 'substatus')) !== '' && !crm_set_substatus($client, $contactId, $sv2, $by)) {
+            $problem($line, "\"{$sv2}\" is not a sub-status of the lead's stage — left empty.");
+        }
+        if (($qv = mb_strtolower($col($r, 'qualification'))) !== '' && db_has_column('contacts', 'qualification')) {
+            $ql = in_array($qv, ['yes', 'y', '1', 'true', 'qualified', 'نعم', 'مؤهل'], true) ? 'qualified'
+                : (in_array($qv, ['no', 'n', '0', 'false', 'not qualified', 'not_qualified', 'لا', 'غير مؤهل'], true) ? 'not_qualified' : null);
+            if ($ql) db_run("UPDATE contacts SET qualification=? WHERE id=?", [$ql, $contactId]);
+        }
+        $cfv = [];
+        foreach ($map as $fk => $_) if (str_starts_with((string) $fk, 'cf:') && ($v = $col($r, (string) $fk)) !== '') $cfv[substr((string) $fk, 3)] = $v;
+        if ($cfv && ($ce = crm_custom_save($cid, $contactId, $cfv)) !== '') $problem($line, $ce . ' Left empty.');
 
         $value = $col($r, 'value');
         $fu    = import_date($col($r, 'followup'));

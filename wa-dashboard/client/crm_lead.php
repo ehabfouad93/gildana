@@ -76,12 +76,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         in_array($pay, ['cash', 'installments'], true) ? $pay : null, $id, $cid]);
                 crm_rescore($id);
             }
-            if ($isAdmin && isset($_POST['owner'])) {
+            if (db_has_column('contacts', 'qualification')) {
+                $ql = (string) ($_POST['qualification'] ?? '');
+                $ql = isset(crm_qualifications()[$ql]) ? $ql : null;
+                if ($ql !== ($lead['qualification'] ?? null)) {
+                    db_run("UPDATE contacts SET qualification=? WHERE id=? AND client_id=?", [$ql, $id, $cid]);
+                    crm_log($cid, $id, 'qualified', $lead['qualification'] ?? null, $ql, $me);
+                    crm_rescore($id);
+                }
+                if ($isAdmin && isset($_POST['data_type']) && isset(crm_data_types()[$_POST['data_type']])) {
+                    db_run("UPDATE contacts SET data_type=? WHERE id=? AND client_id=?", [(string) $_POST['data_type'], $id, $cid]);
+                }
+            }
+            if (($ce = crm_custom_save($cid, $id, (array) ($_POST['cf'] ?? []))) !== '') { $err = $ce; }
+            if ($err === '' && $isAdmin && isset($_POST['owner'])) {
                 $o = (string) $_POST['owner'];
                 crm_assign($CLIENT, $id, $o === 'none' ? null : ($o === 'auto' ? crm_assign_next($CLIENT) : (int) $o), $me);
             }
-            flash('Saved.');
-            $back();
+            if ($err === '') { flash('Saved.'); $back(); }
         }
     }
 
@@ -102,9 +114,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $err = 'Say why this lead was lost — choose a reason.';
             } else {
             crm_log_activity($CLIENT, $id, $kind, $kind === 'note' ? null : $outcome, $body, $me);
+            if (!$moving && isset($_POST['substatus'])) crm_set_substatus($CLIENT, $id, (string) $_POST['substatus'], $me);
             if ($next !== '') crm_set_followup($CLIENT, $id, $next, (string) ($_POST['next_note'] ?? ''), $me);
             elseif (!empty($_POST['clear_followup'])) crm_set_followup($CLIENT, $id, null, '', $me);
-            if ($moving) $stageMove($st);
+            if ($moving && $stageMove($st) && !empty($_POST['substatus_new'])) crm_set_substatus($CLIENT, $id, (string) $_POST['substatus_new'], $me);
             flash(($kinds[$kind] ?? 'Activity') . ' logged' . ($next !== '' ? ', next follow-up ' . date('D j M, H:i', strtotime($next)) : '') . '.');
             $back('#timeline');
             }
@@ -123,6 +136,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     if ($a === 'stage') {
         if ((int) ($_POST['stage_id'] ?? 0) && $stageMove((int) $_POST['stage_id'])) $back();
+    }
+    if ($a === 'substatus' && can_write()) {
+        crm_set_substatus($CLIENT, $id, (string) ($_POST['substatus'] ?? ''), $me);
+        $back();
     }
     if ($a === 'visit_book' && can_write() && can_crm('visits')) {
         $d = trim((string) ($_POST['visit_date'] ?? '')); $t = trim((string) ($_POST['visit_time'] ?? ''));
@@ -229,6 +246,8 @@ foreach (db_all("SELECT * FROM crm_events WHERE contact_id=? ORDER BY id DESC LI
         'resubmitted' => 'Came in again (' . crm_source_label($ev['to_val']) . ')',
         'merged'   => 'Merged with the duplicate contact ' . $ev['to_val'],
         'ai_fill'  => 'AI filled in from the chat: ' . $ev['to_val'],
+        'substatus'=> $ev['to_val'] !== null ? 'Sub-status: ' . $ev['to_val'] . ($ev['from_val'] !== null ? ' (was ' . $ev['from_val'] . ')' : '') : 'Sub-status cleared',
+        'qualified'=> 'Marked ' . (crm_qualifications()[(string) $ev['to_val']] ?? 'not set') ,
         'visit'    => 'Site visit booked for ' . date('D j M, H:i', strtotime((string) $ev['to_val'])),
         'visit_moved' => 'Site visit moved from ' . date('D j M, H:i', strtotime((string) $ev['from_val'])) . ' to ' . date('D j M, H:i', strtotime((string) $ev['to_val'])),
         'seq_start'=> 'Joined the follow-up sequence "' . ($seqNames[(int) $ev['to_val']] ?? 'a removed sequence') . '"',
@@ -260,6 +279,11 @@ $dups = crm_duplicates($lead);
 $lostIds = array_map('intval', array_keys(array_filter(crm_stage_map($cid), fn($st) => $st['kind'] === 'lost')));
 $askLost = (int) crm_settings($cid)['require_lost_reason'] === 1;
 $subs = (int) ($lead['submissions'] ?? 1);
+$subList = $lead['stage_id'] !== null ? crm_substatus_list($cid, (int) $lead['stage_id']) : [];
+$subsByStage = [];
+foreach ($stages as $s_) $subsByStage[(int) $s_['id']] = $s_['kind'] === 'lost' ? [] : crm_substatus_list($cid, (int) $s_['id']);
+$cfields = crm_fields($cid, false);
+$custom = crm_custom_get($lead);
 
 $aiOn = ai_configured($CLIENT);
 $aiFacts = json_decode((string) ($lead['ai_facts'] ?? ''), true) ?: [];
@@ -283,6 +307,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
   <div class="lead-hero-top">
     <div>
       <div class="lead-contact">
+        <?php if (!empty($lead['code'])): ?><button type="button" class="lead-code" title="Copy the lead's code" onclick="navigator.clipboard&&navigator.clipboard.writeText('#<?= e((string) $lead['code']) ?>');this.classList.add('copied')">#<?= e((string) $lead['code']) ?></button><?php endif; ?>
         <a href="tel:+<?= e($phone) ?>" class="lead-phone">+<?= e($phone) ?></a>
         <?php if ($heatCls): ?>
           <details class="lead-heat"><summary><span class="heat <?= $heatCls ?>" id="lead-score"><?= e($heatWord) ?> · <?= (int) $score ?></span></summary>
@@ -295,12 +320,16 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
       </div>
       <div class="lead-meta">
         <span><span class="text-muted">Owner</span> <?= e(crm_user_name($lead['owner_user_id'] !== null ? (int) $lead['owner_user_id'] : null)) ?></span>
-        <span><span class="text-muted">Came from</span> <?= e(crm_source_label($lead['source'])) ?></span>
+        <span><span class="text-muted">Came from</span> <?= e(crm_source_label($lead['source'])) ?><?= !empty($lead['platform']) && crm_platform_label($lead['platform']) !== crm_source_label($lead['source']) ? ' · ' . e(crm_platform_label($lead['platform'])) : '' ?></span>
+        <?php if (!empty($lead['campaign'])): ?><span><span class="text-muted">Campaign</span> <?= e((string) $lead['campaign']) ?></span><?php endif; ?>
+        <?php if (!empty($lead['data_type'])): ?><span class="pill <?= $lead['data_type'] === 'fresh' ? 'green' : 'gray' ?>"><?= e(crm_data_types()[$lead['data_type']] ?? '') ?></span><?php endif; ?>
+        <?php if (!empty($lead['qualification'])): ?><span class="pill <?= $lead['qualification'] === 'qualified' ? 'blue' : 'red' ?>"><?= e(crm_qualifications()[$lead['qualification']] ?? '') ?></span><?php endif; ?>
         <?php if (!empty($lead['project_id'])): ?><span><span class="text-muted">Project</span> <?= e((string) ($pnames[(int) $lead['project_id']] ?? '—')) ?></span><?php endif; ?>
         <?php if (!empty($lead['unit_type'])): ?><span><span class="text-muted">Wants</span> <?= e((string) $lead['unit_type']) ?></span><?php endif; ?>
         <?php if (!empty($lead['budget'])): ?><span><span class="text-muted">Budget</span> <?= e((string) $lead['budget']) ?></span><?php endif; ?>
         <?php if (!empty($lead['payment_pref'])): ?><span><span class="text-muted">Pays</span> <?= $lead['payment_pref'] === 'cash' ? 'Cash' : 'Instalments' ?></span><?php endif; ?>
-        <?php if ($lead['deal_value'] !== null): ?><span><span class="text-muted">Value</span> <?= e(number_format((float) $lead['deal_value'])) ?></span><?php endif; ?>
+        <?php if ($lead['deal_value'] !== null): ?><span><span class="text-muted">Value</span> <?= e(crm_money_fmt($lead['deal_value'], $cid)) ?></span><?php endif; ?>
+        <?php foreach ($cfields as $f_): $v_ = $custom[$f_['fkey']] ?? ''; if ($v_ === '' || !(int) $f_['active']) continue; ?><span><span class="text-muted"><?= e((string) $f_['label']) ?></span> <?= e(crm_custom_show($f_, $v_)) ?></span><?php endforeach; ?>
         <span><span class="text-muted">Added</span> <?= e(date('j M Y', strtotime((string) $lead['created_at']))) ?></span>
       </div>
     </div>
@@ -326,6 +355,18 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
               title="<?= $isCur ? 'Current stage' : 'Move to ' . e($s['name']) ?>"><?= e($s['name']) ?></button>
     <?php endforeach; ?>
   </form>
+  <?php if ($subList): ?>
+  <form method="post" class="lead-subs" aria-label="Sub-status">
+    <?= csrf_field() ?><input type="hidden" name="action" value="substatus"><input type="hidden" name="id" value="<?= $id ?>">
+    <span class="text-muted">Sub-status</span>
+    <?php if ($curStage && $curStage['kind'] === 'lost'): ?>
+      <span class="pill red"><?= e((string) ($lead['substatus'] ?: ($lead['lost_reason'] ?? '—'))) ?></span>
+    <?php else: foreach ($subList as $sl): $on = (string) ($lead['substatus'] ?? '') === $sl; ?>
+      <button name="substatus" value="<?= $on ? '' : e($sl) ?>" class="lead-sub <?= $on ? 'on' : '' ?>" <?= $canW ? '' : 'disabled' ?>
+              title="<?= $on ? 'Clear' : 'Set' ?>"><?= e($sl) ?></button>
+    <?php endforeach; endif; ?>
+  </form>
+  <?php endif; ?>
   <?php endif; ?>
 </div>
 
@@ -461,6 +502,10 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
         <div class="field" id="act-outcome-wrap"><span class="lbl">How did it go</span>
           <select name="outcome"><option value="">—</option>
             <?php foreach ($outcomes as $k => $label): ?><option value="<?= $k ?>"><?= e($label) ?></option><?php endforeach; ?></select></div>
+        <?php if ($subList && !($curStage && $curStage['kind'] === 'lost')): ?>
+        <div class="field"><span class="lbl">Sub-status</span><select name="substatus" id="act-sub">
+          <?php foreach (array_merge([''], $subList) as $sl): ?><option value="<?= e($sl) ?>" <?= (string) ($lead['substatus'] ?? '') === $sl ? 'selected' : '' ?>><?= $sl === '' ? '—' : e($sl) ?></option><?php endforeach; ?></select></div>
+        <?php endif; ?>
         <div class="field"><span class="lbl" id="act-body-lbl">Comment</span>
           <textarea name="body" rows="3" placeholder="What was said, what they want, objections…"></textarea></div>
         <details class="act-more" <?= $due ? '' : 'open' ?>>
@@ -475,6 +520,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
           <div class="field"><span class="lbl">Move to stage</span><select name="stage_id">
             <?php foreach ($stages as $s): ?><option value="<?= (int) $s['id'] ?>" <?= (int) $s['id'] === (int) $lead['stage_id'] ? 'selected' : '' ?>><?= e($s['name']) ?><?= (int) $s['id'] === (int) $lead['stage_id'] ? ' (current)' : '' ?></option><?php endforeach; ?>
           </select></div>
+          <div class="field" id="act-sub-new" hidden><span class="lbl">Sub-status in the new stage</span><select name="substatus_new"></select></div>
           <div class="grid2" id="act-lost" hidden>
             <div class="field"><span class="lbl">Why was it lost?</span><select name="lost_reason"><option value="">Choose a reason…</option>
               <?php foreach ($reasons as $r): ?><option><?= e($r) ?></option><?php endforeach; ?></select></div>
@@ -534,6 +580,20 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
           <div class="field"><span class="lbl">Paying</span><select name="payment_pref"><option value="">—</option>
             <option value="cash" <?= ($lead['payment_pref'] ?? '') === 'cash' ? 'selected' : '' ?>>Cash</option>
             <option value="installments" <?= ($lead['payment_pref'] ?? '') === 'installments' ? 'selected' : '' ?>>Instalments</option></select></div>
+          <div class="field"><span class="lbl">Qualification</span><select name="qualification"><option value="">Not decided</option>
+            <?php foreach (crm_qualifications() as $k => $l): ?><option value="<?= $k ?>" <?= ($lead['qualification'] ?? '') === $k ? 'selected' : '' ?>><?= e($l) ?></option><?php endforeach; ?></select></div>
+          <?php if ($isAdmin): ?>
+          <div class="field"><span class="lbl">Data</span><select name="data_type">
+            <?php foreach (crm_data_types() as $k => $l): ?><option value="<?= $k ?>" <?= ($lead['data_type'] ?? 'fresh') === $k ? 'selected' : '' ?>><?= e($l) ?></option><?php endforeach; ?></select></div>
+          <?php endif; ?>
+          <?php foreach ($cfields as $f_): if (!(int) $f_['active']) continue; $v_ = (string) ($custom[$f_['fkey']] ?? ''); $nm = 'cf[' . e((string) $f_['fkey']) . ']'; ?>
+          <div class="field"><span class="lbl"><?= e((string) $f_['label']) ?></span>
+            <?php if ($f_['type'] === 'list'): ?><select name="<?= $nm ?>"><option value="">—</option>
+              <?php foreach (array_unique(array_merge($f_['choices'], $v_ !== '' ? [$v_] : [])) as $ch): ?><option <?= $ch === $v_ ? 'selected' : '' ?>><?= e($ch) ?></option><?php endforeach; ?></select>
+            <?php elseif ($f_['type'] === 'date'): ?><input type="date" name="<?= $nm ?>" value="<?= e($v_) ?>">
+            <?php elseif ($f_['type'] === 'number'): ?><input name="<?= $nm ?>" inputmode="decimal" autocomplete="off" value="<?= e($v_) ?>">
+            <?php else: ?><input name="<?= $nm ?>" maxlength="255" value="<?= e($v_) ?>"><?php endif; ?></div>
+          <?php endforeach; ?>
           <div class="field"><span class="lbl">Owner</span>
             <?php if ($isAdmin): ?>
               <select name="owner"><option value="none" <?= $lead['owner_user_id'] === null ? 'selected' : '' ?>>Unassigned</option>
@@ -715,6 +775,18 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
       document.querySelector('#act-lost select').required = lost;
     };
     actStage.addEventListener('change', syncLost); syncLost();
+    /* Moving stage: the sub-status list is the new stage's, and the current one no longer applies. */
+    const SUBS = <?= json_encode($subsByStage, JSON_UNESCAPED_UNICODE) ?>;
+    const subWrap = document.getElementById('act-sub-new'), subCur = document.getElementById('act-sub');
+    const syncSub = () => {
+      const moving = !actStage.selectedOptions[0].text.includes('(current)');
+      const list = SUBS[actStage.value] || [];
+      if (subCur) subCur.closest('.field').hidden = moving;
+      subWrap.hidden = !moving || !list.length;
+      const sel = subWrap.querySelector('select');
+      sel.innerHTML = '<option value="">—</option>' + list.map(l => `<option>${l.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}</option>`).join('');
+    };
+    actStage.addEventListener('change', syncSub); syncSub();
   }
 
   /* Quick picks for a follow-up: the times salespeople actually choose. */
