@@ -23,7 +23,7 @@ function crm_staff_wa_kinds(): array
 {
     return ['assigned' => 'A new lead is given to them', 'sla' => 'A lead of theirs is waiting too long',
             'followup' => 'A follow-up is due', 'reclaimed' => 'A lead is taken from them',
-            'visit' => 'A site visit is coming up'];
+            'visit' => 'A site visit is coming up', 'daily' => 'The daily report, every evening (managers)'];
 }
 
 /**
@@ -53,6 +53,7 @@ function crm_notice_text(array $n): array
         'resubmit'  => $who . ' came in again — a good moment to call',
         'stale'     => (int) ($d['n'] ?? 1) . ' lead' . ((int) ($d['n'] ?? 1) === 1 ? ' has' : 's have') . ' had no activity for ' . (int) ($d['days'] ?? 0) . ' days',
         'digest'    => crm_digest_words($d),
+        'daily'     => (string) ($d['text'] ?? 'The daily report is ready'),
         'request'   => ($d['by'] ?? 'Someone') . ' asks to ' . (($d['what'] ?? '') === 'create' ? 'add a new lead' . (!empty($d['name']) ? ': ' . $d['name'] : '') : 'delete ' . $who),
         'request_done' => 'A manager ' . (!empty($d['ok']) ? 'approved' : 'refused') . ' your request to ' . (($d['what'] ?? '') === 'create' ? 'add ' . ($d['name'] ?? 'a lead') : 'delete ' . $who)
                           . (!empty($d['answer']) ? ' — “' . $d['answer'] . '”' : ''),
@@ -61,6 +62,7 @@ function crm_notice_text(array $n): array
     };
     if ($n['kind'] === 'sla_team') $url = 'crm_team.php';
     if ($n['kind'] === 'request') $url = 'crm_manage.php#requests';
+    if ($n['kind'] === 'daily') $url = 'crm_reports.php?r=daily&period=custom&from=' . rawurlencode((string) ($d['day'] ?? '')) . '&to=' . rawurlencode((string) ($d['day'] ?? ''));
     if (in_array($n['kind'], ['stale', 'digest'], true)) $url = 'crm.php';
     if ($n['kind'] === 'visit' && !empty($d['visit'])) $url = 'crm_calendar.php?visit=' . (int) $d['visit'];
     return ['text' => $text, 'url' => $url, 'when' => (string) $n['created_at']];

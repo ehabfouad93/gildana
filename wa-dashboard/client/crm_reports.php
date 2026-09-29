@@ -18,8 +18,20 @@ $cat = crm_lib_catalog();
 if (!isset($_GET['r']) && isset($_GET['export']) && isset($cat[(string) $_GET['export']])) { $_GET['r'] = $_GET['export']; $_GET['export'] = 'csv'; }
 $key = (string) ($_GET['r'] ?? '');
 if ($key !== '' && !isset($cat[$key])) $key = '';
+// The daily report is about today unless another day is asked for.
+if ($key === 'daily' && !isset($_GET['period']) && empty($_GET['from'])) $_GET['period'] = 'today';
 $f = crm_lib_filters($_GET);
 
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'daily_settings' && is_client_admin()) {
+    verify_csrf();
+    $h = (string) ($_POST['hour'] ?? '');
+    $s = crm_settings($cid);
+    $kinds = array_filter(explode(',', (string) $s['staff_wa_kinds']));
+    $kinds = !empty($_POST['whatsapp']) ? array_values(array_unique(array_merge($kinds, ['daily']))) : array_values(array_diff($kinds, ['daily']));
+    crm_settings_set($cid, ['daily_hour' => $h === '' ? null : max(0, min(23, (int) $h)), 'staff_wa_kinds' => implode(',', $kinds)]);
+    flash($h === '' ? 'The daily report will not be sent.' : 'The daily report goes to managers every day at ' . sprintf('%02d:00', (int) $h) . '.');
+    redirect('crm_reports.php?r=daily');
+}
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'fav') {
     verify_csrf();
     $k = (string) ($_POST['key'] ?? '');
@@ -152,7 +164,8 @@ if (!$rep):
         <?php foreach ($rep['tiles'] as [$l, $v, $t]): ?><div class="crm-tile"><span class="lbl"><?= e($l) ?></span><span class="val"><?= e(crm_lib_fmt($v, $t, $cid)) ?></span></div><?php endforeach; ?>
       </div>
     <?php endif; ?>
-    <?php if ($rep['note']): ?><p class="rep-note text-muted"><?= e($rep['note']) ?></p><?php endif; ?>
+    <?php if ($rep['note']): ?><p class="rep-note text-muted"><?= e($rep['note']) ?>
+      <?php if (!empty($rep['list'])): ?> <a href="crm.php?<?= e(http_build_query(['view' => 'table'] + $rep['list'])) ?>">Open them in the leads list</a><?php endif; ?></p><?php endif; ?>
 
     <?php /* ── Chart: bars with the number on each; a legend when there are two series ── */
     if ($rep['chart'] && $rep['rows']):
@@ -182,17 +195,29 @@ if (!$rep):
         <thead><tr><?php foreach ($rep['cols'] as $k => [$l, $t]): ?><th class="<?= $t === 'text' ? '' : 'num' ?>"><?= e($l) ?></th><?php endforeach; ?></tr></thead>
         <tbody>
         <?php foreach (array_merge($rep['rows'], $rep['total'] ? [$rep['total']] : []) as $i => $r): $isTotal = $rep['total'] && $i === count($rep['rows']); ?>
-          <tr class="<?= $isTotal ? 'rep-total' : '' ?>">
+          <tr class="<?= $isTotal ? 'rep-total' : '' ?><?= !empty($r['_stage']) ? ' rep-group-row' : '' ?>">
             <?php foreach ($rep['cols'] as $k => [$l, $t]):
               $txt = crm_lib_fmt($r[$k] ?? null, $t, $cid);
               $dr = $rep['drill'] && $k !== 'label' && ($r[$k] ?? 0) ? ($rep['drill'])($r, $k) : null; ?>
-              <td class="<?= $t === 'text' ? '' : 'num' ?>"><?= $dr !== null ? '<a href="crm.php?' . e(http_build_query(['view' => 'table'] + $dr)) . '" title="Open these leads">' . e($txt) . '</a>' : e($txt) ?></td>
+              <td class="<?= $t === 'text' ? '' : 'num' ?>"><?php if ($k === 'label' && !empty($r['_href'])): ?><a href="<?= e($r['_href']) ?>"><?= e($txt) ?></a>
+                <?php elseif ($dr !== null): ?><a href="crm.php?<?= e(http_build_query(['view' => 'table'] + $dr)) ?>" title="Open these leads"><?= e($txt) ?></a>
+                <?php else: ?><?= e($txt) ?><?php endif; ?></td>
             <?php endforeach; ?>
           </tr>
         <?php endforeach; ?>
         </tbody>
       </table>
     </div></div>
+    <?php if ($key === 'daily' && is_client_admin()): $ds = crm_settings($cid); ?>
+      <form method="post" class="card rep-daily-set"><?= csrf_field() ?><input type="hidden" name="action" value="daily_settings">
+        <strong>Send this every evening</strong>
+        <label>to managers (and each team leader, their team) at <select name="hour"><option value="">— not sent —</option>
+          <?php for ($h = 16; $h <= 23; $h++): ?><option value="<?= $h ?>" <?= $ds['daily_hour'] !== null && (int) $ds['daily_hour'] === $h ? 'selected' : '' ?>><?= sprintf('%02d:00', $h) ?></option><?php endfor; ?></select></label>
+        <label class="mod-all" style="margin:0"><input type="checkbox" name="whatsapp" value="1" <?= in_array('daily', explode(',', (string) $ds['staff_wa_kinds']), true) ? 'checked' : '' ?>> also on WhatsApp</label>
+        <button class="btn btn-primary btn-sm">Save</button>
+        <span class="text-muted" style="font-size:12px">It arrives in the bell; on WhatsApp through the alerts set up in <a href="crm_rules.php#staff-wa">Assignment rules</a>.</span>
+      </form>
+    <?php endif; ?>
     <p class="text-muted rep-foot">Numbers with a link open the leads behind them. <?= e($CLIENT['name']) ?> · <?= e($periodWords) ?> · made <?= e(date('j M Y, H:i')) ?></p>
   <?php endif; ?>
 <?php endif; ?>

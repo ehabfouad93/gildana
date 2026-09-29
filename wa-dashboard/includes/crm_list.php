@@ -95,6 +95,11 @@ function crm_list_where(int $clientId, array $f): array
         if ($heat === 'cold') $w .= " AND c.score < 40 AND s.kind = 'open'";
         $st = $g('status');
         if ($st === 'not_contacted') $w .= " AND c.first_response_at IS NULL AND s.kind = 'open'";
+        if ($st === 'late') {
+            // Not contacted within the account's response time (an hour if it has none set).
+            $w .= " AND c.first_response_at IS NULL AND s.kind = 'open' AND c.assigned_at < NOW() - INTERVAL ? MINUTE";
+            $p[] = (int) (crm_settings($clientId)['first_contact_minutes'] ?? 0) ?: 60;
+        }
         if ($st === 'again')         $w .= " AND c.submissions > 1";
         if ($st === 'no_followup')   $w .= " AND c.next_followup_at IS NULL AND s.kind = 'open'";
     }

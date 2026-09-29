@@ -393,7 +393,7 @@ $chip = function (string $k, string $v) use ($stageMap, $people, $pnames, $teamN
         $k === 'dtype'    => crm_data_types()[$v] ?? $v,
         $k === 'qual'     => $v === 'none' ? 'Qualification not set' : (crm_qualifications()[$v] ?? $v),
         $k === 'heat'     => ucfirst($v) . ' leads',
-        $k === 'status'   => ['not_contacted' => 'Not contacted yet', 'no_followup' => 'No follow-up planned', 'again' => 'Came in more than once'][$v] ?? $v,
+        $k === 'status'   => ['late' => 'Not contacted in time', 'not_contacted' => 'Not contacted yet', 'no_followup' => 'No follow-up planned', 'again' => 'Came in more than once'][$v] ?? $v,
         $k === 'due'      => ['today' => 'Follow-up due today', 'overdue' => 'Overdue follow-ups', 'week' => 'Follow-up this week', 'none' => 'No follow-up'][$v] ?? $v,
         $k === 'added'    => ['today' => 'Added today', 'week' => 'Added this week', 'month' => 'Added in the last 30 days'][$v] ?? $v,
         $k === 'from'     => 'Added from ' . date('j M Y', strtotime($v)),

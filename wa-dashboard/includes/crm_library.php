@@ -102,6 +102,12 @@ function crm_lib_catalog(): array
         'activity'   => ['Team',           'What each person logged',     'Calls, WhatsApps, meetings, visits and comments per person.', 'crm_lib_activity'],
         'visits'     => ['Team',           'Site visits',                 'Booked, came, didn\'t come, and how many visitors bought.', 'crm_lib_visits'],
         'teams'      => ['Team',           'Leads vs sales by team',      'Each team\'s leads, sales and conversion.', 'crm_lib_split_team'],
+        'daily'      => ['Daily & delays', 'Daily report',                'Per salesperson, for a day: leads given, contacted, calls, visits, won.', 'crm_lib_daily'],
+        'delay'      => ['Daily & delays', 'Delays',                      'Right now: leads waiting too long, overdue follow-ups, visits nobody closed.', 'crm_lib_delay'],
+        'first_reply'=> ['Daily & delays', 'First response time',         'How fast each salesperson first answered new leads.', 'crm_lib_first_reply'],
+        'rotation'   => ['Daily & delays', 'Rotation',                    'Leads moved between people, and whether moving them helped.', 'crm_lib_rotation'],
+        'churn'      => ['Daily & delays', 'Good leads going cold',       'Warm and hot leads with nothing done for days — reassign or call today.', 'crm_lib_churn'],
+        'substatus'  => ['Sales & status', 'Stage × sub-status',          'Each stage broken down by what actually happened.', 'crm_lib_substatus'],
     ];
 }
 
@@ -320,6 +326,281 @@ function crm_lib_visits(int $cid, array $f): array
                        'show_rate' => ['Show rate', 'pct'], 'bought' => ['Visitors who bought', 'num'], 'sale_rate' => ['Visit → sale', 'pct']],
             'rows' => $rows, 'chart' => ['type' => 'pair', 'label' => 'label', 'series' => ['came' => 'Came', 'bought' => 'Bought']],
             'empty' => !$rows, 'note' => 'Visits planned in the period (cancelled ones left out).'];
+}
+
+/* ───────────────────────── daily & delays ───────────────────────── */
+
+/** People who own or handled leads in scope, id => name — so a report lists the team, zeros included. */
+function crm_lib_people(int $cid, array $f): array
+{
+    $ids = function_exists('crm_visible_owner_ids') ? crm_visible_owner_ids() : null;
+    $rows = db_all("SELECT id, COALESCE(NULLIF(name,''), email) name FROM users WHERE client_id=? AND role='client' AND status='active'
+                     AND client_role IN ('sales','admin') ORDER BY client_role='sales' DESC, name", [$cid]);
+    $out = [];
+    foreach ($rows as $u) {
+        if ($ids !== null && !in_array((int) $u['id'], $ids, true)) continue;
+        if (!empty($f['owner']) && (int) $f['owner'] !== (int) $u['id']) continue;
+        if (!empty($f['team']) && !in_array((int) $u['id'], crm_team_member_ids((int) $f['team']), true)) continue;
+        $out[(int) $u['id']] = (string) $u['name'];
+    }
+    return $out;
+}
+
+/**
+ * The day (or days) per salesperson — the report a manager reads every evening. Counts are of
+ * what HAPPENED in the period: leads given, first contacts, calls and their outcomes, visits
+ * people came to, deals closed — plus what is overdue right now.
+ */
+function crm_lib_daily(int $cid, array $f): array
+{
+    [$w, $p] = crm_report_where($cid, $f);
+    $from = $f['from'] . ' 00:00:00'; $to = $f['to'] . ' 23:59:59';
+    $people = crm_lib_people($cid, $f);
+    $rows = [];
+    foreach ($people as $uid => $name) $rows[$uid] = ['label' => $name, 'uid' => $uid, 'given' => 0, 'contacted' => 0, 'calls' => 0, 'answered' => 0,
+        'no_answer' => 0, 'whatsapp' => 0, 'meetings' => 0, 'visits' => 0, 'won' => 0, 'lost' => 0, 'overdue' => 0];
+    $add = function (array $list, string $col) use (&$rows) { foreach ($list as $r) if (isset($rows[(int) $r['uid']])) $rows[(int) $r['uid']][$col] = (int) $r['n']; };
+    $add(db_all("SELECT e.to_val uid, COUNT(DISTINCT e.contact_id) n FROM crm_events e JOIN contacts c ON c.id=e.contact_id
+                  WHERE e.kind='assigned' AND e.to_val IS NOT NULL AND e.created_at BETWEEN ? AND ? AND {$w} GROUP BY e.to_val", array_merge([$from, $to], $p)), 'given');
+    $add(db_all("SELECT c.owner_user_id uid, COUNT(*) n FROM contacts c WHERE c.first_response_at BETWEEN ? AND ? AND {$w} GROUP BY c.owner_user_id", array_merge([$from, $to], $p)), 'contacted');
+    if (db_has_column('crm_notes', 'kind')) {
+        foreach (db_all("SELECT n.user_id uid, SUM(n.kind='call') calls,
+                                SUM(n.outcome IN ('answered','interested','not_interested','booked','busy','sent_info')) answered,
+                                SUM(n.outcome='no_answer') no_answer, SUM(n.kind='whatsapp') whatsapp, SUM(n.kind='meeting') meetings
+                           FROM crm_notes n JOIN contacts c ON c.id=n.contact_id
+                          WHERE n.user_id IS NOT NULL AND n.created_at BETWEEN ? AND ? AND {$w} GROUP BY n.user_id", array_merge([$from, $to], $p)) as $r) {
+            if (!isset($rows[(int) $r['uid']])) continue;
+            foreach (['calls', 'answered', 'no_answer', 'whatsapp', 'meetings'] as $k) $rows[(int) $r['uid']][$k] = (int) $r[$k];
+        }
+    }
+    try {
+        $add(db_all("SELECT v.user_id uid, COUNT(*) n FROM crm_visits v JOIN contacts c ON c.id=v.contact_id
+                      WHERE v.status='done' AND v.starts_at BETWEEN ? AND ? AND {$w} GROUP BY v.user_id", array_merge([$from, $to], $p)), 'visits');
+    } catch (Throwable $e) {}
+    $kinds = crm_stage_kinds($cid);
+    foreach (['won', 'lost'] as $k) {
+        if (!$kinds[$k]) continue;
+        $ph = implode(',', array_fill(0, count($kinds[$k]), '?'));
+        $add(db_all("SELECT c.owner_user_id uid, COUNT(DISTINCT c.id) n FROM crm_events e JOIN contacts c ON c.id=e.contact_id
+                      WHERE e.kind='stage' AND e.to_val IN ($ph) AND c.stage_id IN ($ph) AND e.created_at BETWEEN ? AND ? AND {$w} GROUP BY c.owner_user_id",
+                    array_merge(array_map('strval', $kinds[$k]), $kinds[$k], [$from, $to], $p)), $k);
+    }
+    $add(db_all("SELECT c.owner_user_id uid, COUNT(*) n FROM contacts c JOIN crm_stages s ON s.id=c.stage_id
+                  WHERE s.kind='open' AND c.next_followup_at < NOW() AND {$w} GROUP BY c.owner_user_id", $p), 'overdue');
+    $rows = array_values($rows);
+    $cols = ['label' => ['Salesperson', 'text'], 'given' => ['Leads given', 'num'], 'contacted' => ['First contact', 'num'], 'calls' => ['Calls', 'num'],
+             'answered' => ['Answered', 'num'], 'no_answer' => ['No answer', 'num'], 'whatsapp' => ['WhatsApps', 'num'], 'meetings' => ['Meetings', 'num'],
+             'visits' => ['Came to a visit', 'num'], 'won' => ['Won', 'num'], 'lost' => ['Lost', 'num'], 'overdue' => ['Overdue now', 'num']];
+    $t = ['label' => 'Team'];
+    foreach (array_keys($cols) as $k) if ($k !== 'label') $t[$k] = array_sum(array_column($rows, $k));
+    return ['cols' => $cols, 'rows' => $rows, 'total' => $t,
+            'chart' => ['type' => 'pair', 'label' => 'label', 'series' => ['calls' => 'Calls', 'answered' => 'Answered']],
+            'drill' => fn($r, $c) => match ($c) {
+                'won', 'lost' => crm_lib_drill_closed(array_merge($f, ['owner' => (string) ($r['uid'] ?? $f['owner'])]), $c),
+                'overdue'     => array_filter(['owner' => (string) ($r['uid'] ?? ''), 'due' => 'overdue']),
+                default       => null,
+            },
+            'empty' => !$rows, 'note' => 'What happened ' . ($f['from'] === $f['to'] ? 'on ' . date('l j F', strtotime($f['from'])) : 'in the period') . '. "Overdue now" is as of this moment.'];
+}
+
+/** The daily report as a WhatsApp message: the team line, then each salesperson in one line. */
+function crm_lib_daily_text(int $cid, string $day, ?array $scope = null): string
+{
+    $f = ['from' => $day, 'to' => $day, 'owner' => '', 'team' => '', 'source' => '', 'project' => '', 'dtype' => '', 'platform' => '', 'campaign' => '', 'qual' => ''];
+    $r = crm_lib_daily($cid, $f);
+    $t = $r['total'];
+    $lines = ['Daily report — ' . date('D j M', strtotime($day)),
+              'Team: ' . $t['given'] . ' new · ' . $t['contacted'] . ' contacted · ' . $t['calls'] . ' calls (' . $t['answered'] . ' answered) · '
+              . $t['visits'] . ' visits · ' . $t['won'] . ' won · ' . $t['overdue'] . ' overdue'];
+    foreach ($r['rows'] as $x) {
+        if ($scope !== null && !in_array((int) $x['uid'], $scope, true)) continue;
+        $lines[] = '• ' . $x['label'] . ': ' . $x['given'] . ' new, ' . $x['calls'] . ' calls, ' . $x['visits'] . ' visits, ' . $x['won'] . ' won'
+                 . ($x['overdue'] ? ', ' . $x['overdue'] . ' overdue' : '');
+    }
+    return implode("\n", $lines);
+}
+
+/**
+ * Evening pass: at the account's hour, the day's report to each manager (in the app, and on
+ * WhatsApp if the account sends "daily" alerts). Once a day.
+ */
+function crm_lib_daily_tick(): int
+{
+    if (!db_has_column('crm_settings', 'daily_hour')) return 0;
+    $sent = 0;
+    foreach (db_all("SELECT s.client_id, s.daily_hour FROM crm_settings s JOIN clients c ON c.id=s.client_id
+                      WHERE s.daily_hour IS NOT NULL AND c.status='active' AND (s.daily_sent_on IS NULL OR s.daily_sent_on < CURDATE())") as $s) {
+        if ((int) date('G') < (int) $s['daily_hour']) continue;
+        $cid = (int) $s['client_id'];
+        if (!db_run("UPDATE crm_settings SET daily_sent_on=CURDATE() WHERE client_id=? AND (daily_sent_on IS NULL OR daily_sent_on < CURDATE())", [$cid])) continue;
+        $client = db_row("SELECT * FROM clients WHERE id=?", [$cid]);
+        $GLOBALS['CLIENT'] = $client; $GLOBALS['PERM_USER'] = ['id' => 0, 'role' => 'admin'];    // the whole team, as the system
+        $text = crm_lib_daily_text($cid, date('Y-m-d'));
+        foreach (crm_admin_ids($cid) as $a) { crm_notice($cid, $a, 'daily', null, ['day' => date('Y-m-d'), 'text' => $text]); $sent++; }
+        // Team leaders get their own team's lines.
+        foreach (crm_teams($cid) as $t) {
+            $lead = (int) ($t['leader_user_id'] ?? 0);
+            if (!$lead || in_array($lead, crm_admin_ids($cid), true)) continue;
+            crm_notice($cid, $lead, 'daily', null, ['day' => date('Y-m-d'), 'text' => crm_lib_daily_text($cid, date('Y-m-d'), crm_team_member_ids((int) $t['id']))]);
+            $sent++;
+        }
+        unset($GLOBALS['CLIENT'], $GLOBALS['PERM_USER']);
+    }
+    return $sent;
+}
+
+/** What is late right now, per salesperson. Not a period report: it is the state of today. */
+function crm_lib_delay(int $cid, array $f): array
+{
+    $f2 = $f; $f2['from'] = '2000-01-01'; $f2['to'] = date('Y-m-d');
+    [$w, $p] = crm_report_where($cid, $f2);
+    $s = crm_settings($cid);
+    $late = (int) ($s['first_contact_minutes'] ?? 0) ?: 60;
+    $rows = [];
+    foreach (crm_lib_people($cid, $f) as $uid => $name) $rows[$uid] = ['label' => $name, 'uid' => $uid, 'late' => 0, 'overdue' => 0, 'oldest' => null, 'avg' => null, 'missed' => 0];
+    foreach (db_all("SELECT c.owner_user_id uid, COUNT(*) n FROM contacts c JOIN crm_stages s ON s.id=c.stage_id
+                      WHERE s.kind='open' AND c.first_response_at IS NULL AND c.assigned_at < NOW() - INTERVAL ? MINUTE AND {$w} GROUP BY c.owner_user_id",
+                    array_merge([$late], $p)) as $r) if (isset($rows[(int) $r['uid']])) $rows[(int) $r['uid']]['late'] = (int) $r['n'];
+    foreach (db_all("SELECT c.owner_user_id uid, COUNT(*) n, MAX(TIMESTAMPDIFF(HOUR, c.next_followup_at, NOW())) oldest, AVG(TIMESTAMPDIFF(HOUR, c.next_followup_at, NOW())) av
+                       FROM contacts c JOIN crm_stages s ON s.id=c.stage_id WHERE s.kind='open' AND c.next_followup_at < NOW() AND {$w} GROUP BY c.owner_user_id", $p) as $r) {
+        if (!isset($rows[(int) $r['uid']])) continue;
+        $rows[(int) $r['uid']]['overdue'] = (int) $r['n'];
+        $rows[(int) $r['uid']]['oldest'] = $r['oldest'] !== null ? (float) $r['oldest'] / 24 : null;
+        $rows[(int) $r['uid']]['avg'] = $r['av'] !== null ? (float) $r['av'] / 24 : null;
+    }
+    try {
+        foreach (db_all("SELECT v.user_id uid, COUNT(*) n FROM crm_visits v JOIN contacts c ON c.id=v.contact_id
+                          WHERE v.status='scheduled' AND v.starts_at < NOW() - INTERVAL 3 HOUR AND {$w} GROUP BY v.user_id", $p) as $r)
+            if (isset($rows[(int) $r['uid']])) $rows[(int) $r['uid']]['missed'] = (int) $r['n'];
+    } catch (Throwable $e) {}
+    $rows = array_values($rows);
+    usort($rows, fn($a, $b) => [$b['late'] + $b['overdue'], $b['missed']] <=> [$a['late'] + $a['overdue'], $a['missed']]);
+    return ['cols' => ['label' => ['Salesperson', 'text'], 'late' => ['Not contacted in time', 'num'], 'overdue' => ['Overdue follow-ups', 'num'],
+                       'oldest' => ['Oldest overdue', 'days'], 'avg' => ['Typical lateness', 'days'], 'missed' => ['Visits with no outcome', 'num']],
+            'rows' => $rows,
+            'total' => ['label' => 'Team', 'late' => array_sum(array_column($rows, 'late')), 'overdue' => array_sum(array_column($rows, 'overdue')),
+                        'oldest' => ($o = array_filter(array_column($rows, 'oldest'), fn($x) => $x !== null)) ? max($o) : null, 'avg' => null,
+                        'missed' => array_sum(array_column($rows, 'missed'))],
+            'chart' => ['type' => 'pair', 'label' => 'label', 'series' => ['late' => 'Not contacted in time', 'overdue' => 'Overdue follow-ups']],
+            'drill' => fn($r, $c) => match ($c) {
+                'late'    => array_filter(['owner' => (string) ($r['uid'] ?? ''), 'status' => 'late']),
+                'overdue' => array_filter(['owner' => (string) ($r['uid'] ?? ''), 'due' => 'overdue']),
+                default   => null,
+            },
+            'empty' => !$rows, 'note' => 'As of now, whatever the period. "Not contacted in time" means given more than ' . $late . ' minutes ago with no call or message yet.'];
+}
+
+/** How fast new leads were first answered, in buckets, per salesperson. */
+function crm_lib_first_reply(int $cid, array $f): array
+{
+    [$w, $p] = crm_report_where($cid, $f);
+    $rows = [];
+    foreach (crm_lib_people($cid, $f) as $uid => $name) $rows[$uid] = ['label' => $name, 'uid' => $uid, 'b5' => 0, 'b60' => 0, 'b1d' => 0, 'bmore' => 0, 'none' => 0, 'all' => 0, 'secs' => []];
+    foreach (db_all("SELECT c.owner_user_id uid, TIMESTAMPDIFF(SECOND, c.assigned_at, c.first_response_at) s
+                       FROM contacts c WHERE c.assigned_at BETWEEN ? AND ? AND c.owner_user_id IS NOT NULL AND {$w}",
+                    array_merge([$f['from'] . ' 00:00:00', $f['to'] . ' 23:59:59'], $p)) as $r) {
+        $u = (int) $r['uid']; if (!isset($rows[$u])) continue;
+        $rows[$u]['all']++;
+        if ($r['s'] === null || (int) $r['s'] < 0) { $rows[$u]['none']++; continue; }
+        $sec = (int) $r['s']; $rows[$u]['secs'][] = $sec;
+        $rows[$u][$sec < 300 ? 'b5' : ($sec < 3600 ? 'b60' : ($sec < 86400 ? 'b1d' : 'bmore'))]++;
+    }
+    $all = [];
+    foreach ($rows as &$r) { $all = array_merge($all, $r['secs']); $r['median'] = crm_median($r['secs']); $r['fast'] = $r['all'] ? round(100 * $r['b5'] / $r['all']) : null; unset($r['secs']); }
+    unset($r);
+    $rows = array_values(array_filter($rows, fn($r) => $r['all'] > 0));
+    $t = ['label' => 'Team', 'median' => crm_median($all)];
+    foreach (['b5', 'b60', 'b1d', 'bmore', 'none', 'all'] as $k) $t[$k] = array_sum(array_column($rows, $k));
+    $t['fast'] = $t['all'] ? round(100 * $t['b5'] / $t['all']) : null;
+    return ['cols' => ['label' => ['Salesperson', 'text'], 'all' => ['Leads given', 'num'], 'b5' => ['Under 5 min', 'num'], 'b60' => ['5–60 min', 'num'],
+                       'b1d' => ['1–24 hours', 'num'], 'bmore' => ['Over a day', 'num'], 'none' => ['Not yet', 'num'], 'fast' => ['Under 5 min', 'pct'],
+                       'median' => ['Typical', 'dur']],
+            'rows' => $rows, 'total' => $t, 'chart' => ['type' => 'pair', 'label' => 'label', 'series' => ['b5' => 'Under 5 min', 'none' => 'Not yet']],
+            // No drill-down: the leads list has no "given between these dates" filter, and a link must open exactly the number shown.
+            'empty' => !$rows, 'note' => 'Leads given in the period: time from being given to the first call or message by a person. '
+                     . 'For the leads waiting right now, see the Delays report.'];
+}
+
+/** Leads moved between people in the period: how often, from whom, to whom — and did it help. */
+function crm_lib_rotation(int $cid, array $f): array
+{
+    [$w, $p] = crm_report_where($cid, $f);
+    $from = $f['from'] . ' 00:00:00'; $to = $f['to'] . ' 23:59:59';
+    $kinds = crm_stage_kinds($cid); $won = $kinds['won'] ?: [0];
+    $rows = [];
+    foreach (crm_lib_people($cid, $f) as $uid => $name) $rows[$uid] = ['label' => $name, 'uid' => $uid, 'taken' => 0, 'given' => 0, 'given_won' => 0];
+    $moves = db_all("SELECT e.contact_id, e.from_val, e.to_val, c.stage_id FROM crm_events e JOIN contacts c ON c.id=e.contact_id
+                      WHERE e.kind IN ('assigned','reclaimed') AND e.from_val IS NOT NULL AND e.to_val IS NOT NULL AND e.created_at BETWEEN ? AND ? AND {$w}",
+                    array_merge([$from, $to], $p));
+    $times = [];
+    foreach ($moves as $m) {
+        $times[(int) $m['contact_id']] = ($times[(int) $m['contact_id']] ?? 0) + 1;
+        if (isset($rows[(int) $m['from_val']])) $rows[(int) $m['from_val']]['taken']++;
+        if (isset($rows[(int) $m['to_val']])) { $rows[(int) $m['to_val']]['given']++; if (in_array((int) $m['stage_id'], $won, true)) $rows[(int) $m['to_val']]['given_won']++; }
+    }
+    $once = count(array_filter($times, fn($n) => $n === 1)); $twice = count(array_filter($times, fn($n) => $n === 2)); $more = count(array_filter($times, fn($n) => $n >= 3));
+    $movedWon = count(array_filter(array_keys($times), fn($id) => in_array((int) db_val("SELECT stage_id FROM contacts WHERE id=?", [$id]), $won, true)));
+    // Leads that arrived in the period and were never moved: the comparison.
+    $ph = implode(',', array_fill(0, count($won), '?'));
+    $stay = db_row("SELECT COUNT(*) n, SUM(c.stage_id IN ($ph)) w FROM contacts c WHERE c.crm_added_at BETWEEN ? AND ? AND {$w}
+                     AND NOT EXISTS (SELECT 1 FROM crm_events e WHERE e.contact_id=c.id AND e.kind IN ('assigned','reclaimed') AND e.from_val IS NOT NULL)",
+                   array_merge($won, [$from, $to], $p));
+    $rows = array_values(array_filter($rows, fn($r) => $r['taken'] || $r['given']));
+    foreach ($rows as &$r) $r['rate'] = $r['given'] ? round(100 * $r['given_won'] / $r['given'], 1) : null;
+    unset($r);
+    return ['tiles' => [['Moved once', $once, 'num'], ['Moved twice', $twice, 'num'], ['Moved 3+ times', $more, 'num'],
+                        ['Won after moving', count($times) ? round(100 * $movedWon / count($times), 1) : null, 'pct'],
+                        ['Won, never moved', (int) ($stay['n'] ?? 0) ? round(100 * (int) $stay['w'] / (int) $stay['n'], 1) : null, 'pct']],
+            'cols' => ['label' => ['Salesperson', 'text'], 'taken' => ['Taken from them', 'num'], 'given' => ['Passed to them', 'num'],
+                       'given_won' => ['Of those, won', 'num'], 'rate' => ['Won ÷ passed', 'pct']],
+            'rows' => $rows, 'chart' => ['type' => 'pair', 'label' => 'label', 'series' => ['taken' => 'Taken from them', 'given' => 'Passed to them']],
+            'empty' => !$times, 'note' => 'Moves in the period, by hand or by the response-time rule. A lead passed around many times rarely sells — compare the two percentages above.'];
+}
+
+/** Leads worth money going quiet: hot or warm, open, nothing for N days. One row per lead. */
+function crm_lib_churn(int $cid, array $f): array
+{
+    $days = 5;
+    $f2 = $f; $f2['from'] = '2000-01-01'; $f2['to'] = date('Y-m-d');
+    [$w, $p] = crm_report_where($cid, $f2);
+    $rows = db_all("SELECT c.id, c.name, c.phone_e164, c.score, s.name stage, COALESCE(NULLIF(u.name,''), u.email) owner, c.next_followup_at,
+                           DATEDIFF(NOW(), GREATEST(COALESCE(c.last_touch_at,'2000-01-01'), COALESCE(c.last_inbound_at,'2000-01-01'), COALESCE(c.crm_added_at, c.created_at))) quiet
+                      FROM contacts c JOIN crm_stages s ON s.id=c.stage_id LEFT JOIN users u ON u.id=c.owner_user_id
+                     WHERE s.kind='open' AND c.score >= 55 AND {$w}
+                    HAVING quiet >= ? ORDER BY c.score DESC, quiet DESC LIMIT 100", array_merge($p, [$days]));
+    $out = array_map(fn($r) => ['label' => (string) ($r['name'] ?: '#' . crm_code((int) $r['id'])), '_href' => 'crm_lead.php?id=' . (int) $r['id'],
+                                'owner' => (string) ($r['owner'] ?? 'Unassigned'), 'stage' => (string) $r['stage'], 'score' => (int) $r['score'],
+                                'quiet' => (int) $r['quiet'], 'next' => $r['next_followup_at'] ? date('j M', strtotime((string) $r['next_followup_at'])) : 'None'], $rows);
+    return ['tiles' => [['Going cold', count($out), 'num'], ['Hot among them', count(array_filter($out, fn($r) => $r['score'] >= 70)), 'num']],
+            'cols' => ['label' => ['Lead', 'text'], 'owner' => ['Owner', 'text'], 'stage' => ['Stage', 'text'], 'score' => ['Score', 'num'],
+                       'quiet' => ['Days with nothing', 'num'], 'next' => ['Next follow-up', 'text']],
+            'rows' => $out, 'drill' => null, 'empty' => !$out,
+            'note' => 'Open leads scoring 55+ with no call, message or activity for ' . $days . ' days or more. Open them in the list to reassign: '
+                    . 'Leads → Filters → "No activity for 5 days" and "Hot only".', 'list' => ['idle' => (string) $days, 'state' => 'open', 'sort' => 'hot']];
+}
+
+/** Stage by sub-status, for the leads that arrived in the period, as they stand now. */
+function crm_lib_substatus(int $cid, array $f): array
+{
+    [$w, $p] = crm_report_where($cid, $f);
+    $counts = db_all("SELECT c.stage_id, COALESCE(NULLIF(c.substatus,''), '') sub, COUNT(*) n FROM contacts c
+                       WHERE c.crm_added_at BETWEEN ? AND ? AND c.stage_id IS NOT NULL AND {$w} GROUP BY c.stage_id, sub",
+                     array_merge([$f['from'] . ' 00:00:00', $f['to'] . ' 23:59:59'], $p));
+    $by = [];
+    foreach ($counts as $c) $by[(int) $c['stage_id']][(string) $c['sub']] = (int) $c['n'];
+    $rows = [];
+    foreach (crm_stages($cid) as $s) {
+        $sid = (int) $s['id']; $tot = array_sum($by[$sid] ?? []);
+        if (!$tot) continue;
+        $rows[] = ['label' => $s['name'], 'sub' => 'All', 'n' => $tot, 'share' => 100, 'stage_id' => $sid, '_stage' => true];
+        arsort($by[$sid]);
+        foreach ($by[$sid] as $sub => $n) $rows[] = ['label' => '', 'sub' => $sub === '' ? 'No sub-status' : $sub, 'subkey' => $sub === '' ? '__none' : $sub,
+                                                      'n' => $n, 'share' => round(100 * $n / $tot, 1), 'stage_id' => $sid];
+    }
+    return ['cols' => ['label' => ['Stage', 'text'], 'sub' => ['Sub-status', 'text'], 'n' => ['Leads', 'num'], 'share' => ['Of the stage', 'pct']],
+            'rows' => $rows,
+            'drill' => fn($r, $c) => $c === 'n' ? crm_lib_drill_base($f) + ['stage' => (string) $r['stage_id']] + (!empty($r['subkey']) ? ['sub' => $r['subkey']] : []) : null,
+            'empty' => !$rows, 'note' => 'Leads that arrived in the period, by the stage and sub-status they are in today.'];
 }
 
 /* ───────────────────────── favourites ───────────────────────── */

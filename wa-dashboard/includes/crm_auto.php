@@ -36,6 +36,9 @@ function crm_auto_tick(): array
     }
     $sum['rescored'] = crm_auto_rescore();
     $sum['bin_purged'] = function_exists('crm_bin_purge') ? crm_bin_purge() : 0;
+    // The evening report to managers — before the WhatsApp pass below, so it goes out in this pass.
+    require_once __DIR__ . '/crm_library.php';
+    $sum['daily'] = crm_lib_daily_tick();
     // Sequences decide what is due, then the queue sends it (stage messages, sequence steps, visits).
     $sum['visits']     = crm_visits_tick();
     $sum['seq_queued'] = crm_seq_tick();

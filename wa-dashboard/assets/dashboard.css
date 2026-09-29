@@ -1301,3 +1301,6 @@ input[type="file"] { max-width: 100%; min-width: 0; }
   .rep-bar-line .rep-bar { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .sw { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
+.rep-table .rep-group-row td { font-weight: 700; background: var(--bg); }
+.rep-daily-set { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 13px; margin-top: 14px; }
+.rep-daily-set select { width: auto; display: inline-block; }
