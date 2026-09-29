@@ -14,6 +14,7 @@ require_once __DIR__ . '/permissions.php';
 require_once __DIR__ . '/crm_manager.php';     // rules, scoring, notices, merge — the manager's side
 require_once __DIR__ . '/crm_notify.php';      // what those notices say, in the app and on WhatsApp
 require_once __DIR__ . '/crm_fields.php';      // code, sub-status, fresh/cold, campaign, teams, the account's own fields
+require_once __DIR__ . '/crm_list.php';        // the leads list: filters, columns, views, export
 
 /** The pipeline a client starts with. Real-estate shaped, because that is who uses this. */
 function crm_default_stages(): array
@@ -380,58 +381,24 @@ function crm_can_see(array $contact): bool
     return in_array((int) ($contact['owner_user_id'] ?? 0), $ids, true);
 }
 
-/** Every lead for a client, scoped to the viewer, with what the board and table need. */
+/** Every lead for a client, scoped to the viewer, with what the board needs (filters: crm_list_where). */
 function crm_leads(int $clientId, array $f = []): array
 {
-    $sql = "SELECT c.*, s.name AS stage_name, s.kind AS stage_kind,
-                   COALESCE(NULLIF(u.name,''), u.email) AS owner_name,
-                   (SELECT m.body FROM messages m WHERE m.contact_id=c.id ORDER BY m.id DESC LIMIT 1) AS last_body,
-                   (SELECT m.created_at FROM messages m WHERE m.contact_id=c.id ORDER BY m.id DESC LIMIT 1) AS last_at
-              FROM contacts c
-              JOIN crm_stages s ON s.id = c.stage_id
-              LEFT JOIN users u ON u.id = c.owner_user_id
-             WHERE c.client_id = ? AND c.stage_id IS NOT NULL";
-    $p = [$clientId];
-    [$scope, $sp] = crm_scope('c');
-    $sql .= $scope; $p = array_merge($p, $sp);
-
-    if (!empty($f['stage']))  { $sql .= " AND c.stage_id = ?";  $p[] = (int) $f['stage']; }
-    if (!empty($f['source'])) { $sql .= " AND c.source = ?";    $p[] = (string) $f['source']; }
-    if (($f['owner'] ?? '') === 'none')      { $sql .= " AND c.owner_user_id IS NULL"; }
-    elseif (!empty($f['owner']))             { $sql .= " AND c.owner_user_id = ?"; $p[] = (int) $f['owner']; }
-    if (($f['due'] ?? '') === 'today')       { $sql .= " AND DATE(c.next_followup_at) = CURDATE()"; }
-    elseif (($f['due'] ?? '') === 'overdue') { $sql .= " AND c.next_followup_at < NOW() AND s.kind = 'open'"; }
-    if (($q = trim((string) ($f['q'] ?? ''))) !== '') {
-        if (($code = crm_code_from_search($q)) !== '' && db_has_column('contacts', 'code')) {
-            $sql .= " AND (c.code = ? OR c.name LIKE ? OR c.phone_e164 LIKE ?)";
-            array_push($p, $code, "%$q%", "%$q%");
-        } else {
-            $digits = preg_replace('/\D+/', '', $q);
-            $sql .= " AND (c.name LIKE ? OR c.phone_e164 LIKE ? OR c.email LIKE ?" . (strlen($digits) >= 6 ? " OR c.phone_e164 LIKE ?" : "") . ")";
-            array_push($p, "%$q%", "%$q%", "%$q%");
-            // 010 1234 5678 typed the local way still finds +20 10 1234 5678.
-            if (strlen($digits) >= 6) $p[] = '%' . ltrim($digits, '0') . '%';
-        }
-    }
-    $m039 = db_has_column('contacts', 'score');
-    if ($m039) {
-        if (!empty($f['project'])) { $sql .= " AND c.project_id = ?"; $p[] = (int) $f['project']; }
-        $heat = (string) ($f['heat'] ?? '');
-        if ($heat === 'hot')  $sql .= " AND c.score >= 70";
-        if ($heat === 'warm') $sql .= " AND c.score >= 40 AND c.score < 70";
-        if ($heat === 'cold') $sql .= " AND c.score < 40";
-        $st = (string) ($f['status'] ?? '');
-        if ($st === 'not_contacted') $sql .= " AND c.first_response_at IS NULL AND s.kind = 'open'";
-        if ($st === 'again')         $sql .= " AND c.submissions > 1";
-        if ($st === 'no_followup')   $sql .= " AND c.next_followup_at IS NULL AND s.kind = 'open'";
-    }
+    [$w, $p] = crm_list_where($clientId, $f);
     $order = [
-        'hot'    => $m039 ? "c.score IS NULL, c.score DESC, c.id DESC" : "c.id DESC",
+        'hot'    => db_has_column('contacts', 'score') ? "c.score IS NULL, c.score DESC, c.id DESC" : "c.id DESC",
         'newest' => "c.id DESC",
         'value'  => "c.deal_value IS NULL, c.deal_value DESC, c.id DESC",
     ][(string) ($f['sort'] ?? '')] ?? "c.next_followup_at IS NULL, c.next_followup_at, c.id DESC";
-    $sql .= " ORDER BY $order LIMIT 2000";
-    return db_all($sql, $p);
+    return db_all(
+        "SELECT c.*, s.name AS stage_name, s.kind AS stage_kind,
+                COALESCE(NULLIF(u.name,''), u.email) AS owner_name,
+                (SELECT m.body FROM messages m WHERE m.client_id=c.client_id AND m.contact_id=c.id ORDER BY m.id DESC LIMIT 1) AS last_body,
+                (SELECT m.created_at FROM messages m WHERE m.client_id=c.client_id AND m.contact_id=c.id ORDER BY m.id DESC LIMIT 1) AS last_at
+           FROM contacts c
+           JOIN crm_stages s ON s.id = c.stage_id
+           LEFT JOIN users u ON u.id = c.owner_user_id
+          WHERE $w ORDER BY $order LIMIT 2000", $p);
 }
 
 /** Where leads come from, in words a client recognises. */

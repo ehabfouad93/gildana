@@ -221,6 +221,20 @@ function is_sales(): bool
     return $u && ($u['role'] ?? '') !== 'admin' && user_client_role($u) === 'sales';
 }
 
+/**
+ * May this person export leads to Excel? A phone list is the most valuable thing a sales team
+ * holds and the easiest to walk out with, so only an Admin — or someone an Admin ticked
+ * "Export leads" for on the Team page — may.
+ */
+function can_crm_export(): bool
+{
+    [$u] = perm_context();
+    if (!$u) return false;
+    if (($u['role'] ?? '') === 'admin' || user_client_role($u) === 'admin') return true;
+    $raw = $u['crm_pages'] ?? null;
+    return $raw !== null && in_array('export', array_map('trim', explode(',', (string) $raw)), true) && can_use('crm');
+}
+
 function is_client_admin(): bool
 {
     [$u] = perm_context();

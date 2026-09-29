@@ -92,19 +92,28 @@ function inbox_threads(int $clientId, string $q = '', int $limit = 200): array
     [$scope, $sp] = crm_scope('c');
     $search .= $scope; $params = array_merge($params, $sp);
     $limit = max(1, min(500, $limit));
+    /* Newest conversations first: the last message id per contact comes straight off the
+       (client_id, contact_id, id) index, the page of them is picked, and only then are the
+       unread counts worked out — for those rows alone. Counting unread for every contact before
+       sorting took minutes on an account with 20,000 conversations. */
+    $params = array_merge([$clientId], $params);
     $rows = db_all(
-        "SELECT c.id contact_id, c.phone_e164, c.name, c.last_inbound_at,
-                m.body last_body, m.direction last_dir, m.type last_type, m.created_at last_at,
+        "SELECT t.*, m.body last_body, m.direction last_dir, m.type last_type, m.created_at last_at,
                 (SELECT COUNT(*) FROM messages mi
-                   WHERE mi.contact_id=c.id AND mi.direction='in'
-                     AND mi.created_at > COALESCE(c.inbox_read_at,'2000-01-01')) unread
-           FROM contacts c
-           JOIN messages m ON m.id = (SELECT id FROM messages m2 WHERE m2.contact_id=c.id ORDER BY id DESC LIMIT 1)
-          WHERE c.client_id=?{$search}
-          ORDER BY m.id DESC
-          LIMIT {$limit}",
-        $params
+                   WHERE mi.client_id=? AND mi.contact_id=t.contact_id AND mi.direction='in'
+                     AND mi.created_at > COALESCE(t.inbox_read_at,'2000-01-01')) unread
+           FROM (SELECT c.id contact_id, c.phone_e164, c.name, c.last_inbound_at, c.inbox_read_at, lm.mid
+                   FROM (SELECT contact_id, MAX(id) mid FROM messages WHERE client_id=? GROUP BY contact_id) lm
+                   JOIN contacts c ON c.id = lm.contact_id
+                  WHERE c.client_id=?{$search}
+                  ORDER BY lm.mid DESC
+                  LIMIT {$limit}) t
+           JOIN messages m ON m.id = t.mid
+          ORDER BY t.mid DESC",
+        array_merge([$clientId], $params)
     );
+    foreach ($rows as &$r) unset($r['inbox_read_at'], $r['mid']);
+    unset($r);
     // "[audio]" in the list reads like a fault; say what it is.
     $label = ['[audio]' => '🎤 Voice note', '[voice]' => '🎤 Voice note', '[image]' => '📷 Photo', '[video]' => '🎥 Video',
               '[document]' => '📎 File', '[sticker]' => 'Sticker'];

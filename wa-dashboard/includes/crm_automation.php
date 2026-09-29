@@ -311,7 +311,7 @@ function crm_seq_tick(): int
         foreach (db_all("SELECT c.id FROM contacts c JOIN crm_stages s ON s.id=c.stage_id
                           WHERE c.client_id=? AND s.kind='open' AND c.opt_in_status<>'out'
                             AND COALESCE(c.last_touch_at, c.crm_added_at, c.created_at) < NOW() - INTERVAL ? DAY
-                            AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.contact_id=c.id AND m.direction='in' AND m.created_at > NOW() - INTERVAL ? DAY)
+                            AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.client_id=c.client_id AND m.contact_id=c.id AND m.direction='in' AND m.created_at > NOW() - INTERVAL ? DAY)
                             AND NOT EXISTS (SELECT 1 FROM crm_seq_runs r WHERE r.sequence_id=? AND r.contact_id=c.id)
                           LIMIT 200", [(int) $seq['client_id'], (int) $seq['trigger_n'], (int) $seq['trigger_n'], (int) $seq['id']]) as $c) {
             crm_seq_enroll($client, $seq, (int) $c['id']);
