@@ -12,6 +12,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/permissions.php';
 require_once __DIR__ . '/crm_manager.php';     // rules, scoring, notices, merge — the manager's side
+require_once __DIR__ . '/crm_notify.php';      // what those notices say, in the app and on WhatsApp
 
 /** The pipeline a client starts with. Real-estate shaped, because that is who uses this. */
 function crm_default_stages(): array
@@ -165,7 +166,8 @@ function crm_assign(array $client, int $contactId, ?int $userId, ?int $by = null
     }
     crm_log($cid, $contactId, 'assigned', $from !== null ? (string) $from : null,
             $userId !== null ? (string) $userId : null, $by);
-    if ($userId !== null && $userId !== $by) crm_notify_user($userId, $cid);
+    // The new owner hears about it: the bell in the app, their phone, and WhatsApp if the account sends those.
+    if ($userId !== null && $userId !== $by) crm_notice($cid, $userId, 'assigned', $contactId);
 }
 
 function crm_set_stage(array $client, int $contactId, int $stageId, ?int $by = null,

@@ -291,7 +291,49 @@ $barH   = max(58, $logoH + 22);
       $showBell   = !$clientSide || !function_exists('can_use') || can_use('inbox');
       $meHref     = $clientSide ? 'profile.php' : 'settings.php';
     ?>
-    <?php if ($showBell): ?>
+    <?php
+      /* On the client side the bell also carries the CRM's notices — a lead given to you, a
+         follow-up due, a visit coming up — so it shows for anyone with the Inbox OR the CRM, and
+         opens a panel instead of going straight to the Inbox. */
+      $canInbox = !$clientSide || !function_exists('can_use') || can_use('inbox');
+      $canCrm   = $clientSide && function_exists('can_use') && can_use('crm') && function_exists('crm_notices_for') && !empty($me['id']);
+      $notices  = $canCrm ? crm_notices_for((int) $me['id'], 12) : [];
+      $unseen   = $canCrm ? crm_notices_unread((int) $me['id']) : 0;
+      $bellN    = ($canInbox ? $unread : 0) + $unseen;
+      $here     = basename((string) ($_SERVER['REQUEST_URI'] ?? 'index.php'));
+    ?>
+    <?php if ($canCrm): ?>
+    <div class="bell-wrap">
+      <a class="topbar-bell" id="bell-btn" href="<?= e($navBase) ?><?= $canInbox ? 'inbox.php' : 'crm.php' ?>" aria-haspopup="true" aria-expanded="false"
+         aria-label="<?= $bellN ? $bellN . ' new' : 'Notifications' ?>" title="Notifications">
+        <svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M10 2.5a4.5 4.5 0 00-4.5 4.5c0 3.5-1.5 4.5-1.5 4.5h12s-1.5-1-1.5-4.5A4.5 4.5 0 0010 2.5z"/><path d="M8.6 15a1.6 1.6 0 002.8 0"/>
+        </svg>
+        <?php if ($bellN > 0): ?><span class="bell-dot"><?= $bellN > 99 ? '99+' : (int) $bellN ?></span><?php endif; ?>
+      </a>
+      <div class="bell-panel" id="bell-panel" hidden>
+        <div class="bell-head"><strong>Notifications</strong>
+          <?php if ($unseen): ?><a href="<?= e($navBase) ?>notices.php?all=1&t=<?= e(csrf_token()) ?>&back=<?= e(urlencode($here)) ?>">Mark all read</a><?php endif; ?></div>
+        <?php if ($canInbox): ?>
+          <a class="bell-item bell-msgs" href="<?= e($navBase) ?>inbox.php"><?= $unread ? '<strong>' . (int) $unread . ' unread message' . ($unread === 1 ? '' : 's') . '</strong>' : 'No unread messages' ?><span>Open Inbox →</span></a>
+        <?php endif; ?>
+        <?php if (!$notices): ?><p class="bell-empty">Nothing yet. New leads, due follow-ups and visits will show here.</p><?php endif; ?>
+        <?php foreach ($notices as $nt): ?>
+          <a class="bell-item <?= $nt['read'] ? '' : 'unread' ?>" href="<?= e($navBase) ?>notices.php?id=<?= (int) $nt['id'] ?>">
+            <span class="bell-text"><?= e($nt['text']) ?></span>
+            <span class="bell-when"><?= e(date('j M, H:i', strtotime($nt['when']))) ?></span></a>
+        <?php endforeach; ?>
+      </div>
+    </div>
+    <script>
+    (() => {
+      const b = document.getElementById('bell-btn'), p = document.getElementById('bell-panel');
+      b.addEventListener('click', e => { e.preventDefault(); p.hidden = !p.hidden; b.setAttribute('aria-expanded', String(!p.hidden)); });
+      document.addEventListener('click', e => { if (!p.hidden && !e.target.closest('.bell-wrap')) { p.hidden = true; b.setAttribute('aria-expanded', 'false'); } });
+      document.addEventListener('keydown', e => { if (e.key === 'Escape' && !p.hidden) { p.hidden = true; b.focus(); } });
+    })();
+    </script>
+    <?php elseif ($showBell): ?>
     <a class="topbar-bell" href="<?= e($navBase) ?>inbox.php" aria-label="<?= $unread ? $unread . ' unread message(s)' : 'Inbox' ?>" title="Inbox">
       <svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
         <path d="M10 2.5a4.5 4.5 0 00-4.5 4.5c0 3.5-1.5 4.5-1.5 4.5h12s-1.5-1-1.5-4.5A4.5 4.5 0 0010 2.5z"/><path d="M8.6 15a1.6 1.6 0 002.8 0"/>

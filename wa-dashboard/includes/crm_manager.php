@@ -16,7 +16,8 @@ function crm_settings(int $clientId): array
 {
     $d = ['first_contact_minutes' => null, 'reclaim_minutes' => null, 'reclaim_max' => 2, 'stale_days' => null,
           'stale_reassign' => 0, 'work_start' => null, 'work_end' => null, 'digest_hour' => 9,
-          'followup_reminders' => 1, 'require_lost_reason' => 1];
+          'followup_reminders' => 1, 'require_lost_reason' => 1,
+          'staff_wa_on' => 0, 'staff_wa_template' => null, 'staff_wa_kinds' => 'assigned,sla,followup,reclaimed,visit'];
     try { $row = db_row("SELECT * FROM crm_settings WHERE client_id=?", [$clientId]); }
     catch (Throwable $e) { return $d; }
     return $row ? array_merge($d, $row) : $d;
@@ -30,6 +31,21 @@ function crm_settings_save(int $clientId, array $s): void
     db_run("INSERT INTO crm_settings (client_id," . implode(',', $cols) . ",updated_at) VALUES (?," . rtrim(str_repeat('?,', count($cols)), ',') . ",NOW())
             ON DUPLICATE KEY UPDATE " . implode(',', array_map(fn($c) => "$c=VALUES($c)", $cols)) . ", updated_at=NOW()",
            array_merge([$clientId], $vals));
+}
+
+/**
+ * Change some settings, leaving the rest as they are. Only real columns are written, so a later
+ * feature's settings live in the same row without every save having to know about them.
+ */
+function crm_settings_set(int $clientId, array $kv): void
+{
+    $have = array_flip(array_column(db_all("SHOW COLUMNS FROM crm_settings"), 'Field'));
+    $kv = array_intersect_key($kv, $have);
+    unset($kv['client_id'], $kv['updated_at']);
+    if (!$kv) return;
+    db_run("INSERT IGNORE INTO crm_settings (client_id) VALUES (?)", [$clientId]);
+    $set = implode(',', array_map(fn($c) => "`$c`=?", array_keys($kv)));
+    db_run("UPDATE crm_settings SET $set, updated_at=NOW() WHERE client_id=?", array_merge(array_values($kv), [$clientId]));
 }
 
 function crm_projects(int $clientId, bool $activeOnly = false): array

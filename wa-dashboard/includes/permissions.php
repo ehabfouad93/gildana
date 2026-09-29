@@ -77,7 +77,8 @@ function perm_open_pages(): array
     // index.php is where login lands; refusing it would leave a narrowly-scoped user with no
     // page to arrive on. profile.php and my_whatsapp.php are the person's OWN password and
     // phone link — theirs whatever the account lets them see.
-    return ['index.php', 'profile.php', 'my_whatsapp.php'];
+    // notices.php opens the person's own notices from the bell.
+    return ['index.php', 'profile.php', 'my_whatsapp.php', 'notices.php'];
 }
 
 /** The roles, and what each sees when nobody has ticked anything specific for them. */

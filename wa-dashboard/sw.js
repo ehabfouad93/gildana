@@ -9,7 +9,7 @@
  * conversations; a cached copy could be shown to the wrong account after a logout/login
  * on a shared phone, or long after the data changed. Only the offline shell is stored.
  */
-const VERSION = 'revenect-v5';   // bumped so installed devices pick up the lead notification
+const VERSION = 'revenect-v6';   // bumped so installed devices pick up the lead notification
 const OFFLINE = './offline.html';
 const PRECACHE = [OFFLINE, './assets/icons/icon-192.png', './manifest.webmanifest'];
 
@@ -114,6 +114,8 @@ function noticeWords(nt) {
   if (!nt || !nt.kind) return null;
   const n = parseInt(nt.n, 10) || 1, d = nt.data || {}, s = (k, one, many) => (k === 1 ? one : many);
   switch (nt.kind) {
+    case 'assigned':  return [s(n, 'A new lead is yours', n + ' new leads are yours'), 'Tap to open ' + s(n, 'it', 'your CRM') + ' and reply first.'];
+    case 'visit':     return [s(n, 'Site visit coming up', n + ' site visits coming up'), 'Tap to see the details.', './client/crm_calendar.php'];
     case 'followup':  return [s(n, 'Follow-up due now', n + ' follow-ups due now'), 'Tap to open ' + s(n, 'the lead', 'your follow-ups') + '.', './client/crm.php?view=table&due=overdue'];
     case 'sla':       return [s(n, 'A new lead is waiting for you', n + ' new leads are waiting for you'), 'Contact ' + s(n, 'it', 'them') + ' now, before ' + s(n, 'it is', 'they are') + ' passed to a colleague.'];
     case 'sla_team':  return [(d.n || n) + ' ' + s(d.n || n, 'lead was', 'leads were') + ' not contacted in time', 'Tap to see who is waiting.', './client/crm_team.php'];

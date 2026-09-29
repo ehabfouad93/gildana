@@ -22,6 +22,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array(($_POST['action'] ?? ''), 
     else { flash('Profile saved.'); redirect('profile.php'); }
 }
 
+// Their own WhatsApp number for CRM alerts (new leads, follow-ups, visits).
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_alerts' && db_has_column('users', 'phone')) {
+    verify_csrf();
+    $raw = trim((string) ($_POST['phone'] ?? ''));
+    $num = $raw === '' ? '' : normalize_phone($raw, (string) ($CLIENT['default_country'] ?? ''));
+    if ($raw !== '' && $num === '') { flash('That WhatsApp number does not look right.', 'error'); redirect('profile.php#alerts'); }
+    db_run("UPDATE users SET phone=?, wa_alerts=? WHERE id=?", [$num !== '' ? $num : null, !empty($_POST['wa_alerts']) ? 1 : 0, (int) $ME['id']]);
+    flash('Saved.');
+    redirect('profile.php#alerts');
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'change_password') {
     verify_csrf();
     $cur  = (string) ($_POST['current_password'] ?? '');
@@ -56,6 +67,21 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
   <p class="text-muted" style="font-size:13px">Your admin set you up to message leads from your own phone.
     <?= $linked ? 'It is linked' . (!empty($myUc['msisdn']) ? ' (+' . e((string) $myUc['msisdn']) . ')' : '') . '.' : 'It is not linked yet, so you cannot send.' ?></p>
   <a class="btn <?= $linked ? 'btn-ghost' : 'btn-primary' ?> btn-sm" href="my_whatsapp.php"><?= $linked ? 'Manage' : 'Link my WhatsApp' ?></a>
+</div>
+<?php endif; ?>
+
+<?php if (can_use('crm') && db_has_column('users', 'phone')): $meRow = db_row("SELECT phone, wa_alerts FROM users WHERE id=?", [(int) $ME['id']]) ?: []; ?>
+<div class="card" id="alerts">
+  <h2>WhatsApp alerts</h2>
+  <p class="text-muted" style="font-size:13px;margin-top:-4px">New leads given to you, follow-ups when due and upcoming site visits —
+    on your own WhatsApp, as well as the bell here. They are sent only if your account has alerts switched on.</p>
+  <form method="post" style="max-width:420px">
+    <?= csrf_field() ?><input type="hidden" name="action" value="save_alerts">
+    <div class="field"><span class="lbl">Your WhatsApp number</span>
+      <input type="tel" name="phone" value="<?= !empty($meRow['phone']) ? '+' . e((string) $meRow['phone']) : '' ?>" placeholder="01001234567" inputmode="tel"></div>
+    <label class="mod-all"><input type="checkbox" name="wa_alerts" value="1" <?= (int) ($meRow['wa_alerts'] ?? 1) ? 'checked' : '' ?>> Send me WhatsApp alerts</label>
+    <button class="btn btn-primary btn-sm mt10">Save</button>
+  </form>
 </div>
 <?php endif; ?>
 

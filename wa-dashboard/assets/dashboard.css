@@ -1010,3 +1010,20 @@ input[type="file"] { max-width: 100%; min-width: 0; }
 
 /* "hidden" always wins over a layout rule — a .grid2 or flex container would otherwise show it. */
 [hidden] { display: none !important; }
+
+/* ── The bell's panel: messages and CRM notices ── */
+.bell-wrap { position: relative; }
+.bell-panel { position: absolute; right: 0; top: calc(100% + 8px); width: 340px; max-width: calc(100vw - 24px); max-height: 70vh; overflow-y: auto;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 14px 40px rgba(13,19,33,.16); z-index: 60; }
+.bell-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--line); font-size: 13.5px; }
+.bell-head a { font-size: 12px; }
+.bell-item { display: flex; flex-direction: column; gap: 2px; padding: 10px 14px; border-bottom: 1px solid var(--line); font-size: 13px; color: var(--ink); }
+.bell-item:hover { background: var(--brand-tint); }
+.bell-item.unread { background: rgba(124,58,237,.05); }
+.bell-item.unread .bell-text { font-weight: 600; }
+.bell-item.unread .bell-text::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--brand); margin-right: 7px; vertical-align: 1px; }
+.bell-when { font-size: 11.5px; color: var(--muted); }
+.bell-msgs { flex-direction: row; justify-content: space-between; }
+.bell-msgs span { color: var(--brand); font-size: 12px; }
+.bell-empty { padding: 14px; margin: 0; font-size: 12.5px; color: var(--muted); }
+@media (max-width: 520px) { .bell-panel { position: fixed; left: 12px; right: 12px; top: 64px; width: auto; } }

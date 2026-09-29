@@ -42,6 +42,15 @@ function team_admin_count(int $cid): int
 }
 
 /** How this person sends, from the form. Only the known choices are stored. */
+/** Their WhatsApp number for alerts, in full international form, or NULL. */
+function team_phone_from_post(array $client): ?string
+{
+    $v = trim((string) ($_POST['phone'] ?? ''));
+    if ($v === '') return null;
+    $n = normalize_phone($v, (string) ($client['default_country'] ?? ''));
+    return $n !== '' ? $n : null;
+}
+
 function team_send_via_from_post(): ?string
 {
     $v = (string) ($_POST['send_via'] ?? '');
@@ -67,6 +76,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                        VALUES (?,?,?,?, 'client', ?, ?, ?, 'active', NOW())",
                 [$cid, $email, $name, password_hash($pass, PASSWORD_DEFAULT),     // name is NOT NULL: '' when blank
                  $role, team_modules_from_post($clientHas), team_send_via_from_post()]);
+            if (db_has_column('users', 'phone')) {
+                db_run("UPDATE users SET phone=?, wa_alerts=? WHERE email=?", [team_phone_from_post($CLIENT), !empty($_POST['wa_alerts']) ? 1 : 0, $email]);
+            }
             flash(($name ?: $email) . ' added as ' . $roles[$role]['label'] . '.');
             redirect('team.php');
         }
@@ -92,6 +104,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 db_run("UPDATE users SET client_role=?, modules=?, send_via=?, status=?, name=? WHERE id=? AND client_id=?",
                     [$role, team_modules_from_post($clientHas), team_send_via_from_post(), $status,
                      trim((string) ($_POST['name'] ?? '')), $uid, $cid]);      // NOT NULL column
+                if (db_has_column('users', 'phone')) {
+                    if (trim((string) ($_POST['phone'] ?? '')) !== '' && team_phone_from_post($CLIENT) === null) $err = 'That WhatsApp number does not look right.';
+                    else db_run("UPDATE users SET phone=?, wa_alerts=? WHERE id=?", [team_phone_from_post($CLIENT), !empty($_POST['wa_alerts']) ? 1 : 0, $uid]);
+                }
                 $pass = (string) ($_POST['password'] ?? '');
                 if ($pass !== '') {
                     if (strlen($pass) < 8) { $err = 'The new password needs at least 8 characters.'; }
@@ -145,6 +161,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
             <button class="btn btn-ghost btn-sm" onclick='teamOpen(<?= json_encode([
                 'id' => (int) $p['id'], 'email' => $p['email'], 'name' => $p['name'],
                 'role' => user_client_role($p), 'status' => $p['status'], 'send_via' => (string) ($p['send_via'] ?? ''),
+                'phone' => (string) ($p['phone'] ?? ''), 'wa_alerts' => (int) ($p['wa_alerts'] ?? 1),
                 'modules' => perm_parse($p['modules'] ?? null)], JSON_HEX_APOS | JSON_HEX_QUOT) ?>)'>Edit</button>
           </td>
         </tr>
@@ -192,6 +209,12 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
       <span class="text-muted" style="font-size:11.5px">"Their own phone" — they link it themselves from My WhatsApp.
         It can be banned by WhatsApp like any personal number.</span></div>
 
+    <div class="field"><span class="lbl">Their WhatsApp number, for alerts</span>
+      <input type="tel" name="phone" id="t-phone" placeholder="01001234567" inputmode="tel">
+      <label class="mod-all" style="margin-top:6px"><input type="checkbox" name="wa_alerts" value="1" id="t-wa" checked>
+        Send them WhatsApp alerts — new leads, due follow-ups, visits</label>
+      <span class="text-muted" style="font-size:11.5px">Alerts go out only when the account turns them on, under CRM → Assignment rules.</span></div>
+
     <div class="field" id="t-status-wrap" hidden><span class="lbl">Access</span>
       <select name="status" id="t-status"><option value="active">Active</option><option value="disabled">Disabled — cannot sign in</option></select></div>
 
@@ -236,6 +259,8 @@ function teamOpen(p){
   $t('t-pass-lbl').textContent = edit ? 'New password (leave empty to keep)' : 'Password';
   $t('t-role').value         = edit ? p.role : 'sales';
   $t('t-send').value         = edit ? (p.send_via || '') : '';
+  $t('t-phone').value        = edit ? (p.phone ? '+' + p.phone : '') : '';
+  $t('t-wa').checked         = edit ? !!p.wa_alerts : true;
   $t('t-status-wrap').hidden = !edit;
   $t('t-status').value       = edit ? p.status : 'active';
   $t('t-remove').hidden      = !edit;

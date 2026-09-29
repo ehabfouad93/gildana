@@ -35,6 +35,8 @@ function crm_auto_tick(): array
         }
     }
     $sum['rescored'] = crm_auto_rescore();
+    // Last, so this pass's alerts go out in this pass.
+    $sum['staff_wa'] = crm_staff_wa_tick();
     return $sum;
 }
 
@@ -198,7 +200,7 @@ function crm_notice_summary(int $userId): ?array
     if (!$rows) return null;
     $by = array_column($rows, null, 'kind');
     db_run("UPDATE crm_notices SET seen_at=NOW() WHERE user_id=? AND seen_at IS NULL", [$userId]);
-    foreach (['reclaimed', 'sla', 'sla_team', 'followup', 'resubmit', 'stale', 'digest'] as $k) {
+    foreach (['visit', 'reclaimed', 'sla', 'assigned', 'sla_team', 'followup', 'resubmit', 'stale', 'digest'] as $k) {
         if (!isset($by[$k])) continue;
         $out = ['kind' => $k, 'n' => (int) $by[$k]['n']];
         if ((int) $by[$k]['n'] === 1 && $by[$k]['cid']) $out['lead'] = (int) $by[$k]['cid'];   // an id, to open the right page

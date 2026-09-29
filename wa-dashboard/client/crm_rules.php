@@ -69,6 +69,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         foreach ($ids as $k => $id) db_run("UPDATE crm_rules SET sort=? WHERE id=?", [($k + 1) * 10, $id]);
         redirect('crm_rules.php');
     }
+    if ($a === 'staff_wa') {
+        $kinds = array_values(array_intersect(array_keys(crm_staff_wa_kinds()), (array) ($_POST['kinds'] ?? [])));
+        $tpl = (int) ($_POST['template'] ?? 0);
+        if ($tpl && !db_val("SELECT COUNT(*) FROM templates WHERE id=? AND client_id=?", [$tpl, $cid])) $tpl = 0;
+        crm_settings_set($cid, ['staff_wa_on' => !empty($_POST['on']) ? 1 : 0, 'staff_wa_template' => $tpl ?: null,
+                                'staff_wa_kinds' => implode(',', $kinds)]);
+        flash('WhatsApp alerts saved.');
+        redirect('crm_rules.php#staff-wa');
+    }
+    if ($a === 'staff_wa_test') {
+        $me = db_row("SELECT * FROM users WHERE id=?", [(int) ($PERM_USER['id'] ?? 0)]);
+        if (empty($me['phone'])) { flash('Add your own WhatsApp number on your profile first.', 'error'); redirect('crm_rules.php#staff-wa'); }
+        $r = crm_staff_send($CLIENT, (string) $me['phone'], 'Test alert from ' . brand_name() . ': this is how new leads will reach your team.',
+                            rtrim(app_base_url(), '/') . '/client/crm.php');
+        flash($r['ok'] ? 'Sent to +' . $me['phone'] . '. Check your WhatsApp.' : 'Could not send: ' . $r['error'], $r['ok'] ? 'success' : 'error');
+        redirect('crm_rules.php#staff-wa');
+    }
     if ($a === 'timers') {
         $num = fn(string $k, int $max) => ($v = trim((string) ($_POST[$k] ?? ''))) !== '' && (int) $v > 0 ? min($max, (int) $v) : null;
         $hour = fn(string $k) => ($v = (string) ($_POST[$k] ?? '')) !== '' ? max(0, min(23, (int) $v)) : null;
@@ -179,6 +196,47 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
     <button class="btn btn-primary"><?= $edit ? 'Save rule' : 'Add rule' ?></button>
     <?php if ($edit): ?><a class="btn btn-ghost" href="crm_rules.php">Cancel</a><?php endif; ?>
   </form>
+</div>
+
+<?php
+  $approved = db_all("SELECT id, wa_name, language, category FROM templates WHERE client_id=? AND LOWER(status)='approved' ORDER BY wa_name", [$cid]);
+  $hasPhone = ($CLIENT['personal_status'] ?? '') === 'connected';
+  $noNumber = array_column(db_all("SELECT COALESCE(NULLIF(name,''), email) n FROM users WHERE client_id=? AND role='client' AND status='active'
+                                    AND client_role IN ('sales','admin') AND (phone IS NULL OR phone='')", [$cid]), 'n');
+  $waFail = db_all("SELECT n.created_at, n.wa_error, COALESCE(NULLIF(u.name,''), u.email) who FROM crm_notices n JOIN users u ON u.id=n.user_id
+                     WHERE n.client_id=? AND n.wa_status='failed' ORDER BY n.id DESC LIMIT 5", [$cid]);
+  $kindsOn = array_filter(explode(',', (string) $s['staff_wa_kinds']));
+?>
+<div class="card" id="staff-wa">
+  <h2>WhatsApp alerts to salespeople</h2>
+  <p class="text-muted" style="font-size:12.5px;margin-top:-4px">Besides the bell in the app, send each person the alert on their own WhatsApp.
+    <?= $hasPhone ? 'They go out from the company\'s linked phone, as ordinary messages.'
+                  : 'Without a linked company phone they go through the WhatsApp Business API, which needs an approved template:
+                     {{1}} becomes the alert, {{2}} the link to open it. A utility template such as "REVENECT: {{1}} — {{2}}" works well.' ?></p>
+  <form method="post">
+    <?= csrf_field() ?><input type="hidden" name="action" value="staff_wa">
+    <label class="mod-all"><input type="checkbox" name="on" value="1" <?= (int) $s['staff_wa_on'] ? 'checked' : '' ?>> Send WhatsApp alerts</label>
+    <div class="mod-grid" style="margin:10px 0">
+      <?php foreach (crm_staff_wa_kinds() as $k => $l): ?>
+        <label class="mod-opt"><input type="checkbox" name="kinds[]" value="<?= $k ?>" <?= in_array($k, $kindsOn, true) ? 'checked' : '' ?>> <?= e($l) ?></label>
+      <?php endforeach; ?>
+    </div>
+    <?php if (!$hasPhone): ?>
+    <div class="field" style="max-width:420px"><span class="lbl">Template for alerts</span><select name="template">
+      <option value="0">Choose an approved template…</option>
+      <?php foreach ($approved as $t): ?><option value="<?= (int) $t['id'] ?>" <?= (int) $s['staff_wa_template'] === (int) $t['id'] ? 'selected' : '' ?>><?= e($t['wa_name'] . ' (' . $t['language'] . ', ' . strtolower((string) $t['category']) . ')') ?></option><?php endforeach; ?>
+    </select></div>
+    <?php endif; ?>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary">Save alerts</button></div>
+  </form>
+  <form method="post" style="margin-top:8px"><?= csrf_field() ?><input type="hidden" name="action" value="staff_wa_test">
+    <button class="btn btn-ghost btn-sm">Send a test to my WhatsApp</button></form>
+  <?php if ($noNumber): ?><p class="text-muted" style="font-size:12.5px;margin:12px 0 0">No WhatsApp number yet for: <?= e(implode(', ', $noNumber)) ?>.
+    Add it on the <a href="team.php">Team</a> page, or they can add it on their profile.</p><?php endif; ?>
+  <?php if ($waFail): ?>
+    <div class="alert warn" style="font-size:12.5px;margin-top:12px"><strong>Recent alerts that did not go out</strong>
+      <?php foreach ($waFail as $f): ?><div><?= e(date('j M, H:i', strtotime((string) $f['created_at']))) ?> · <?= e((string) $f['who']) ?> — <?= e((string) $f['wa_error']) ?></div><?php endforeach; ?></div>
+  <?php endif; ?>
 </div>
 
 <div class="card" id="timers">
