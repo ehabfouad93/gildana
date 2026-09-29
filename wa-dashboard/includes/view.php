@@ -138,6 +138,7 @@ function nav_children(string $group): array
     $admin = !function_exists('is_client_admin') || is_client_admin();
     $items = [
         ['Pipeline',     'crm.php',                         'crm.php'],
+        ['Dashboard',    'crm_dashboard.php',               'crm_dashboard.php'],
         ['Follow-ups',   'crm.php?view=table&due=today',    'crm.php?due'],
         ['Site visits',  'crm_calendar.php',                'crm_calendar.php'],
         ['Reports',      'crm_reports.php',                 'crm_reports.php'],
