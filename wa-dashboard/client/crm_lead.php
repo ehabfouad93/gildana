@@ -113,6 +113,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($a === 'stage') {
         if ((int) ($_POST['stage_id'] ?? 0) && $stageMove((int) $_POST['stage_id'])) $back();
     }
+    if ($a === 'seq_stop' && can_write()) {
+        crm_seq_stop((int) ($_POST['seq'] ?? 0), $id, 'Stopped by ' . crm_user_name($me) . '.');
+        flash('Stopped. No more messages from that sequence.');
+        $back();
+    }
     if ($a === 'merge' && $isAdmin) {
         $other = (int) ($_POST['other'] ?? 0);
         if (crm_merge($CLIENT, $id, $other, $me)) { flash('Merged. Everything from the other contact is now on this lead.'); $back(); }
@@ -144,6 +149,14 @@ foreach (db_all("SELECT id, COALESCE(NULLIF(name,''), email) n FROM users WHERE 
 $who = fn($uid) => $uid ? ($names[(int) $uid] ?? 'Someone') : 'Automatically';
 $hasKinds = db_has_column('crm_notes', 'kind');
 
+$seqNames = [];
+try { $seqNames = array_column(db_all("SELECT id, name FROM crm_sequences WHERE client_id=?", [$cid]), 'name', 'id'); } catch (Throwable $e) {}
+$runs = [];
+try {
+    $runs = db_all("SELECT r.*, q.name, (SELECT COUNT(*) FROM crm_seq_steps st WHERE st.sequence_id=r.sequence_id) AS steps
+                      FROM crm_seq_runs r JOIN crm_sequences q ON q.id=r.sequence_id WHERE r.contact_id=? ORDER BY r.id DESC LIMIT 5", [$id]);
+} catch (Throwable $e) {}
+
 /* One timeline, newest first. Each item carries its group, so the filter chips can narrow it. */
 $feed = [];
 foreach (db_all("SELECT direction, body, status, created_at FROM messages WHERE contact_id=? ORDER BY id DESC LIMIT 80", [$id]) as $m) {
@@ -170,6 +183,8 @@ foreach (db_all("SELECT * FROM crm_events WHERE contact_id=? ORDER BY id DESC LI
         'sla'      => 'Not contacted within ' . (int) $ev['to_val'] . ' minutes — owner alerted',
         'resubmitted' => 'Came in again (' . crm_source_label($ev['to_val']) . ')',
         'merged'   => 'Merged with the duplicate contact ' . $ev['to_val'],
+        'seq_start'=> 'Joined the follow-up sequence "' . ($seqNames[(int) $ev['to_val']] ?? 'a removed sequence') . '"',
+        'seq_stop' => 'Left the sequence "' . ($seqNames[(int) $ev['from_val']] ?? 'a removed sequence') . '" — ' . $ev['to_val'],
         default    => $ev['kind'],
     };
     $feed[] = ['t' => $ev['created_at'], 'group' => 'history', 'kind' => 'event', 'body' => $text, 'by' => $who($ev['user_id'])];
@@ -410,6 +425,26 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
           <button class="btn-link" style="color:var(--danger)">Remove from pipeline</button></form>
       <?php endif; ?>
     </details>
+
+    <?php if ($runs): ?>
+    <!-- Automatic follow-ups this lead is in -->
+    <div class="card" id="seq-runs">
+      <h2>Automatic follow-up</h2>
+      <?php foreach ($runs as $r): ?>
+        <div class="dup-row">
+          <div><strong><?= e((string) $r['name']) ?></strong>
+            <span class="text-muted" style="display:block;font-size:12px">
+              <?php if ($r['status'] === 'active'): ?>Sent <?= (int) $r['step_idx'] ?> of <?= (int) $r['steps'] ?> · next <?= e(date('D j M, H:i', strtotime((string) $r['next_at']))) ?>
+              <?php elseif ($r['status'] === 'done'): ?>All <?= (int) $r['steps'] ?> sent
+              <?php else: ?>Stopped — <?= e((string) $r['stop_reason']) ?><?php endif; ?></span></div>
+          <?php if ($r['status'] === 'active' && $canW): ?>
+          <form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="seq_stop"><input type="hidden" name="id" value="<?= $id ?>"><input type="hidden" name="seq" value="<?= (int) $r['sequence_id'] ?>">
+            <button class="btn btn-ghost btn-sm">Stop</button></form>
+          <?php endif; ?>
+        </div>
+      <?php endforeach; ?>
+    </div>
+    <?php endif; ?>
 
     <?php if ($dups): ?>
     <!-- Probably the same person -->

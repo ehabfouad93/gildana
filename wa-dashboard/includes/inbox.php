@@ -586,8 +586,13 @@ function inbox_templates(int $clientId): array
  * @param string[] $headerVars header text parameters, in order
  */
 function inbox_send_template(array $client, int $contactId, int $templateId,
-                             array $vars = [], array $headerVars = [], string $headerMedia = ''): array
+                             array $vars = [], array $headerVars = [], string $headerMedia = '', array $opts = []): array
 {
+    /* $opts, for the CRM sending by itself: 'source' (logged on the message — not 'manual', so it
+       does not count as a salesperson's first response) and 'takeover' (false: an automatic
+       message must not pause the bot the way a person typing does). */
+    $logSource = (string) ($opts['source'] ?? 'manual');
+    $takeover  = (bool) ($opts['takeover'] ?? true);
     $cid     = (int) $client['id'];
     $contact = db_row("SELECT * FROM contacts WHERE id=? AND client_id=?", [$contactId, $cid]);
     if (!$contact) return ['ok' => false, 'error' => 'Contact not found.'];
@@ -652,14 +657,14 @@ function inbox_send_template(array $client, int $contactId, int $templateId,
     if ($body === '') $body = '📄 Template: ' . $tpl['wa_name'];
 
     $id = msg_log($cid, $contactId, 'out', $body, [
-        'type' => 'template', 'source' => 'manual',
+        'type' => 'template', 'source' => $logSource,
         'status' => !empty($res['ok']) ? 'sent' : 'failed',
         'wamid' => $res['wamid'] ?? null,
         'error' => $res['error_title'] ?? null, 'error_code' => (string) ($res['error_code'] ?? ''),
         'template_id' => $templateId, 'sent_by' => (int) ($who['id'] ?? 0), 'via' => $snd['via'],
     ]);
     // An agent sending by hand is taking the conversation over, same as a typed reply.
-    if (!empty($res['ok'])) inbox_take_over($cid, $contactId);
+    if (!empty($res['ok']) && $takeover) inbox_take_over($cid, $contactId);
 
     if (!empty($res['ok'])) return ['ok' => true, 'id' => $id];
 

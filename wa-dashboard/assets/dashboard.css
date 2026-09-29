@@ -1027,3 +1027,13 @@ input[type="file"] { max-width: 100%; min-width: 0; }
 .bell-msgs span { color: var(--brand); font-size: 12px; }
 .bell-empty { padding: 14px; margin: 0; font-size: 12.5px; color: var(--muted); }
 @media (max-width: 520px) { .bell-panel { position: fixed; left: 12px; right: 12px; top: 64px; width: auto; } }
+
+/* ── Automatic messages ── */
+.tpl-preview { font-size: 12.5px; margin-top: 6px; white-space: pre-wrap; }
+.tpl-vars { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; max-width: 640px; }
+.tpl-var { display: grid; grid-template-columns: 90px minmax(0, 1fr) minmax(0, 1fr); gap: 8px; align-items: center; }
+.tpl-var-n { font-size: 12.5px; font-weight: 600; color: var(--slate); font-variant-numeric: tabular-nums; }
+@media (max-width: 560px) { .tpl-var { grid-template-columns: 70px minmax(0, 1fr); } .tpl-var input { grid-column: 2; } }
+.seq-step { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; max-width: 760px; }
+.seq-step-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: space-between; margin-bottom: 8px; font-size: 13px; }
+.seq-step-head input, .seq-step-head select { width: auto; display: inline-block; padding: 5px 8px; }

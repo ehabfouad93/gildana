@@ -189,6 +189,7 @@ function crm_set_stage(array $client, int $contactId, int $stageId, ?int $by = n
     }
     if ($by !== null) crm_touch($contactId);
     crm_rescore($contactId);
+    if (function_exists('crm_auto_on_stage')) crm_auto_on_stage($client, $contactId, $stageId);
     return true;
 }
 
@@ -243,6 +244,7 @@ function crm_log_activity(array $client, int $contactId, string $kind, ?string $
     if ($kind !== 'note') crm_mark_response($contactId, 'crm');
     if ($by !== null) crm_touch($contactId);
     crm_rescore($contactId);
+    if (function_exists('crm_auto_on_activity')) crm_auto_on_activity($client, $contactId, $outcome);
     return true;
 }
 
@@ -286,6 +288,7 @@ function crm_add_lead(array $client, int $contactId, string $source = '', $owner
             : ($owner === 'none' || $owner === null ? null : (int) $owner);
     if ($userId !== null) crm_assign($client, $contactId, $userId, $by);
     crm_rescore($contactId);
+    if (function_exists('crm_auto_on_stage')) crm_auto_on_stage($client, $contactId, $stage, true);
     return true;
 }
 
@@ -396,3 +399,6 @@ function crm_source_label(?string $source): string
         'sheet'     => 'Google Sheet',     'qualifier' => 'Lead Qualifier',
     ][(string) $source] ?? ($source ? ucfirst((string) $source) : '—');
 }
+
+// Messages the CRM sends by itself. Loaded last: it needs the inbox, which loads this file.
+require_once __DIR__ . '/crm_automation.php';

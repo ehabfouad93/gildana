@@ -145,6 +145,7 @@ function nav_children(string $group): array
     if ($admin) {
         $items[] = ['Team & transfer',  'crm_team.php',  'crm_team.php'];
         $items[] = ['Assignment rules', 'crm_rules.php', 'crm_rules.php'];
+        $items[] = ['Automatic messages', 'crm_messages.php', 'crm_messages.php'];
         $items[] = ['Lead forms',       'meta_leads.php', 'meta_leads.php'];
         $items[] = ['Projects & lists', 'crm_setup.php', 'crm_setup.php'];
         $items[] = ['Stages',           'crm.php?stages=1', 'crm.php?stages'];
