@@ -67,7 +67,7 @@ page_head('Site visits', $isAdmin ? '<a class="btn btn-ghost btn-sm" href="crm_m
       <?php foreach ($list as $v): ?>
         <a class="cal-visit <?= e((string) $v['status']) ?> <?= $focus === (int) $v['id'] ? 'focus' : '' ?>" id="visit-<?= (int) $v['id'] ?>"
            href="crm_lead.php?id=<?= (int) $v['contact_id'] ?>#visits">
-          <span class="cal-time"><?= e(date('H:i', strtotime((string) $v['starts_at']))) ?></span>
+          <span class="cal-time"><?= e(date('H:i', strtotime((string) $v['starts_at']))) ?><?= ($v['kind'] ?? 'site') === 'online' ? ' · Online' : '' ?></span>
           <strong><?= e((string) ($v['lead_name'] ?: crm_phone_show((string) $v['phone_e164']))) ?></strong>
           <?php if ($v['project_name']): ?><span class="cal-meta"><?= e((string) $v['project_name']) ?></span><?php endif; ?>
           <?php if ($v['host_name'] && !is_sales()): ?><span class="cal-meta">with <?= e((string) $v['host_name']) ?></span><?php endif; ?>

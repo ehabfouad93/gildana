@@ -1458,3 +1458,8 @@ kbd { display: inline-block; font: 600 10.5px/1 var(--sans); padding: 3px 5px; b
 [dir="rtl"] .data th.num, [dir="rtl"] .data td.num { text-align: left; }
 [dir="rtl"] .brand-mark, [dir="rtl"] .brand-mark * { direction: ltr; unicode-bidi: isolate; }
 [dir="rtl"] :is(.alert, .note, .text-muted, .hint) { unicode-bidi: plaintext; }
+.meet-link { display: block; font-size: 12.5px; color: var(--brand); word-break: break-all; direction: ltr; unicode-bidi: isolate; }
+/* Events */
+.ev-add { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.ev-add select, .ev-add input { max-width: 200px; }
+.ev-add select, .ev-add input[type="text"] { width: auto; }

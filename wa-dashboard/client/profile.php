@@ -29,6 +29,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
     $num = $raw === '' ? '' : normalize_phone($raw, (string) ($CLIENT['default_country'] ?? ''));
     if ($raw !== '' && $num === '') { flash('That WhatsApp number does not look right.', 'error'); redirect('profile.php#alerts'); }
     db_run("UPDATE users SET phone=?, wa_alerts=? WHERE id=?", [$num !== '' ? $num : null, !empty($_POST['wa_alerts']) ? 1 : 0, (int) $ME['id']]);
+    if (db_has_column('users', 'meet_url')) {
+        require_once __DIR__ . '/../includes/crm_visits.php';
+        $room = crm_meet_url_clean((string) ($_POST['meet_url'] ?? ''));
+        if (trim((string) ($_POST['meet_url'] ?? '')) !== '' && $room === '') { flash('That meeting link does not look right.', 'error'); redirect('profile.php#alerts'); }
+        db_run("UPDATE users SET meet_url=? WHERE id=?", [$room !== '' ? $room : null, (int) $ME['id']]);
+    }
     flash('Saved.');
     redirect('profile.php#alerts');
 }
@@ -70,7 +76,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 </div>
 <?php endif; ?>
 
-<?php if (can_use('crm') && db_has_column('users', 'phone')): $meRow = db_row("SELECT phone, wa_alerts FROM users WHERE id=?", [(int) $ME['id']]) ?: []; ?>
+<?php if (can_use('crm') && db_has_column('users', 'phone')): $meRow = db_row("SELECT * FROM users WHERE id=?", [(int) $ME['id']]) ?: []; ?>
 <div class="card" id="alerts">
   <h2>WhatsApp alerts</h2>
   <p class="text-muted" style="font-size:13px;margin-top:-4px">New leads given to you, follow-ups when due and upcoming site visits —
@@ -80,6 +86,11 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
     <div class="field"><span class="lbl">Your WhatsApp number</span>
       <input type="tel" name="phone" value="<?= !empty($meRow['phone']) ? '+' . e((string) $meRow['phone']) : '' ?>" placeholder="01001234567" inputmode="tel"></div>
     <label class="mod-all"><input type="checkbox" name="wa_alerts" value="1" <?= (int) ($meRow['wa_alerts'] ?? 1) ? 'checked' : '' ?>> Send me WhatsApp alerts</label>
+    <?php if (array_key_exists('meet_url', $meRow)): ?>
+    <div class="field mt10"><span class="lbl">My meeting room link <span class="text-muted">(optional)</span></span>
+      <input type="url" name="meet_url" value="<?= e((string) ($meRow['meet_url'] ?? '')) ?>" placeholder="https://zoom.us/j/… or https://meet.google.com/…">
+      <small class="text-muted">Used for online meetings you host when no other link is given.</small></div>
+    <?php endif; ?>
     <button class="btn btn-primary btn-sm mt10">Save</button>
   </form>
 </div>

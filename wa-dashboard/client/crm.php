@@ -22,6 +22,12 @@ $isAdmin = is_client_admin();
 $isLeader = !$isAdmin && crm_is_team_leader();
 $canMove = $isAdmin || $isLeader;                        // pass leads to someone else
 $canExport = function_exists('can_crm_export') ? can_crm_export() : $isAdmin;
+// Upcoming events leads can be added to, from the bulk bar.
+$evChoices = [];
+if (can_write() && can_crm('visits')) {
+    try { $evChoices = db_all("SELECT id, name, starts_at FROM sales_events WHERE client_id=? AND status='active' AND starts_at > NOW() ORDER BY starts_at LIMIT 30", [(int) $CLIENT['id']]); }
+    catch (Throwable $e) { $evChoices = []; }
+}
 $hidePhones = crm_phone_hidden();
 $canDelete = $isAdmin || can_crm_action('delete');
 $stages  = crm_stages($cid);
@@ -144,6 +150,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['ajax'])) {
         $n = 0;
         foreach ($targets() as $id) if (crm_seq_enroll($CLIENT, $seq, $id)) $n++;
         json_out(['ok' => true, 'n' => $n]);
+    }
+
+    if ($a === 'event') {
+        // Put the chosen leads on an event's guest list; the invitation goes from the event's page.
+        require_once __DIR__ . '/../includes/crm_sales_events.php';
+        if (!can_crm('visits')) json_out(['ok' => false, 'error' => 'Events are not open to you.']);
+        $evId = (int) ($_POST['event_id'] ?? 0);
+        $ev = sev_ready() ? sev_get($cid, $evId) : null;
+        if (!$ev || $ev['status'] !== 'active') json_out(['ok' => false, 'error' => 'Choose an event.']);
+        json_out(['ok' => true, 'n' => sev_add_guests($CLIENT, $evId, $targets(), $me), 'url' => 'crm_events.php?id=' . $evId . '#guests']);
     }
 
     if ($a === 'quick_log') {
@@ -592,6 +608,7 @@ foreach ($views as $v_) { parse_str((string) $v_['params'], $vq); if ($vq == $ac
       <button type="button" class="btn btn-ghost btn-sm" data-open="m-tpl">WhatsApp template</button>
       <button type="button" class="btn btn-ghost btn-sm" data-open="m-seq">Add to sequence</button>
     <?php endif; ?>
+    <?php if ($evChoices): ?><button type="button" class="btn btn-ghost btn-sm" data-open="m-event">Add to event</button><?php endif; ?>
     <?php if ($canExport): ?><button type="button" class="btn btn-ghost btn-sm" id="crm-bulk-export">Export selected</button><?php endif; ?>
     <?php if ($canDelete): ?><button type="button" class="btn btn-ghost btn-sm" id="crm-bulk-delete" style="color:var(--danger)">Delete</button><?php endif; ?>
     <button type="button" class="btn-link" id="crm-bulk-clear">Clear</button>
@@ -844,6 +861,19 @@ foreach ($views as $v_) { parse_str((string) $v_['params'], $vq); if ($vq == $ac
   </form>
 </dialog>
 <?php endif; ?>
+<?php if ($evChoices): ?>
+<dialog id="m-event" class="lost-dlg" aria-labelledby="ev-title">
+  <form onsubmit="return bulkEvent(event)">
+    <h2 id="ev-title" style="margin-top:0">Add <span class="bulk-count"></span> to an event</h2>
+    <div class="field"><span class="lbl">Event</span><select name="event_id" required>
+      <?php foreach ($evChoices as $ec): ?><option value="<?= (int) $ec['id'] ?>"><?= e($ec['name'] . ' — ' . date('j M', strtotime((string) $ec['starts_at']))) ?></option><?php endforeach; ?></select></div>
+    <p class="text-muted" style="font-size:12.5px">They go on the guest list. The invitation is sent from the event's page.</p>
+    <div class="alert error" id="ev-err" hidden></div>
+    <div style="display:flex;gap:8px"><button class="btn btn-primary">Add them</button>
+      <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">Cancel</button></div>
+  </form>
+</dialog>
+<?php endif; ?>
 <?php if ($canExport): ?><form method="post" id="export-sel" hidden><?= csrf_field() ?><input type="hidden" name="action" value="export"><input type="hidden" name="format" value="xlsx"></form><?php endif; ?>
 <?php endif; ?>
 
@@ -1020,6 +1050,13 @@ async function bulkTpl(e){
   const d = await crmPost(data);
   if (d.ok) { alert(d.n + ' message' + (d.n === 1 ? '' : 's') + ' queued. They go out within your working hours.'); location.reload(); }
   else { $m('tpl-err').hidden = false; $m('tpl-err').textContent = d.error || 'Could not queue them.'; }
+  return false;
+}
+async function bulkEvent(e){
+  e.preventDefault();
+  const d = await crmPost(Object.assign({action:'event'}, target(), Object.fromEntries(new FormData(e.target))));
+  if (d.ok) { alert(d.n + ' lead' + (d.n === 1 ? '' : 's') + ' added to the event.'); location.href = d.url; }
+  else { $m('ev-err').hidden = false; $m('ev-err').textContent = d.error || 'Could not add them.'; }
   return false;
 }
 async function bulkSeq(e){

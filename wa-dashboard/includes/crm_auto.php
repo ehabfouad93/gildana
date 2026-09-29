@@ -41,6 +41,8 @@ function crm_auto_tick(): array
     $sum['daily'] = crm_lib_daily_tick();
     // Sequences decide what is due, then the queue sends it (stage messages, sequence steps, visits).
     $sum['visits']     = crm_visits_tick();
+    require_once __DIR__ . '/crm_sales_events.php';
+    $sum['events']     = sev_tick();
     $sum['seq_queued'] = crm_seq_tick();
     $sum['auto_sent']  = crm_queue_tick();
     $sum['meta_events'] = crm_capi_tick();

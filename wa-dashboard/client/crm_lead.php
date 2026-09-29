@@ -166,8 +166,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $d = trim((string) ($_POST['visit_date'] ?? '')); $t = trim((string) ($_POST['visit_time'] ?? ''));
         $r = crm_visit_book($CLIENT, $id, ['starts_at' => $d . ' ' . $t, 'place' => (string) ($_POST['place'] ?? ''),
                  'project_id' => (int) ($_POST['project_id'] ?? 0) ?: null, 'notes' => (string) ($_POST['notes'] ?? ''),
-                 'user_id' => $isAdmin ? ((int) ($_POST['host'] ?? 0) ?: null) : null, 'confirm' => !empty($_POST['confirm'])], $me);
-        if ($r['ok']) { flash('Visit booked for ' . date('D j M, H:i', strtotime($d . ' ' . $t)) . '.'); $back('#visits'); }
+                 'user_id' => $isAdmin ? ((int) ($_POST['host'] ?? 0) ?: null) : null, 'confirm' => !empty($_POST['confirm']),
+                 'kind' => ($_POST['kind'] ?? '') === 'online' ? 'online' : 'site', 'meet_url' => (string) ($_POST['meet_url'] ?? '')], $me);
+        if ($r['ok']) {
+            $when = date('D j M, H:i', strtotime($d . ' ' . $t));
+            flash(!empty($r['meet_url']) ? 'Online meeting booked for ' . $when . '. Link: ' . $r['meet_url']
+                  . (!empty($r['warning']) ? ' (Google Meet was not used: ' . $r['warning'] . ')' : '') : 'Visit booked for ' . $when . '.');
+            $back('#visits');
+        }
         $err = $r['error'];
     }
     if (in_array($a, ['visit_done', 'visit_no_show', 'visit_cancel'], true) && can_write()) {
@@ -274,6 +280,8 @@ foreach (db_all("SELECT * FROM crm_events WHERE contact_id=? ORDER BY id DESC LI
         'substatus'=> $ev['to_val'] !== null ? 'Sub-status: ' . $ev['to_val'] . ($ev['from_val'] !== null ? ' (was ' . $ev['from_val'] . ')' : '') : 'Sub-status cleared',
         'qualified'=> 'Marked ' . (crm_qualifications()[(string) $ev['to_val']] ?? 'not set') ,
         'visit'    => 'Site visit booked for ' . date('D j M, H:i', strtotime((string) $ev['to_val'])),
+        'meeting'  => 'Online meeting booked for ' . date('D j M, H:i', strtotime((string) $ev['to_val'])),
+        'event'    => (string) $ev['to_val'],
         'visit_moved' => 'Site visit moved from ' . date('D j M, H:i', strtotime((string) $ev['from_val'])) . ' to ' . date('D j M, H:i', strtotime((string) $ev['to_val'])),
         'seq_start'=> 'Joined the follow-up sequence "' . ($seqNames[(int) $ev['to_val']] ?? 'a removed sequence') . '"',
         'seq_stop' => 'Left the sequence "' . ($seqNames[(int) $ev['from_val']] ?? 'a removed sequence') . '" — ' . $ev['to_val'],
@@ -468,16 +476,18 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
     <!-- Site visits -->
     <?php if (can_crm('visits')): ?>
     <div class="card" id="visits">
-      <div class="row-between" style="flex-wrap:wrap;gap:8px"><h2 style="margin:0;border:0;padding:0">Site visits</h2>
-        <?php if ($canW): ?><button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('visit-form').hidden=false;this.hidden=true">+ Book a visit</button><?php endif; ?></div>
+      <div class="row-between" style="flex-wrap:wrap;gap:8px"><h2 style="margin:0;border:0;padding:0">Visits and meetings</h2>
+        <?php if ($canW): ?><button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('visit-form').hidden=false;this.hidden=true">+ Book a visit or meeting</button><?php endif; ?></div>
       <?php if (!$visits): ?><p class="text-muted" style="margin:8px 0 0;font-size:13px">No visits yet.</p><?php endif; ?>
       <?php foreach ($visits as $v): $past = strtotime((string) $v['starts_at']) < time(); ?>
         <div class="visit-row <?= e((string) $v['status']) ?>">
           <div><strong><?= e(date('D j M, H:i', strtotime((string) $v['starts_at']))) ?></strong>
+            <?php $isOnline = ($v['kind'] ?? 'site') === 'online'; if ($isOnline): ?><span class="pill blue">Online</span><?php endif; ?>
             <span class="pill <?= ['scheduled' => $past ? 'gold' : 'blue', 'done' => 'green', 'no_show' => 'red', 'cancelled' => 'gray'][$v['status']] ?>">
               <?= e($v['status'] === 'scheduled' && $past ? 'How did it go?' : crm_visit_statuses()[$v['status']]) ?></span>
             <span class="text-muted" style="display:block;font-size:12.5px"><?= e(implode(' · ', array_filter([
-                $v['project_id'] ? ($pnames[(int) $v['project_id']] ?? '') : '', (string) ($v['place'] ?? ''), $v['host'] ? 'with ' . $v['host'] : '']))) ?></span>
+                $v['project_id'] ? ($pnames[(int) $v['project_id']] ?? '') : '', $isOnline ? '' : (string) ($v['place'] ?? ''), $v['host'] ? 'with ' . $v['host'] : '']))) ?></span>
+            <?php if ($isOnline && !empty($v['meet_url'])): ?><a class="meet-link" href="<?= e((string) $v['meet_url']) ?>" target="_blank" rel="noopener noreferrer"><?= e((string) $v['meet_url']) ?></a><?php endif; ?>
             <?php if (!empty($v['notes'])): ?><span style="display:block;font-size:12.5px"><?= e((string) $v['notes']) ?></span><?php endif; ?></div>
           <?php if ($canW && $v['status'] === 'scheduled'): ?>
           <div class="visit-acts">
@@ -500,13 +510,19 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
       <?php if ($canW): ?>
       <form method="post" id="visit-form" class="mt10" hidden>
         <?= csrf_field() ?><input type="hidden" name="action" value="visit_book"><input type="hidden" name="id" value="<?= $id ?>">
+        <div class="lead-quick" style="margin-bottom:8px">
+          <label class="act-kind"><input type="radio" name="kind" value="site" checked onchange="visitKind()"><span>Site visit</span></label>
+          <label class="act-kind"><input type="radio" name="kind" value="online" onchange="visitKind()"><span>Online meeting</span></label>
+        </div>
         <div class="grid2">
           <div class="field"><span class="lbl">Date</span><input type="date" name="visit_date" min="<?= date('Y-m-d') ?>" required></div>
           <div class="field"><span class="lbl">Time</span><input type="time" name="visit_time" step="900" value="11:00" required></div>
           <div class="field"><span class="lbl">Project</span><select name="project_id" id="visit-project"><option value="0">—</option>
             <?php foreach ($projects as $p_): if (!(int) $p_['active']) continue; ?><option value="<?= (int) $p_['id'] ?>" data-addr="<?= e((string) ($p_['address'] ?? '')) ?>" <?= (int) $p_['id'] === (int) ($lead['project_id'] ?? 0) ? 'selected' : '' ?>><?= e($p_['name']) ?></option><?php endforeach; ?></select></div>
-          <div class="field"><span class="lbl">Where</span><input type="text" name="place" id="visit-place" maxlength="255"
+          <div class="field" id="visit-where"><span class="lbl">Where</span><input type="text" name="place" id="visit-place" maxlength="255"
                value="<?= e($projAddr[(int) ($lead['project_id'] ?? 0)] ?? '') ?>" placeholder="Sales office, or a map link"></div>
+          <div class="field" id="visit-meet" hidden><span class="lbl">Meeting link</span><input type="url" name="meet_url" maxlength="500"
+               placeholder="Leave empty to create one"></div>
           <?php if ($isAdmin): ?>
           <div class="field"><span class="lbl">Who meets them</span><select name="host"><option value="0">The lead's owner</option>
             <?php foreach ($people as $u): ?><option value="<?= (int) $u['id'] ?>"><?= e($u['name']) ?></option><?php endforeach; ?></select></div>
@@ -518,8 +534,15 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
         <?php elseif ($isAdmin): ?>
           <p class="text-muted" style="font-size:12px">To confirm visits on WhatsApp automatically, choose the templates in <a href="crm_messages.php#visit-msgs">Automatic messages</a>.</p>
         <?php endif; ?>
-        <button class="btn btn-primary btn-sm mt10">Book visit</button>
+        <button class="btn btn-primary btn-sm mt10" id="visit-go">Book visit</button>
       </form>
+      <script>
+      function visitKind(){
+        const on = document.querySelector('#visit-form input[name=kind][value=online]').checked;
+        document.getElementById('visit-where').hidden = on; document.getElementById('visit-meet').hidden = !on;
+        document.getElementById('visit-go').textContent = on ? 'Book meeting' : 'Book visit';
+      }
+      </script>
       <?php endif; ?>
     </div>
     <?php endif; ?>

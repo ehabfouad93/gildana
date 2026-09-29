@@ -142,6 +142,7 @@ function nav_children(string $group): array
         ['Pipeline',     'crm.php',                         'crm.php',            0, false, 'Leads & work'],
         ['Follow-ups',   'crm.php?view=table&due=today',    'crm.php?due',        0, false, 'Leads & work'],
         ['Site visits',  'crm_calendar.php',                'crm_calendar.php',   0, false, 'Leads & work'],
+        ['Events',       'crm_events.php',                  'crm_events.php',     0, false, 'Leads & work'],
     ];
     if ($write) $items[] = ['Import leads', 'crm_import.php', 'crm_import.php', 0, false, 'Leads & work'];
     $items[] = ['Dashboard',    'crm_dashboard.php', 'crm_dashboard.php', 0, false, 'Results'];

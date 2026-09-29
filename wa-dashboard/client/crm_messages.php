@@ -52,6 +52,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'visit_staff_minutes' => max(10, min(1440, (int) ($_POST['staff_minutes'] ?? 60))),
             'visit_booked_stage' => isset($stageMap[$bs]) ? $bs : null, 'visit_done_stage' => isset($stageMap[$ds]) ? $ds : null,
         ]);
+        if (db_has_column('crm_settings', 'meet_soon_tpl')) {
+            $mt = (int) ($_POST['soon_tpl'] ?? 0);
+            crm_settings_set($cid, ['meet_soon_tpl' => isset($tpls[$mt]) ? $mt : null,
+                'meet_soon_vars' => json_encode(crm_tokens_from_post('mvars', $_POST), JSON_UNESCAPED_UNICODE),
+                'meet_soon_minutes' => max(5, min(240, (int) ($_POST['soon_minutes'] ?? 30)))]);
+        }
         flash('Visit messages saved.');
         redirect('crm_messages.php#visit-msgs');
     }
@@ -207,9 +213,10 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 
 <?php $vs = crm_settings($cid); ?>
 <div class="card" id="visit-msgs">
-  <h2>Site visits</h2>
-  <p class="text-muted" style="font-size:12.5px;margin-top:-4px">When a visit is booked on a lead, and the day before it. Useful fields:
-    Visit date, Visit time, Visit place, Project, Salesperson's name and phone.</p>
+  <h2>Site visits and online meetings</h2>
+  <p class="text-muted" style="font-size:12.5px;margin-top:-4px">When a visit or meeting is booked on a lead, and the day before it. Useful fields:
+    Visit date, Visit time, Visit place, Project, Salesperson's name and phone. For an online meeting, Visit place and
+    Online meeting link are the meeting's link.</p>
   <form method="post" id="visit-f">
     <?= csrf_field() ?><input type="hidden" name="action" value="visit_msgs">
     <div class="grid2">
@@ -240,6 +247,20 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
       <div class="field"><span class="lbl">When they came, move the lead to</span><select name="done_stage"><option value="0">Leave the stage as it is</option>
         <?php foreach ($stages as $st): ?><option value="<?= (int) $st['id'] ?>" <?= (int) $vs['visit_done_stage'] === (int) $st['id'] ? 'selected' : '' ?>><?= e($st['name']) ?></option><?php endforeach; ?></select></div>
     </div>
+    <?php if (db_has_column('crm_settings', 'meet_soon_tpl')): ?>
+    <div class="grid2">
+      <div>
+        <div class="field"><span class="lbl">Online meetings: "starting soon", with the link</span>
+          <select name="soon_tpl" id="ms-tpl"><option value="0">Don't send</option>
+            <?php foreach ($tpls as $t): ?><option value="<?= $t['id'] ?>" <?= (int) ($vs['meet_soon_tpl'] ?? 0) === $t['id'] ? 'selected' : '' ?>><?= e($t['name'] . ' (' . $t['lang'] . ')') ?></option><?php endforeach; ?></select>
+          <div class="tpl-preview text-muted" id="ms-prev"></div></div>
+        <div class="tpl-vars" id="ms-vars"></div>
+      </div>
+      <div class="field"><span class="lbl">Send it</span><select name="soon_minutes">
+        <?php foreach ([10 => '10 minutes before', 15 => '15 minutes before', 30 => '30 minutes before', 60 => '1 hour before', 120 => '2 hours before'] as $m => $l): ?>
+          <option value="<?= $m ?>" <?= (int) ($vs['meet_soon_minutes'] ?? 30) === $m ? 'selected' : '' ?>><?= $l ?></option><?php endforeach; ?></select></div>
+    </div>
+    <?php endif; ?>
     <button class="btn btn-primary">Save visit messages</button>
   </form>
 </div>
@@ -351,8 +372,9 @@ $('sm-tpl').onchange = e => tplPicked(e.target, $('sm-vars'), $('sm-media-wrap')
 /* Visit messages default to the visit's own details. */
 const VISIT_DEFAULT = ['first_name', 'visit_date', 'visit_time', 'visit_place', 'owner_name', 'owner_phone'];
 [['vc', 'cvars', <?= json_encode(json_decode((string) ($vs['visit_confirm_vars'] ?? ''), true) ?: []) ?>],
- ['vr', 'rvars', <?= json_encode(json_decode((string) ($vs['visit_remind_vars'] ?? ''), true) ?: []) ?>]].forEach(([k, prefix, saved]) => {
-  const sel = $(k + '-tpl');
+ ['vr', 'rvars', <?= json_encode(json_decode((string) ($vs['visit_remind_vars'] ?? ''), true) ?: []) ?>],
+ ['ms', 'mvars', <?= json_encode(json_decode((string) ($vs['meet_soon_vars'] ?? ''), true) ?: []) ?>]].forEach(([k, prefix, saved]) => {
+  const sel = $(k + '-tpl'); if (!sel) return;
   const draw = tok => tplPicked(sel, $(k + '-vars'), null, $(k + '-prev'), tok.length ? tok : VISIT_DEFAULT, prefix);
   sel.onchange = () => draw([]);
   if (sel.value !== '0') draw(saved);

@@ -122,6 +122,9 @@ function crm_lib_catalog(): array
         'comeback'   => ['Analysis',       'Leads that came back',        'Lost or quiet leads that returned — and those that then bought.', 'crm_lib_comeback'],
         'team_compare' => ['Team',         'Team comparison',             'Teams side by side: speed, activity, visits, sales, conversion.', 'crm_lib_team_compare'],
         'substatus'  => ['Sales & status', 'Stage × sub-status',          'Each stage broken down by what actually happened.', 'crm_lib_substatus'],
+        'forecast'   => ['Forecast',       'Sales forecast',              'Open leads by stage, the chance each stage has ended in a sale, and the sales to expect.', 'crm_lib_forecast'],
+        'meetings_ahead' => ['Forecast',   'Visits and meetings ahead',   'What is booked for the next 7 and 30 days, and how many are likely to show up.', 'crm_lib_meetings_ahead'],
+        'events'     => ['Team',           'Events',                      'Each event: invited, said yes, came, and who bought afterwards.', 'crm_lib_events'],
     ];
 }
 
@@ -1057,4 +1060,132 @@ function crm_lib_team_compare(int $cid, array $f): array
 function crm_lib_favs(?array $user): array
 {
     return array_values(array_filter(array_map('trim', explode(',', (string) ($user['report_favs'] ?? '')))));
+}
+
+/* ───────────────────────── forecast & events ───────────────────────── */
+
+/**
+ * Sales to expect from the leads open now. Each stage's chance is what happened before: of the
+ * leads that reached it and have since closed (last 12 months), the share that were won. With too
+ * little history for a stage, the account's overall win rate stands in, and the row says so.
+ */
+function crm_lib_forecast(int $cid, array $f): array
+{
+    [$w, $p] = crm_report_where($cid, $f);
+    $kinds = crm_stage_kinds($cid);
+    $won = $kinds['won'] ?: [0]; $lost = $kinds['lost'] ?: [0];
+    $closed = array_merge($won, $lost);
+    $phc = implode(',', array_fill(0, count($closed), '?')); $phw = implode(',', array_fill(0, count($won), '?'));
+    $stages = array_values(array_filter(crm_stages($cid), fn($s) => $s['kind'] === 'open'));
+    if (!$stages) return ['rows' => [], 'empty' => true, 'cols' => []];
+    $first = (int) $stages[0]['id'];
+
+    // Closed leads of the last year, and the open stages each of them passed through.
+    $hist = db_all("SELECT c.id, c.stage_id IN ($phw) AS won, GROUP_CONCAT(DISTINCT e.to_val) AS reached
+                      FROM contacts c LEFT JOIN crm_events e ON e.contact_id=c.id AND e.client_id=c.client_id AND e.kind='stage'
+                     WHERE c.stage_id IN ($phc) AND c.crm_added_at >= NOW() - INTERVAL 365 DAY AND c.deleted_at IS NULL AND {$w}
+                     GROUP BY c.id, c.stage_id", array_merge($won, $closed, $p));
+    $allN = count($hist); $allWon = count(array_filter($hist, fn($h) => (int) $h['won']));
+    $overall = $allN ? $allWon / $allN : null;
+    $reach = [];
+    foreach ($hist as $h) {
+        $seen = array_flip(array_filter(explode(',', (string) $h['reached'])));
+        foreach ($stages as $s) {
+            $sid = (int) $s['id'];
+            if ($sid === $first || isset($seen[(string) $sid])) { $reach[$sid]['n'] = ($reach[$sid]['n'] ?? 0) + 1; $reach[$sid]['won'] = ($reach[$sid]['won'] ?? 0) + (int) $h['won']; }
+        }
+    }
+    $open = [];
+    foreach (db_all("SELECT c.stage_id, COUNT(*) n, SUM(COALESCE(c.deal_value,0)) val FROM contacts c
+                      WHERE c.stage_id IN (" . implode(',', array_map(fn($s) => (int) $s['id'], $stages)) . ") AND c.deleted_at IS NULL AND {$w}
+                      GROUP BY c.stage_id", $p) as $r) $open[(int) $r['stage_id']] = $r;
+    $rows = []; $tn = 0; $tv = 0.0; $en = 0.0; $ev = 0.0;
+    foreach ($stages as $s) {
+        $sid = (int) $s['id'];
+        $n = (int) ($open[$sid]['n'] ?? 0); $val = (float) ($open[$sid]['val'] ?? 0);
+        $h = $reach[$sid] ?? ['n' => 0, 'won' => 0];
+        $enough = $h['n'] >= 5;
+        $chance = $enough ? $h['won'] / $h['n'] : $overall;
+        $rows[] = ['label' => (string) $s['name'], '_href' => 'crm.php?view=table&stage=' . $sid, 'n' => $n, 'value' => $val ?: null,
+                   'chance' => $chance !== null ? round(100 * $chance, 1) : null, 'basis' => $enough ? $h['won'] . ' of ' . $h['n'] : ($overall !== null ? 'Overall rate' : 'No history yet'),
+                   'exp_n' => $chance !== null ? round($n * $chance, 1) : null, 'exp_val' => $chance !== null && $val ? $val * $chance : null];
+        $tn += $n; $tv += $val;
+        if ($chance !== null) { $en += $n * $chance; $ev += $val * $chance; }
+    }
+    return ['tiles' => [['Open leads', $tn, 'num'], ['Open pipeline value', $tv ?: null, 'money_short'],
+                        ['Sales to expect', round($en, 1), 'dec'], ['Value to expect', $ev ?: null, 'money_short']],
+            'cols' => ['label' => ['Stage', 'text'], 'n' => ['Open leads', 'num'], 'value' => ['Value', 'money'], 'chance' => ['Chance of a sale', 'pct'],
+                       'basis' => ['Based on', 'text'], 'exp_n' => ['Sales to expect', 'dec'], 'exp_val' => ['Value to expect', 'money']],
+            'rows' => $rows, 'empty' => !$tn,
+            'chart' => ['type' => 'bars', 'label' => 'label', 'series' => ['exp_n' => 'Sales to expect']],
+            'note' => 'Leads open now (the period does not apply). A stage\'s chance is the share of last year\'s closed leads that reached it and were then won.'];
+}
+
+/** Visits and online meetings booked ahead, per salesperson, with how many are likely to come. */
+function crm_lib_meetings_ahead(int $cid, array $f): array
+{
+    [$w, $p] = crm_report_where($cid, $f);
+    $hasKind = db_has_column('crm_visits', 'kind');
+    $rows = db_all("SELECT v.user_id uid,
+                           SUM(v.starts_at < NOW() + INTERVAL 7 DAY) d7, COUNT(*) d30,
+                           SUM(" . ($hasKind ? "v.kind='online'" : '0') . ") online
+                      FROM crm_visits v JOIN contacts c ON c.id=v.contact_id
+                     WHERE v.client_id=? AND v.status='scheduled' AND v.starts_at >= NOW() AND v.starts_at < NOW() + INTERVAL 30 DAY AND {$w}
+                     GROUP BY v.user_id", array_merge([$cid], $p));
+    $hist = [];
+    foreach (db_all("SELECT v.user_id uid, SUM(v.status='done') came, SUM(v.status IN ('done','no_show')) decided
+                       FROM crm_visits v JOIN contacts c ON c.id=v.contact_id
+                      WHERE v.client_id=? AND v.starts_at >= NOW() - INTERVAL 180 DAY AND v.starts_at < NOW() AND {$w}
+                      GROUP BY v.user_id", array_merge([$cid], $p)) as $h) $hist[(string) $h['uid']] = $h;
+    $allCame = array_sum(array_column($hist, 'came')); $allDec = array_sum(array_column($hist, 'decided'));
+    $overall = $allDec ? $allCame / $allDec : null;
+    $out = []; $t7 = 0; $t30 = 0; $exp = 0.0;
+    foreach ($rows as $r) {
+        $h = $hist[(string) $r['uid']] ?? null;
+        $rate = $h && (int) $h['decided'] >= 3 ? $h['came'] / $h['decided'] : $overall;
+        $out[] = ['label' => crm_user_name($r['uid'] !== null ? (int) $r['uid'] : null), 'd7' => (int) $r['d7'], 'd30' => (int) $r['d30'], 'online' => (int) $r['online'],
+                  'rate' => $rate !== null ? round(100 * $rate, 1) : null, 'expect' => $rate !== null ? round($r['d30'] * $rate, 1) : null];
+        $t7 += (int) $r['d7']; $t30 += (int) $r['d30']; if ($rate !== null) $exp += $r['d30'] * $rate;
+    }
+    usort($out, fn($a, $b) => $b['d30'] <=> $a['d30']);
+    return ['tiles' => [['Next 7 days', $t7, 'num'], ['Next 30 days', $t30, 'num'], ['Likely to come', round($exp, 1), 'dec']],
+            'cols' => ['label' => ['Salesperson', 'text'], 'd7' => ['Next 7 days', 'num'], 'd30' => ['Next 30 days', 'num'], 'online' => ['Of them online', 'num'],
+                       'rate' => ['Show rate (6 months)', 'pct'], 'expect' => ['Likely to come', 'dec']],
+            'rows' => $out, 'empty' => !$out,
+            'chart' => ['type' => 'pair', 'label' => 'label', 'series' => ['d30' => 'Booked', 'expect' => 'Likely to come']],
+            'note' => 'Booked visits and online meetings from now on (the period does not apply). Each person\'s show rate is from their last six months.'];
+}
+
+/** Events held in the period: invited → said yes → came → bought. */
+function crm_lib_events(int $cid, array $f): array
+{
+    if (!db_has_column('crm_visits', 'kind')) return ['rows' => [], 'empty' => true, 'cols' => []];
+    [$w, $p] = crm_report_where($cid, $f);
+    $won = crm_stage_kinds($cid)['won'] ?: [0];
+    $ph = implode(',', array_fill(0, count($won), '?'));
+    $rows = db_all("SELECT e.id, e.name, e.starts_at, e.status,
+                           COUNT(c.id) guests,
+                           SUM(g.status IN ('invited','confirmed','declined','attended','no_show')) invited,
+                           SUM(g.status IN ('confirmed','attended','no_show')) yes,
+                           SUM(g.status='attended') came, SUM(g.status='no_show') no_show,
+                           COUNT(DISTINCT CASE WHEN g.status='attended' AND c.stage_id IN ($ph) THEN c.id END) bought
+                      FROM sales_events e JOIN sales_event_guests g ON g.event_id=e.id
+                      JOIN contacts c ON c.id=g.contact_id AND c.deleted_at IS NULL AND {$w}
+                     WHERE e.client_id=? AND e.starts_at BETWEEN ? AND ?
+                     GROUP BY e.id, e.name, e.starts_at, e.status ORDER BY e.starts_at DESC",
+                   array_merge($won, $p, [$cid, $f['from'] . ' 00:00:00', $f['to'] . ' 23:59:59']));
+    $out = [];
+    foreach ($rows as $r) {
+        $dec = (int) $r['came'] + (int) $r['no_show'];
+        $out[] = ['label' => $r['name'] . ($r['status'] === 'cancelled' ? ' (cancelled)' : ''), '_href' => 'crm_events.php?id=' . (int) $r['id'],
+                  'when' => date('j M Y', strtotime((string) $r['starts_at'])), 'guests' => (int) $r['guests'], 'invited' => (int) $r['invited'],
+                  'yes' => (int) $r['yes'], 'came' => (int) $r['came'], 'show' => $dec ? round(100 * $r['came'] / $dec, 1) : null, 'bought' => (int) $r['bought']];
+    }
+    return ['tiles' => [['Events', count($out), 'num'], ['Invited', array_sum(array_column($out, 'invited')), 'num'],
+                        ['Came', array_sum(array_column($out, 'came')), 'num'], ['Bought after', array_sum(array_column($out, 'bought')), 'num']],
+            'cols' => ['label' => ['Event', 'text'], 'when' => ['When', 'text'], 'guests' => ['Guests', 'num'], 'invited' => ['Invited', 'num'],
+                       'yes' => ['Said yes', 'num'], 'came' => ['Came', 'num'], 'show' => ['Show rate', 'pct'], 'bought' => ['Came and bought', 'num']],
+            'rows' => $out, 'empty' => !$out,
+            'chart' => ['type' => 'pair', 'label' => 'label', 'series' => ['came' => 'Came', 'bought' => 'Bought']],
+            'note' => 'Events held in the period. Show rate is of those marked came or didn\'t come.'];
 }

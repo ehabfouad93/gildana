@@ -35,7 +35,7 @@ function perm_modules(): array
                                                                    'crm_reports.php', 'meta_leads.php',
                                                                    'crm_team.php', 'crm_rules.php', 'crm_setup.php',
                                                                    'crm_messages.php', 'crm_calendar.php', 'crm_dashboard.php', 'media.php',
-                                                                   'crm_manage.php', 'lead_search.php']],
+                                                                   'crm_manage.php', 'lead_search.php', 'crm_events.php']],
         'contacts'    => ['label' => 'Contacts',       'pages' => ['contacts.php']],
         'lists'       => ['label' => 'Lists',          'pages' => ['lists.php', 'contact_search.php']],
         'templates'   => ['label' => 'Templates',      'pages' => ['templates.php']],
@@ -157,7 +157,7 @@ function perm_crm_pages(): array
     return [
         'pipeline'  => ['label' => 'Pipeline & leads',   'pages' => ['crm.php', 'crm_lead.php'], 'always' => true],
         'dashboard' => ['label' => 'Dashboard',          'pages' => ['crm_dashboard.php']],
-        'visits'    => ['label' => 'Site visits',        'pages' => ['crm_calendar.php']],
+        'visits'    => ['label' => 'Visits, meetings & events', 'pages' => ['crm_calendar.php', 'crm_events.php']],
         'reports'   => ['label' => 'Reports',            'pages' => ['crm_reports.php']],
         'import'    => ['label' => 'Import leads',       'pages' => ['crm_import.php']],
         'team'      => ['label' => 'Team & transfer',    'pages' => ['crm_team.php'],     'admin' => true],

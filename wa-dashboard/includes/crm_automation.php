@@ -32,6 +32,11 @@ function crm_tpl_tokens(): array
         'visit_date'  => 'Visit date',
         'visit_time'  => 'Visit time',
         'visit_place' => 'Visit place',
+        'meeting_link' => 'Online meeting link',
+        'event_name'  => 'Event name',
+        'event_date'  => 'Event date',
+        'event_time'  => 'Event time',
+        'event_place' => 'Event place or link',
         'company'     => 'Company name',
         'text'        => 'Fixed text…',
     ];
@@ -70,6 +75,11 @@ function crm_tpl_value(string $token, array $c, array $ctx = []): string
         case 'visit_date':  $v = !empty($ctx['starts_at']) ? date('l j F', strtotime((string) $ctx['starts_at'])) : ''; break;
         case 'visit_time':  $v = !empty($ctx['starts_at']) ? date('g:i A', strtotime((string) $ctx['starts_at'])) : ''; break;
         case 'visit_place': $v = (string) ($ctx['place'] ?? ''); break;
+        case 'meeting_link': $v = (string) ($ctx['meet_url'] ?? ''); break;
+        case 'event_name':  $v = (string) ($ctx['event_name'] ?? ''); break;
+        case 'event_date':  $v = !empty($ctx['event_at']) ? date('l j F', strtotime((string) $ctx['event_at'])) : ''; break;
+        case 'event_time':  $v = !empty($ctx['event_at']) ? date('g:i A', strtotime((string) $ctx['event_at'])) : ''; break;
+        case 'event_place': $v = (string) ($ctx['event_place'] ?? ''); break;
         case 'company':     $v = (string) db_val("SELECT name FROM clients WHERE id=?", [(int) $c['client_id']]); break;
     }
     $v = trim($v);

@@ -82,6 +82,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'save_google') {
         setting_set('google_client_id', trim((string) ($_POST['google_client_id'] ?? '')));
         setting_set('google_api_key',   trim((string) ($_POST['google_api_key'] ?? '')));
+        setting_set('google_meet', !empty($_POST['google_meet']) ? '1' : '0');
         $sec = trim((string) ($_POST['google_client_secret'] ?? ''));
         if ($sec !== '') setting_set('google_client_secret', encrypt_secret($sec));   // blank = keep
         flash('Google settings saved.');
@@ -345,6 +346,11 @@ if ($ok):  ?><div class="alert success"><?= e($ok) ?></div><?php endif; ?>
       <div class="field"><span class="lbl">API key <span class="text-muted">(optional — for the sheet picker)</span></span>
         <input type="text" name="google_api_key" value="<?= e($gCfg['api_key']) ?>" placeholder="AIza…"></div>
     </div>
+    <label class="mod-all" style="margin:4px 0 12px"><input type="checkbox" name="google_meet" value="1" <?= google_meet_enabled() ? 'checked' : '' ?>>
+      Create Google Meet links for online meetings</label>
+    <p class="text-muted" style="font-size:12.5px;margin:-6px 0 12px">Needs the Google Calendar API switched on in the Cloud console and the
+      <code>calendar.events</code> scope on the consent screen (Google reviews apps that use it). Clients reconnect Google once after you turn it on.
+      Without it, meetings use the salesperson's own room link or a free Jitsi room.</p>
     <button type="submit" class="btn btn-primary">Save Google settings</button>
   </form>
 </div>

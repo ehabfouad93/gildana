@@ -27,6 +27,22 @@ const GOOGLE_SCOPES = 'https://www.googleapis.com/auth/drive.file https://www.go
 
 /* ── platform configuration (set once by the operator) ── */
 
+/**
+ * Google Meet links for online meetings need the Calendar permission on top of the above. It is
+ * the operator's switch (Admin → Settings), because Google reviews apps that ask for it; until it
+ * is on, meetings use the salesperson's own room link or a free Jitsi room instead.
+ */
+function google_meet_enabled(): bool
+{
+    try { return trim((string) db_val("SELECT v FROM app_settings WHERE k='google_meet'")) === '1'; }
+    catch (Throwable $e) { return false; }
+}
+
+function google_scopes(): string
+{
+    return GOOGLE_SCOPES . (google_meet_enabled() ? ' https://www.googleapis.com/auth/calendar.events' : '');
+}
+
 function google_cfg(): array
 {
     $get = function (string $k): string {
@@ -61,6 +77,7 @@ function google_endpoint(string $which): string
         'token'    => 'https://oauth2.googleapis.com/token',
         'userinfo' => 'https://www.googleapis.com/oauth2/v3/userinfo',
         'sheets'   => 'https://sheets.googleapis.com/v4/spreadsheets',
+        'calendar' => 'https://www.googleapis.com/calendar/v3',
     ][$which] ?? '';
 }
 
@@ -118,7 +135,7 @@ function google_auth_url(int $clientId, ?int $userId, string $returnTo = ''): st
         'client_id'     => $c['client_id'],
         'redirect_uri'  => google_redirect_uri(),
         'response_type' => 'code',
-        'scope'         => GOOGLE_SCOPES,
+        'scope'         => google_scopes(),
         // offline + consent is what actually yields a refresh token: without them Google
         // returns one only on the very first authorisation ever, and a client who reconnects
         // ends up with an account that silently stops working an hour later.
@@ -261,4 +278,44 @@ function google_sheet_append(array $client, string $spreadsheetId, string $tab, 
         ['json' => ['values' => array_values($rows)]]);
     if ($r['error'] !== '') return ['ok' => false, 'appended' => 0, 'error' => $r['error']];
     return ['ok' => true, 'appended' => count($rows), 'error' => ''];
+}
+
+/* ── Calendar: a Google Meet link for an online meeting ── */
+
+/**
+ * Put the meeting in the connected Google account's calendar with a Meet room, and return the
+ * room's link. The lead's email, when there is one, is added as a guest so Google invites them too.
+ *
+ * @return array{ok:bool, url?:string, event_id?:string, error?:string}
+ */
+function google_meet_create(array $client, string $title, int $start, int $minutes, string $guestEmail = ''): array
+{
+    $token = google_access_token($client);
+    if ($token === '') return ['ok' => false, 'error' => 'Google account is not connected.'];
+    $body = [
+        'summary' => $title,
+        'start'   => ['dateTime' => date('c', $start)],
+        'end'     => ['dateTime' => date('c', $start + 60 * $minutes)],
+        'conferenceData' => ['createRequest' => ['requestId' => bin2hex(random_bytes(10)), 'conferenceSolutionKey' => ['type' => 'hangoutsMeet']]],
+    ];
+    if (filter_var($guestEmail, FILTER_VALIDATE_EMAIL)) $body['attendees'] = [['email' => $guestEmail]];
+    $r = google_http('POST', google_endpoint('calendar') . '/calendars/primary/events?conferenceDataVersion=1',
+                     ['json' => $body, 'headers' => ['Authorization: Bearer ' . $token]]);
+    if ($r['error'] !== '') return ['ok' => false, 'error' => $r['http'] === 403 ? 'Reconnect Google on Settings to allow meeting links.' : $r['error']];
+    $url = (string) ($r['json']['hangoutLink'] ?? '');
+    foreach ((array) ($r['json']['conferenceData']['entryPoints'] ?? []) as $ep)
+        if ($url === '' && ($ep['entryPointType'] ?? '') === 'video') $url = (string) ($ep['uri'] ?? '');
+    if ($url === '') return ['ok' => false, 'error' => 'Google did not return a meeting link.'];
+    return ['ok' => true, 'url' => $url, 'event_id' => (string) ($r['json']['id'] ?? '')];
+}
+
+/** Move or remove that calendar entry when the meeting moves or is cancelled. Best effort. */
+function google_meet_update(array $client, string $eventId, ?int $start, int $minutes = 60): void
+{
+    $token = google_access_token($client);
+    if ($token === '' || $eventId === '') return;
+    $url = google_endpoint('calendar') . '/calendars/primary/events/' . rawurlencode($eventId);
+    if ($start === null) { google_http('DELETE', $url, ['headers' => ['Authorization: Bearer ' . $token]]); return; }
+    google_http('PATCH', $url, ['json' => ['start' => ['dateTime' => date('c', $start)], 'end' => ['dateTime' => date('c', $start + 60 * $minutes)]],
+                                'headers' => ['Authorization: Bearer ' . $token]]);
 }
