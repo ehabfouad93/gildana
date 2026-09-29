@@ -80,7 +80,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
           <td><?= (int) $f['chats'] ?></td>
           <td><?= (int) $f['sends'] ?></td>
           <td><label class="switch"><input type="checkbox" <?= $f['status'] === 'active' ? 'checked' : '' ?> onchange="toggleA(<?= (int) $f['id'] ?>,this)"><span class="slider"></span></label></td>
-          <td style="text-align:right;white-space:nowrap">
+          <td style="text-align: end;white-space:nowrap">
             <a class="btn btn-ghost btn-sm" href="agent_edit.php?id=<?= (int) $f['id'] ?>">Edit</a>
             <a class="btn btn-ghost btn-sm" href="agent_chats.php?flow=<?= (int) $f['id'] ?>">Chats</a>
             <form method="post" style="display:inline">

@@ -117,7 +117,7 @@ page_head('Projects & lists', '<span class="setup-jump"><a href="#projects">Proj
             <button class="btn btn-ghost btn-sm">Save</button>
             <?php if (!(int) $p['active']): ?><span class="pill gray">Hidden</span><?php endif; ?></form></td>
         <td class="num"><a href="crm.php?view=table&project=<?= (int) $p['id'] ?>"><?= $counts[(int) $p['id']] ?? 0 ?></a></td>
-        <td style="text-align:right"><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="toggle_project"><input type="hidden" name="project" value="<?= (int) $p['id'] ?>">
+        <td style="text-align: end"><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="toggle_project"><input type="hidden" name="project" value="<?= (int) $p['id'] ?>">
           <button class="btn-link"><?= (int) $p['active'] ? 'Hide from lists' : 'Show again' ?></button></form></td></tr>
     <?php endforeach; ?></tbody></table></div>
   <form method="post" style="display:flex;gap:8px;padding:14px 18px;flex-wrap:wrap">
@@ -170,7 +170,7 @@ page_head('Projects & lists', '<span class="setup-jump"><a href="#projects">Proj
             <textarea name="options" rows="2" aria-label="Choices, one per line" placeholder="Choices, one per line (pick-list only)"><?= e((string) ($f['options'] ?? '')) ?></textarea>
             <button class="btn btn-ghost btn-sm">Save</button>
             <?php if (!(int) $f['active']): ?><span class="pill gray">Hidden</span><?php endif; ?></form></td>
-        <td style="text-align:right"><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="field_toggle"><input type="hidden" name="field" value="<?= (int) $f['id'] ?>">
+        <td style="text-align: end"><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="field_toggle"><input type="hidden" name="field" value="<?= (int) $f['id'] ?>">
           <button class="btn-link"><?= (int) $f['active'] ? 'Hide' : 'Show again' ?></button></form></td></tr>
     <?php endforeach; ?></tbody></table></div>
   <?php endif; ?>

@@ -268,7 +268,7 @@ function chNote(){
     <div class="alert success" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <strong>Connected</strong>
       <span id="pw-number" class="text-muted"><?= $CLIENT['personal_msisdn'] ? '+' . e((string) $CLIENT['personal_msisdn']) : '' ?></span>
-      <button type="button" class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="pwLogout()">Disconnect</button>
+      <button type="button" class="btn btn-ghost btn-sm" style="margin-inline-start:auto" onclick="pwLogout()">Disconnect</button>
     </div>
     <div style="margin-top:10px;font-size:12.5px" class="text-muted">
       Not seeing customer replies come in? <button type="button" class="btn-link" onclick="pwResync()">Resync connection</button>
@@ -279,7 +279,7 @@ function chNote(){
   <!-- not connected -->
   <div id="pw-idle" style="display:<?= $pwState === 'connected' ? 'none' : 'block' ?>">
     <button type="button" class="btn btn-primary" id="pw-start" onclick="pwConnect()">Connect my WhatsApp</button>
-    <span id="pw-msg" class="text-muted" style="margin-left:10px;font-size:12.5px"></span>
+    <span id="pw-msg" class="text-muted" style="margin-inline-start:10px;font-size:12.5px"></span>
   </div>
 
   <!-- linking -->
@@ -290,7 +290,7 @@ function chNote(){
         <div class="text-muted" style="font-size:11.5px;margin-top:6px">The code refreshes automatically</div>
       </div>
       <div style="flex:1;min-width:230px">
-        <ol style="padding-left:18px;line-height:1.9;font-size:13.5px;margin:0">
+        <ol style="padding-inline-start:18px;line-height:1.9;font-size:13.5px;margin:0">
           <li>Open <strong>WhatsApp</strong> on your phone</li>
           <li>Tap <strong>Settings</strong> → <strong>Linked devices</strong></li>
           <li>Tap <strong>Link a device</strong> and scan this code</li>
@@ -517,7 +517,7 @@ $isPersonal = channel_is_personal($CLIENT); ?>
       </div>
     </div>
     <div class="field">
-      <span class="lbl">API Key <?= $CLIENT['ai_api_key_enc'] ? '<span class="pill green" style="margin-left:6px">••• set</span>' : '' ?></span>
+      <span class="lbl">API Key <?= $CLIENT['ai_api_key_enc'] ? '<span class="pill green" style="margin-inline-start:6px">••• set</span>' : '' ?></span>
       <input type="text" name="ai_api_key" autocomplete="off" placeholder="<?= $CLIENT['ai_api_key_enc'] ? 'Leave blank to keep current key' : 'Paste your provider API key' ?>">
       <div class="hint">Stored encrypted. Never shown again after saving.</div>
     </div>
@@ -553,7 +553,7 @@ $isPersonal = channel_is_personal($CLIENT); ?>
     <div class="alert success" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <strong>Connected</strong>
       <span class="text-muted"><?= e((string) ($gClient['google_email'] ?: '')) ?></span>
-      <form method="post" style="margin-left:auto" onsubmit="return confirm('Disconnect Google? Automations that read or write sheets will stop until you reconnect.')">
+      <form method="post" style="margin-inline-start:auto" onsubmit="return confirm('Disconnect Google? Automations that read or write sheets will stop until you reconnect.')">
         <?= csrf_field() ?><input type="hidden" name="action" value="google_disconnect">
         <button class="btn btn-ghost btn-sm">Disconnect</button>
       </form>

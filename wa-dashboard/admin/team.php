@@ -74,7 +74,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
           <td><?= $u['status'] === 'active' ? '<span class="pill green dot">Active</span>' : '<span class="pill gray dot">Disabled</span>' ?></td>
           <td class="text-muted"><?= $u['last_login_at'] ? e(date('d M Y, H:i', strtotime((string) $u['last_login_at']))) : 'Never' ?></td>
           <td class="text-muted"><?= e(date('d M Y', strtotime((string) $u['created_at']))) ?></td>
-          <td style="text-align:right;white-space:nowrap">
+          <td style="text-align: end;white-space:nowrap">
             <button class="btn-link" onclick='openReset(<?= (int) $u['id'] ?>, <?= json_encode($u['email']) ?>)'>Reset password</button>
             <?php if (!$self): ?>
               <form method="post" style="display:inline"><?= csrf_field() ?><input type="hidden" name="action" value="toggle_admin"><input type="hidden" name="user_id" value="<?= (int) $u['id'] ?>"><button class="btn-link"><?= $u['status'] === 'active' ? 'Disable' : 'Enable' ?></button></form>

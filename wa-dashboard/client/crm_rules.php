@@ -152,7 +152,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
           <span class="text-muted" style="display:block;font-size:12px"><?= e($describe($r)) ?></span></td>
         <td style="font-size:13px"><?= e(implode(', ', $who) ?: 'Nobody') ?>
           <span class="text-muted" style="display:block;font-size:12px"><?= $r['method'] === 'least' ? 'whoever has the fewest open leads' : 'in turn' ?></span></td>
-        <td style="text-align:right;white-space:nowrap">
+        <td style="text-align: end;white-space:nowrap">
           <?php foreach ([['up', '↑', $i > 0], ['down', '↓', $i < count($rules) - 1]] as [$act, $lbl, $show]): if (!$show) continue; ?>
             <form method="post" style="display:inline"><?= csrf_field() ?><input type="hidden" name="action" value="<?= $act ?>"><input type="hidden" name="rule" value="<?= (int) $r['id'] ?>">
               <button class="btn btn-ghost btn-sm" aria-label="Move <?= $act ?>"><?= $lbl ?></button></form>

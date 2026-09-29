@@ -201,7 +201,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
     </div>
     <?php if ($summary['problems']): ?>
       <h2 style="margin-top:14px">Worth a look</h2>
-      <ul style="font-size:13px;padding-left:18px"><?php foreach ($summary['problems'] as $p): ?><li><?= e($p) ?></li><?php endforeach; ?></ul>
+      <ul style="font-size:13px;padding-inline-start:18px"><?php foreach ($summary['problems'] as $p): ?><li><?= e($p) ?></li><?php endforeach; ?></ul>
     <?php endif; ?>
     <a class="btn btn-primary" href="crm.php">Open the CRM</a>
     <a class="btn btn-ghost" href="crm_import.php">Import another file</a>

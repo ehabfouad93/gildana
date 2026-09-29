@@ -228,7 +228,7 @@ video_card('promo', 'promo', 'Demo video on the public site',
         <td class="text-muted"><?= (int) $f['sort'] ?></td>
         <td><strong><?= e((string) $f['question']) ?></strong></td>
         <td><span class="pill <?= $f['status'] === 'active' ? 'green' : 'gray' ?>"><?= e(ucfirst((string) $f['status'])) ?></span></td>
-        <td style="text-align:right;white-space:nowrap">
+        <td style="text-align: end;white-space:nowrap">
           <a class="btn-link" href="help_admin.php?edit=<?= (int) $f['id'] ?>">Edit</a>
           <form method="post" style="display:inline" onsubmit="return confirm('Delete this question?')">
             <?= csrf_field() ?><input type="hidden" name="action" value="faq_delete"><input type="hidden" name="id" value="<?= (int) $f['id'] ?>">
@@ -254,7 +254,7 @@ video_card('promo', 'promo', 'Demo video on the public site',
             <span class="text-muted" style="font-size:11.5px"><?= e((string) $t['email']) ?></span></td>
         <td><strong><?= e((string) $t['subject']) ?></strong></td>
         <td class="text-muted" style="font-size:12px;max-width:380px"><?= nl2br(e(mb_substr((string) $t['message'], 0, 300))) ?></td>
-        <td style="text-align:right;white-space:nowrap">
+        <td style="text-align: end;white-space:nowrap">
           <?php if ($t['status'] !== 'closed'): ?>
             <a class="btn-link" href="mailto:<?= e((string) $t['email']) ?>?subject=<?= rawurlencode('Re: ' . (string) $t['subject']) ?>">Reply</a>
             <form method="post" style="display:inline">

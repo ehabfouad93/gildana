@@ -198,7 +198,7 @@ if ($importSummary): ?>
   <div class="alert success">Import done — <?= (int) $importSummary['imported'] ?> added, <?= (int) $importSummary['updated'] ?> updated, <?= (int) $importSummary['skipped'] ?> skipped of <?= (int) $importSummary['total'] ?> rows.
     <?php if (!empty($importSummary['problems'])): ?>
       <details style="margin-top:6px"><summary>What was skipped or changed, and why</summary>
-        <ul style="margin:6px 0 0;padding-left:18px;font-size:12.5px">
+        <ul style="margin:6px 0 0;padding-inline-start:18px;font-size:12.5px">
           <?php foreach ($importSummary['problems'] as $pr): ?><li><?= e($pr) ?></li><?php endforeach; ?>
         </ul></details>
     <?php endif; ?></div>
@@ -277,7 +277,7 @@ if ($importSummary): ?>
           </td>
           <td class="text-muted"><?= e((string) $c['source']) ?></td>
           <td class="text-muted"><?= e(date('d M Y', strtotime((string) $c['created_at']))) ?></td>
-          <td style="text-align:right;white-space:nowrap">
+          <td style="text-align: end;white-space:nowrap">
             <button class="btn-link" onclick="toggleOptout(<?= (int) $c['id'] ?>,this)"><?= $c['opt_in_status'] === 'out' ? 'Opt in' : 'Opt out' ?></button>
             <button class="icon-btn" title="Delete" onclick="delContact(<?= (int) $c['id'] ?>)">&#x2715;</button>
           </td>

@@ -86,7 +86,7 @@ $failReasons = db_all(
 if ($failReasons): ?>
   <div class="alert error" style="margin-bottom:16px">
     <strong>Why messages failed</strong>
-    <ul style="margin:8px 0 0;padding-left:18px;font-size:13px">
+    <ul style="margin:8px 0 0;padding-inline-start:18px;font-size:13px">
       <?php foreach ($failReasons as $fr): ?>
         <li><strong><?= number_format((int) $fr['n']) ?>×</strong> <?= e((string) $fr['reason']) ?><?php
           $code = trim((string) $fr['error_code']);

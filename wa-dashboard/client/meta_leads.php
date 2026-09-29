@@ -285,7 +285,7 @@ page_head('Facebook & Instagram lead forms', '<a class="btn btn-ghost btn-sm" hr
 @media (max-width: 560px) {
   #mf-list thead { display: none; }
   #mf-list tr { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
-  #mf-list td { border: 0; padding: 0; text-align: left !important; }
+  #mf-list td { border: 0; padding: 0; text-align: start !important; }
   #mf-list td:first-child, #mf-list td:last-child { grid-column: 1 / -1; }
   #mf-list td[data-l]::before { content: attr(data-l); display: block; font-size: 11px; color: var(--muted); }
   #mf-list td:last-child { margin-top: 6px; }
@@ -296,7 +296,7 @@ page_head('Facebook & Instagram lead forms', '<a class="btn btn-ghost btn-sm" hr
     <p class="text-muted" style="font-size:12.5px;margin:4px 0 0">New leads arrive by themselves within seconds.
       <strong>Sync leads</strong> brings in the ones already on the form — Facebook keeps them for 90 days.</p></div>
   <div class="table-wrap"><table class="data" id="mf-list">
-    <thead><tr><th>Form</th><th class="num">On Facebook</th><th class="num">In your CRM</th><th>Last synced</th><th style="text-align:right"></th></tr></thead><tbody>
+    <thead><tr><th>Form</th><th class="num">On Facebook</th><th class="num">In your CRM</th><th>Last synced</th><th style="text-align: end"></th></tr></thead><tbody>
     <?php if (!$forms): ?><tr><td colspan="5"><div class="empty">No forms yet — add one above.</div></td></tr><?php endif; ?>
     <?php foreach ($forms as $f): ?>
       <tr data-form="<?= e((string) $f['form_id']) ?>">
@@ -306,7 +306,7 @@ page_head('Facebook & Instagram lead forms', '<a class="btn btn-ghost btn-sm" hr
         <td class="num" data-l="On Facebook"><?= $f['leads_count'] !== null ? (int) $f['leads_count'] : '—' ?></td>
         <td class="num" data-l="In your CRM"><?= (int) $f['imported'] ?></td>
         <td class="text-muted" style="font-size:12.5px" data-l="Last synced"><?= $f['last_synced_at'] ? e(date('j M, H:i', strtotime((string) $f['last_synced_at']))) : 'Never' ?></td>
-        <td style="text-align:right;white-space:nowrap"><?php if ($isAdmin): ?>
+        <td style="text-align: end;white-space:nowrap"><?php if ($isAdmin): ?>
           <form method="post" style="display:inline" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='Syncing…'">
             <?= csrf_field() ?><input type="hidden" name="action" value="sync"><input type="hidden" name="form" value="<?= (int) $f['id'] ?>">
             <button class="btn btn-primary btn-sm">Sync leads</button></form>
@@ -349,7 +349,7 @@ page_head('Facebook & Instagram lead forms', '<a class="btn btn-ghost btn-sm" hr
     for more people who buy — not just more people who fill in forms — which usually lowers the cost per real buyer.
     Only leads from Meta forms are sent, each event once, with the phone and email hashed.</p>
   <details style="font-size:12.5px;margin-bottom:12px"><summary><strong>Setting it up in Meta (once)</strong></summary>
-    <ol style="margin:8px 0 0;padding-left:18px;line-height:1.8">
+    <ol style="margin:8px 0 0;padding-inline-start:18px;line-height:1.8">
       <li>Events Manager → <strong>Connect data sources</strong> → <strong>CRM</strong> → create a dataset (or use your existing one) and copy its <strong>Dataset ID</strong>.</li>
       <li>In its <strong>Settings</strong>, under Conversions API, <strong>Generate access token</strong> and paste it here.</li>
       <li>Name the events for the stages that matter below — for example <em>Contacted</em>, <em>Visit</em>, <em>Converted</em>.</li>
@@ -361,7 +361,7 @@ page_head('Facebook & Instagram lead forms', '<a class="btn btn-ghost btn-sm" hr
     <label class="mod-all"><input type="checkbox" name="on" value="1" <?= (int) $cs['capi_on'] ? 'checked' : '' ?>> Send results to Meta</label>
     <div class="grid2" style="margin-top:10px">
       <div class="field"><span class="lbl">Dataset ID</span><input type="text" name="dataset" inputmode="numeric" value="<?= e((string) ($cs['capi_dataset'] ?? '')) ?>" placeholder="1234567890123456"></div>
-      <div class="field"><span class="lbl">Access token <?= !empty($cs['capi_token_enc']) ? '<span class="pill green" style="margin-left:6px">••• saved</span>' : '' ?></span>
+      <div class="field"><span class="lbl">Access token <?= !empty($cs['capi_token_enc']) ? '<span class="pill green" style="margin-inline-start:6px">••• saved</span>' : '' ?></span>
         <input type="text" name="token" autocomplete="off" placeholder="<?= !empty($cs['capi_token_enc']) ? 'Leave blank to keep the saved one' : 'Paste the token' ?>"></div>
       <div class="field"><span class="lbl">Test code (optional)</span><input type="text" name="test_code" value="<?= e((string) ($cs['capi_test_code'] ?? '')) ?>" placeholder="TEST12345"></div>
     </div>
@@ -391,7 +391,7 @@ page_head('Facebook & Instagram lead forms', '<a class="btn btn-ghost btn-sm" hr
   <div class="table-wrap" style="margin-top:10px"><table class="data"><tbody>
   <?php foreach ($pages as $p): ?>
     <tr><td><?= e((string) $p['name']) ?></td><td><span class="pill <?= (int) $p['subscribed'] ? 'green' : 'gray' ?>"><?= (int) $p['subscribed'] ? 'Leads arriving' : 'Not used' ?></span></td>
-      <td style="text-align:right"><form method="post" onsubmit="return confirm('Disconnect this Page and its forms? Leads already in your CRM stay.')"><?= csrf_field() ?>
+      <td style="text-align: end"><form method="post" onsubmit="return confirm('Disconnect this Page and its forms? Leads already in your CRM stay.')"><?= csrf_field() ?>
         <input type="hidden" name="action" value="disconnect"><input type="hidden" name="page" value="<?= (int) $p['id'] ?>">
         <button class="btn-link" style="color:var(--danger)">Disconnect</button></form></td></tr>
   <?php endforeach; ?></tbody></table></div>
@@ -478,7 +478,7 @@ function mfEdit(pageId, formId){
             <span class="<?= $left < 10 ? 'crm-late' : 'text-muted' ?>" style="display:block;font-size:11.5px"><?= $left > 0 ? 'expires in ' . $left . ' days — connect again before' : 'expired — connect again' ?></span><?php endif; ?></td>
         <td style="font-size:12.5px"><?= $a_['last_synced_at'] ? e(date('j M, H:i', strtotime((string) $a_['last_synced_at']))) : 'Not yet' ?>
           <?php if ($a_['last_error']): ?><span class="crm-late" style="display:block;font-size:11.5px"><?= e((string) $a_['last_error']) ?></span><?php endif; ?></td>
-        <td style="text-align:right;white-space:nowrap">
+        <td style="text-align: end;white-space:nowrap">
           <form method="post" style="display:inline"><?= csrf_field() ?><input type="hidden" name="acc" value="<?= (int) $a_['id'] ?>">
             <button class="btn btn-ghost btn-sm" name="action" value="ads_sync">Read now</button>
             <button class="btn-link" name="action" value="ads_toggle"><?= (int) $a_['enabled'] ? 'Turn off' : 'Turn on' ?></button>

@@ -171,7 +171,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
               <?php $vv = json_decode((string) $m['vars'], true) ?: []; if ($vv): ?> · <?= e(implode(', ', array_map(fn($i, $v) => '{{' . ($i + 1) . '}} ' . $tokenWord($v), array_keys($vv), $vv))) ?><?php endif; ?>
               <?= !(int) $m['active'] ? ' · <strong>off</strong>' : '' ?></span>
           <?php else: ?><span class="text-muted">Nothing</span><?php endif; ?></td>
-        <td style="text-align:right;white-space:nowrap">
+        <td style="text-align: end;white-space:nowrap">
           <button type="button" class="btn btn-ghost btn-sm" onclick='smEdit(<?= json_encode(['stage' => (int) $st['id'], 'name' => $st['name'],
              'template' => $m ? (int) $m['template_id'] : 0, 'vars' => $m ? (json_decode((string) $m['vars'], true) ?: []) : [],
              'media' => $m['header_media'] ?? '', 'delay' => $m ? (int) $m['delay_minutes'] : 0, 'arrival' => $m ? (int) $m['on_arrival'] : 0], JSON_HEX_APOS | JSON_HEX_QUOT) ?>)'><?= $m ? 'Edit' : 'Set a message' ?></button>
@@ -260,7 +260,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
           <span class="text-muted" style="display:block;font-size:12px"><?= $nSteps ?> message<?= $nSteps === 1 ? '' : 's' ?><?= (int) $q['active'] ? '' : ' · off' ?></span></td>
         <td style="font-size:13px"><?= e($trigWords($q)) ?></td>
         <td class="num"><?= (int) $q['running'] ?></td><td class="num"><?= (int) $q['total'] ?></td>
-        <td style="text-align:right;white-space:nowrap">
+        <td style="text-align: end;white-space:nowrap">
           <a class="btn btn-ghost btn-sm" href="?seq=<?= (int) $q['id'] ?>#seq-form">Edit</a>
           <form method="post" style="display:inline"><?= csrf_field() ?><input type="hidden" name="action" value="seq_toggle"><input type="hidden" name="id" value="<?= (int) $q['id'] ?>">
             <button class="btn-link"><?= (int) $q['active'] ? 'Pause' : 'Start again' ?></button></form>

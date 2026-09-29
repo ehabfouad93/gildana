@@ -141,7 +141,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
                   . (int) $f['failed'] . '</a>'
                 : '<span class="text-muted">0</span>' ?></td>
           <td><label class="switch"><input type="checkbox" <?= $f['status'] === 'active' ? 'checked' : '' ?> onchange="toggleQ(<?= (int) $f['id'] ?>,this)"><span class="slider"></span></label></td>
-          <td style="text-align:right;white-space:nowrap">
+          <td style="text-align: end;white-space:nowrap">
             <form method="post" style="display:inline" onsubmit="return confirm('Import new leads from the sheet and send outreach now?')">
               <?= csrf_field() ?><input type="hidden" name="action" value="send_now"><input type="hidden" name="id" value="<?= (int) $f['id'] ?>">
               <button class="btn btn-primary btn-sm" title="Import new + send outreach + retry stuck">&#9658; Send now</button>
@@ -196,7 +196,7 @@ foreach ($flows as $f):
     <p class="text-muted" style="font-size:12.5px;margin:0 0 10px">
       These leads are still in the qualifier. Nothing was charged for a message that did not arrive.
     </p>
-    <ul style="margin:0;padding-left:18px;font-size:13px">
+    <ul style="margin:0;padding-inline-start:18px;font-size:13px">
       <?php foreach ($reasons as $rr):
         $ex = wa_error_explain((string) $rr['code'], (string) $rr['title']); ?>
         <li style="margin-bottom:8px">
@@ -214,7 +214,7 @@ foreach ($flows as $f):
       <?= csrf_field() ?><input type="hidden" name="action" value="resend_failed"><input type="hidden" name="id" value="<?= (int) $f['id'] ?>">
       <?php if ($canRetry): ?>
         <button class="btn btn-primary btn-sm">&#8635; Send <?= $canRetry ?> again</button>
-        <span class="text-muted" style="font-size:12px;margin-left:8px">
+        <span class="text-muted" style="font-size:12px;margin-inline-start:8px">
           Does not re-read the Google Sheet.<?= $cannot ? ' The other ' . $cannot . ' cannot be delivered and are left alone.' : '' ?>
         </span>
       <?php else: ?>

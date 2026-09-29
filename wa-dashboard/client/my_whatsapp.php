@@ -65,7 +65,7 @@ page_head('My WhatsApp');
 
     <div id="pw-idle" style="display:<?= $state === 'connected' ? 'none' : 'block' ?>">
       <button type="button" class="btn btn-primary" id="pw-start" onclick="pwConnect()">Link my WhatsApp</button>
-      <span id="pw-msg" class="text-muted" style="margin-left:10px;font-size:12.5px"></span>
+      <span id="pw-msg" class="text-muted" style="margin-inline-start:10px;font-size:12.5px"></span>
     </div>
 
     <div id="pw-linking" style="display:none;margin-top:14px">

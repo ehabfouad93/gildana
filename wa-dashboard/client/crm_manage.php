@@ -129,7 +129,7 @@ $leadName = fn(array $r) => (string) ($r['lead_name'] ?? $r['name'] ?? '') !== '
         <td><?= e((string) ($i['by_name'] ?? '')) ?></td>
         <td><?= e((string) ($i['filename'] ?? '')) ?><?= $i['mode'] === 'update' ? ' <span class="pill blue">Update</span>' : '' ?></td>
         <td class="num"><?= (int) $i['total'] ?></td><td class="num"><?= (int) $i['leads'] ?></td><td class="num"><?= (int) $i['updated'] ?></td><td class="num"><?= (int) $i['skipped'] ?></td>
-        <td style="text-align:right"><?php if ($i['undone_at']): ?><span class="text-muted" style="font-size:12px">Undone <?= e(date('j M', strtotime((string) $i['undone_at']))) ?> — <?= e((string) $i['undo_note']) ?></span>
+        <td style="text-align: end"><?php if ($i['undone_at']): ?><span class="text-muted" style="font-size:12px">Undone <?= e(date('j M', strtotime((string) $i['undone_at']))) ?> — <?= e((string) $i['undo_note']) ?></span>
           <?php elseif ((int) $i['undoable'] > 0): ?><form method="post" onsubmit="return confirm('Undo this import? Its <?= (int) $i['undoable'] ?> new leads are taken out (except any someone already worked on).')">
             <?= csrf_field() ?><input type="hidden" name="action" value="undo_import"><input type="hidden" name="import" value="<?= (int) $i['id'] ?>">
             <button class="btn btn-ghost btn-sm">Undo</button></form><?php endif; ?></td></tr>

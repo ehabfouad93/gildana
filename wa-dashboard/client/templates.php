@@ -104,7 +104,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
           <td class="text-muted"><?= e((string) $t['category']) ?: '—' ?></td>
           <td><?= (int) $t['variable_count'] ?></td>
           <td><span class="pill <?= $stCls ?>"><?= e(ucfirst(strtolower((string) $t['status']))) ?></span></td>
-          <td style="text-align:right">
+          <td style="text-align: end">
             <button class="btn-link" onclick='showTemplate(<?= json_encode($t['wa_name']) ?>, <?= json_encode($t['body_text']) ?>)'>Preview</button>
           </td>
         </tr>

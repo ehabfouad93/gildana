@@ -122,7 +122,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
               <span class="slider"></span>
             </label>
           </td>
-          <td style="text-align:right"><a class="btn btn-ghost btn-sm" href="client.php?id=<?= (int) $c['id'] ?>">Manage</a></td>
+          <td style="text-align: end"><a class="btn btn-ghost btn-sm" href="client.php?id=<?= (int) $c['id'] ?>">Manage</a></td>
         </tr>
       <?php endforeach; ?>
       </tbody>

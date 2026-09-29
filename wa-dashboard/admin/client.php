@@ -427,8 +427,8 @@ function chToggle(){ document.getElementById('ch-personal').style.display =
       <div class="field"><span class="lbl">App ID</span><input type="text" name="app_id" value="<?= e((string) $client['app_id']) ?>"></div>
       <div class="field"><span class="lbl">Phone Number ID</span><input type="text" name="phone_number_id" value="<?= e((string) $client['phone_number_id']) ?>"></div>
       <div class="field"><span class="lbl">WhatsApp Business Account ID</span><input type="text" name="waba_id" value="<?= e((string) $client['waba_id']) ?>"></div>
-      <div class="field"><span class="lbl">Access Token <?= $client['access_token_enc'] ? '<span class="pill green" style="margin-left:6px">••• set</span>' : '' ?></span><input type="text" name="access_token" placeholder="<?= $client['access_token_enc'] ? 'Leave blank to keep current' : 'Permanent / system-user token' ?>" autocomplete="off"></div>
-      <div class="field"><span class="lbl">App Secret <?= $client['app_secret_enc'] ? '<span class="pill green" style="margin-left:6px">••• set</span>' : '<span class="pill red" style="margin-left:6px">not set</span>' ?></span><input type="text" name="app_secret" placeholder="<?= $client['app_secret_enc'] ? 'Leave blank to keep current' : 'From this client\'s Meta app → Settings → Basic' ?>" autocomplete="off"></div>
+      <div class="field"><span class="lbl">Access Token <?= $client['access_token_enc'] ? '<span class="pill green" style="margin-inline-start:6px">••• set</span>' : '' ?></span><input type="text" name="access_token" placeholder="<?= $client['access_token_enc'] ? 'Leave blank to keep current' : 'Permanent / system-user token' ?>" autocomplete="off"></div>
+      <div class="field"><span class="lbl">App Secret <?= $client['app_secret_enc'] ? '<span class="pill green" style="margin-inline-start:6px">••• set</span>' : '<span class="pill red" style="margin-inline-start:6px">not set</span>' ?></span><input type="text" name="app_secret" placeholder="<?= $client['app_secret_enc'] ? 'Leave blank to keep current' : 'From this client\'s Meta app → Settings → Basic' ?>" autocomplete="off"></div>
     </div>
     <?php /* Each client has their own Meta app, so each callback is signed with THAT app's
              secret — there is no single platform-wide value that could verify them all. */ ?>
@@ -535,7 +535,7 @@ function chToggle(){ document.getElementById('ch-personal').style.display =
           <td><span class="pill gray"><?= e(perm_roles()[user_client_role($u)]['label']) ?></span></td>
           <td class="text-muted"><?= $u['last_login_at'] ? e(date('d M Y, H:i', strtotime((string) $u['last_login_at']))) : 'Never' ?></td>
           <td class="text-muted"><?= e(date('d M Y', strtotime((string) $u['created_at']))) ?></td>
-          <td style="text-align:right;white-space:nowrap">
+          <td style="text-align: end;white-space:nowrap">
             <button class="btn-link" onclick='openEdit(<?= (int) $u['id'] ?>, <?= json_encode($u['email']) ?>)'>Edit</button>
             <?php if (count($users) > 1): ?>
               <form method="post" style="display:inline" onsubmit="return confirm('Remove this login?')"><?= csrf_field() ?><input type="hidden" name="action" value="delete_user"><input type="hidden" name="user_id" value="<?= (int) $u['id'] ?>"><button class="icon-btn" title="Remove">&#x2715;</button></form>

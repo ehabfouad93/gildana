@@ -72,7 +72,7 @@ layout_header('Billing', 'client', 'billing');
         <div class="lbl" style="font-size:12px">AI included in your plan</div>
         <div style="font-size:18px;font-weight:700"><?= number_format($aiLeft) ?> credits left</div>
       </div>
-      <div class="text-muted" style="font-size:12.5px;max-width:420px;text-align:right">
+      <div class="text-muted" style="font-size:12.5px;max-width:420px;text-align: end">
         <?= $aiLeft > 0
             ? 'Used by AI replies and lead scoring.'
             : 'Your AI allowance is used up for this month. AI steps now send their written fallback message instead — nothing extra is charged.' ?>

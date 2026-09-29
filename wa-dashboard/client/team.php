@@ -169,7 +169,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
             <?php $cp = in_array('crm', $mods, true) ? user_crm_pages($p + ['role' => 'client']) : null; ?>
             <?= e(implode(', ', array_map(fn($k) => perm_modules()[$k]['label']
                 . ($k === 'crm' && $cp !== null ? ' (' . implode(', ', array_map(fn($x) => perm_crm_pages()[$x]['label'], $cp)) . ')' : ''), $mods))) ?: '—' ?>
-            <?= $custom ? '<span class="pill blue" style="margin-left:4px">custom</span>' : '' ?></td>
+            <?= $custom ? '<span class="pill blue" style="margin-inline-start:4px">custom</span>' : '' ?></td>
           <td style="font-size:12.5px"><?php
             $sv = (string) ($p['send_via'] ?? '');
             echo e(send_via_labels()[$sv] ?? '—');
@@ -180,7 +180,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
                     : ' <span class="pill gray" title="They link it from My WhatsApp">not linked yet</span>';
             } ?></td>
           <td class="text-muted"><?= $p['last_login_at'] ? e(date('j M, H:i', strtotime((string) $p['last_login_at']))) : 'Never' ?></td>
-          <td style="text-align:right;white-space:nowrap">
+          <td style="text-align: end;white-space:nowrap">
             <button class="btn btn-ghost btn-sm" onclick='teamOpen(<?= json_encode([
                 'id' => (int) $p['id'], 'email' => $p['email'], 'name' => $p['name'],
                 'role' => user_client_role($p), 'status' => $p['status'], 'send_via' => (string) ($p['send_via'] ?? ''),
@@ -269,7 +269,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
     <div class="row-between mt10">
       <button type="button" class="btn btn-ghost" id="t-remove" hidden
         onclick="if(confirm('Remove this person? They are signed out immediately.')){document.getElementById('t-action').value='remove';document.getElementById('team-form').submit();}">Remove</button>
-      <span style="display:flex;gap:8px;margin-left:auto">
+      <span style="display:flex;gap:8px;margin-inline-start:auto">
         <button type="button" class="btn btn-ghost" onclick="document.getElementById('m-team').classList.remove('open')">Cancel</button>
         <button type="submit" class="btn btn-primary">Save</button>
       </span>

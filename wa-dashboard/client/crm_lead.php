@@ -326,13 +326,13 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
   <div class="alert warn">This lead was deleted <?= e(date('j M', strtotime((string) $lead['deleted_at']))) ?> and is in the recycle bin.
     <?php if ($isAdmin): ?>
       <form method="post" style="display:inline"><?= csrf_field() ?><input type="hidden" name="action" value="restore">
-        <button class="btn btn-sm btn-primary" style="margin-left:8px">Bring it back</button></form>
+        <button class="btn btn-sm btn-primary" style="margin-inline-start:8px">Bring it back</button></form>
     <?php endif; ?></div>
 <?php elseif ($lead['stage_id'] === null): ?>
   <div class="alert info">This contact is not in the pipeline.
     <?php if ($canW): ?>
       <form method="post" style="display:inline"><?= csrf_field() ?><input type="hidden" name="action" value="add_to_crm">
-        <button class="btn btn-sm btn-primary" style="margin-left:8px">Add to the CRM</button></form>
+        <button class="btn btn-sm btn-primary" style="margin-inline-start:8px">Add to the CRM</button></form>
     <?php endif; ?></div>
 <?php endif; ?>
 

@@ -35,7 +35,7 @@ function perm_modules(): array
                                                                    'crm_reports.php', 'meta_leads.php',
                                                                    'crm_team.php', 'crm_rules.php', 'crm_setup.php',
                                                                    'crm_messages.php', 'crm_calendar.php', 'crm_dashboard.php', 'media.php',
-                                                                   'crm_manage.php']],
+                                                                   'crm_manage.php', 'lead_search.php']],
         'contacts'    => ['label' => 'Contacts',       'pages' => ['contacts.php']],
         'lists'       => ['label' => 'Lists',          'pages' => ['lists.php', 'contact_search.php']],
         'templates'   => ['label' => 'Templates',      'pages' => ['templates.php']],

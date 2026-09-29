@@ -136,22 +136,25 @@ function nav_children(string $group): array
     if ($group !== 'crm') return [];
     $write = !function_exists('can_write') || can_write();
     $admin = !function_exists('is_client_admin') || is_client_admin();
+    // Grouped the way the day goes: the work itself, how it is going, and setting it up.
+    // Each entry's sixth slot names its group; the sidebar prints a small heading where it changes.
     $items = [
-        ['Pipeline',     'crm.php',                         'crm.php'],
-        ['Dashboard',    'crm_dashboard.php',               'crm_dashboard.php'],
-        ['Follow-ups',   'crm.php?view=table&due=today',    'crm.php?due'],
-        ['Site visits',  'crm_calendar.php',                'crm_calendar.php'],
-        ['Reports',      'crm_reports.php',                 'crm_reports.php'],
+        ['Pipeline',     'crm.php',                         'crm.php',            0, false, 'Leads & work'],
+        ['Follow-ups',   'crm.php?view=table&due=today',    'crm.php?due',        0, false, 'Leads & work'],
+        ['Site visits',  'crm_calendar.php',                'crm_calendar.php',   0, false, 'Leads & work'],
     ];
-    if ($write) $items[] = ['Import leads', 'crm_import.php', 'crm_import.php'];
+    if ($write) $items[] = ['Import leads', 'crm_import.php', 'crm_import.php', 0, false, 'Leads & work'];
+    $items[] = ['Dashboard',    'crm_dashboard.php', 'crm_dashboard.php', 0, false, 'Results'];
+    $items[] = ['Reports',      'crm_reports.php',   'crm_reports.php',   0, false, 'Results'];
     if ($admin) {
-        $items[] = ['Team & transfer',  'crm_team.php',  'crm_team.php'];
-        $items[] = ['Assignment rules', 'crm_rules.php', 'crm_rules.php'];
-        $items[] = ['Automatic messages', 'crm_messages.php', 'crm_messages.php'];
-        $items[] = ['Lead forms',       'meta_leads.php', 'meta_leads.php'];
-        $items[] = ['Projects & lists', 'crm_setup.php', 'crm_setup.php'];
-        $items[] = ['Stages',           'crm.php?stages=1', 'crm.php?stages'];
-        $items[] = ['Requests & bin',   'crm_manage.php', 'crm_manage.php'];
+        foreach ([['Team & transfer',  'crm_team.php',  'crm_team.php'],
+                  ['Assignment rules', 'crm_rules.php', 'crm_rules.php'],
+                  ['Automatic messages', 'crm_messages.php', 'crm_messages.php'],
+                  ['Lead forms',       'meta_leads.php', 'meta_leads.php'],
+                  ['Projects & lists', 'crm_setup.php', 'crm_setup.php'],
+                  ['Stages',           'crm.php?stages=1', 'crm.php?stages'],
+                  ['Requests & bin',   'crm_manage.php', 'crm_manage.php']] as $it)
+            $items[] = [$it[0], $it[1], $it[2], 0, false, 'Administration'];
     }
     // Only the CRM pages this person was given (Team → under the CRM tick).
     if (function_exists('can_crm')) {
@@ -269,9 +272,12 @@ function layout_header(string $title, string $role, string $active, array $opts 
     $inSub   = in_array(basename(dirname((string) ($_SERVER['SCRIPT_NAME'] ?? ''))), ['admin', 'client'], true);
     $root    = $inSub ? '../' : './';                                  // → the app root
     $navBase = $inSub ? '' : ($role === 'admin' ? 'admin/' : 'client/'); // → this role's pages
+    require_once __DIR__ . '/i18n.php';
+    i18n_begin();                                   // Arabic: translate everything printed from here on
+    $theme = ui_theme();
     ?>
 <!DOCTYPE html>
-<html lang="en">
+<html lang="<?= ui_lang() ?>" dir="<?= ui_rtl() ? 'rtl' : 'ltr' ?>"<?= $theme !== 'auto' ? ' data-theme="' . $theme . '"' : '' ?>>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -359,6 +365,26 @@ $barH   = max(58, $logoH + 22);
     </a>
     <?php endif; ?>
 
+    <?php if (array_key_exists('lang', $me)):
+      $back = (string) ($_SERVER['REQUEST_URI'] ?? '');
+      $nextTheme = ['auto' => 'dark', 'dark' => 'light', 'light' => 'auto'][$theme];
+      ob_start(); ?>
+    <form method="post" action="<?= e($root) ?>prefs.php" class="topbar-pref">
+      <?= csrf_field() ?><input type="hidden" name="back" value="<?= e($back) ?>">
+      <input type="hidden" name="action" value="lang"><input type="hidden" name="lang" value="<?= ui_rtl() ? 'en' : 'ar' ?>">
+      <button type="submit" class="pref-btn" id="lang-btn" lang="<?= ui_rtl() ? 'en' : 'ar' ?>" title="<?= ui_rtl() ? 'English' : 'العربية' ?>"><?= ui_rtl() ? 'EN' : 'ع' ?></button>
+    </form>
+    <form method="post" action="<?= e($root) ?>prefs.php" class="topbar-pref">
+      <?= csrf_field() ?><input type="hidden" name="back" value="<?= e($back) ?>">
+      <input type="hidden" name="action" value="theme"><input type="hidden" name="theme" value="<?= $nextTheme ?>">
+      <button type="submit" class="pref-btn" id="theme-btn" title="<?= ['auto' => 'Appearance: Automatic', 'dark' => 'Appearance: Dark', 'light' => 'Appearance: Light'][$theme] ?>" aria-label="<?= ['auto' => 'Appearance: Automatic', 'dark' => 'Appearance: Dark', 'light' => 'Appearance: Light'][$theme] ?>">
+        <?php if ($theme === 'dark'): ?><svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M16.5 12.5A7 7 0 017.5 3.5a7 7 0 109 9z"/></svg>
+        <?php elseif ($theme === 'light'): ?><svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="10" cy="10" r="3.5"/><path d="M10 1.5v2M10 16.5v2M1.5 10h2M16.5 10h2M4 4l1.4 1.4M14.6 14.6L16 16M16 4l-1.4 1.4M5.4 14.6L4 16"/></svg>
+        <?php else: ?><svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="10" r="7"/><path d="M10 3a7 7 0 000 14z" fill="currentColor"/></svg><?php endif; ?>
+      </button>
+    </form>
+    <?php $prefForms = ob_get_clean(); echo $prefForms; endif; ?>
+
     <a class="topbar-user" href="<?= e($navBase) ?><?= $meHref ?>" title="<?= e((string) ($me['email'] ?? '')) ?>">
       <?= user_avatar_html($me, 30, $root) ?>
       <span class="topbar-user-name"><?= e(user_display_name($me)) ?></span>
@@ -372,6 +398,20 @@ $barH   = max(58, $logoH + 22);
 <div class="shell">
   <aside class="sidebar" id="sidebar">
     <nav class="sb-nav">
+      <div class="sb-search">
+        <input type="search" id="sb-q" placeholder="Search the menu" aria-label="Search the menu" autocomplete="off">
+        <button type="button" class="sb-kbd" id="cmdk-open" title="Go to…" aria-label="Go to…"><kbd>Ctrl K</kbd></button>
+      </div>
+      <?php $favs = array_key_exists('nav_favs', $me) ? nav_favs() : []; if ($favs): ?>
+      <div class="sb-favs" id="sb-favs">
+        <span class="sb-glabel">Favourites</span>
+        <?php foreach ($favs as $fv): ?>
+          <a class="sb-link sb-fav <?= nav_here() === $fv['u'] ? 'active' : '' ?>" href="<?= e($navBase . $fv['u']) ?>">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.6l1.9 4 4.4.5-3.3 3 .9 4.3L8 11.2l-3.9 2.2.9-4.3-3.3-3 4.4-.5z"/></svg>
+            <span><?= e($fv['t']) ?></span></a>
+        <?php endforeach; ?>
+      </div>
+      <?php endif; ?>
       <?php foreach ($items as $key => $item):
         $kids = !empty($item['children']) ? nav_children((string) $item['children']) : []; ?>
         <?php if ($kids): $open = $key === $active; ?>
@@ -386,7 +426,8 @@ $barH   = max(58, $logoH + 22);
             </button>
           </div>
           <div class="sb-sub">
-            <?php foreach ($kids as $kid): ?>
+            <?php $lastG = null; foreach ($kids as $kid): ?>
+              <?php if (($kid[5] ?? null) !== null && $kid[5] !== $lastG): $lastG = $kid[5]; ?><span class="sb-glabel"><?= e($lastG) ?></span><?php endif; ?>
               <a class="sb-sublink <?= $open && nav_child_active($kid) ? 'active' : '' ?>" href="<?= e($navBase . $kid[1]) ?>"><?= e($kid[0]) ?>
                 <?php if (!empty($kid[3])): ?><span class="sb-count <?= !empty($kid[4]) ? 'late' : '' ?>"><?= (int) $kid[3] ?></span><?php endif; ?></a>
             <?php endforeach; ?>
@@ -400,6 +441,7 @@ $barH   = max(58, $logoH + 22);
       <?php endforeach; ?>
       <span class="sb-sep"></span>
       <span class="sb-who"><?= e(current_user()['email'] ?? '') ?></span>
+      <?php if (!empty($prefForms)): ?><div class="sb-prefs"><?= str_replace(['id="lang-btn"', 'id="theme-btn"'], '', $prefForms) ?></div><?php endif; ?>
       <a class="sb-link" href="<?= e($root) ?>logout.php"><span>Log out</span></a>
     </nav>
   </aside>
@@ -439,6 +481,106 @@ function layout_footer(): void
   <?php endforeach; ?>
 </nav>
 <div class="toast" id="toast"></div>
+<?php
+  $leadSearch = $tabRole !== 'admin' && function_exists('can_use') && can_use('crm');
+  $prefsUrl = ($tabSub ? '../' : './') . 'prefs.php';
+  $T = fn(string $s) => function_exists('t') ? t($s) : $s;
+?>
+<dialog class="cmdk" id="cmdk" aria-label="Go to…"
+        data-lead-url="<?= $leadSearch ? e($tabBase . 'lead_search.php') : '' ?>" data-base="<?= e($tabBase) ?>">
+  <input type="search" id="cmdk-q" placeholder="<?= e($T($leadSearch ? 'Go to a page, or find a lead…' : 'Go to a page…')) ?>" autocomplete="off" aria-controls="cmdk-list">
+  <ul id="cmdk-list" role="listbox"></ul>
+  <p class="cmdk-foot"><kbd>↑</kbd><kbd>↓</kbd> <?= e($T('to move')) ?> · <kbd>Enter</kbd> <?= e($T('to open')) ?> · <kbd>Esc</kbd> <?= e($T('to close')) ?></p>
+</dialog>
+<script>
+/* ── menu search, favourites star, Ctrl/⌘+K ── */
+(function(){
+  var norm = function(s){ return (s||'').toLowerCase().replace(/[أإآ]/g,'ا').replace(/ة/g,'ه').replace(/ى/g,'ي').trim(); };
+  // Menu search: hide what doesn't match, open a group whose pages do.
+  var q = document.getElementById('sb-q');
+  if (q) q.addEventListener('input', function(){
+    var v = norm(q.value);
+    document.querySelectorAll('#sidebar .sb-link, #sidebar .sb-sublink').forEach(function(a){
+      if (a.closest('.sb-head')) return;
+      a.hidden = v !== '' && norm(a.textContent).indexOf(v) < 0;
+    });
+    document.querySelectorAll('#sidebar .sb-group').forEach(function(g){
+      var head = g.querySelector('.sb-head .sb-link'), anyKid = false;
+      g.querySelectorAll('.sb-sublink').forEach(function(k){ if (!k.hidden) anyKid = true; });
+      var headHit = v === '' || norm(head.textContent).indexOf(v) >= 0;
+      if (headHit && v !== '') g.querySelectorAll('.sb-sublink').forEach(function(k){ k.hidden = false; anyKid = true; });
+      g.hidden = !(headHit || anyKid);
+      if (v !== '') g.classList.toggle('open', anyKid);
+    });
+    document.querySelectorAll('#sidebar .sb-glabel').forEach(function(l){ l.hidden = v !== ''; });
+  });
+  if (q) q.addEventListener('keydown', function(e){
+    if (e.key === 'Enter') { var a = Array.prototype.find.call(document.querySelectorAll('#sidebar .sb-link:not([hidden]), #sidebar .sb-sublink:not([hidden])'), function(a){ return !a.closest('[hidden]') && q.value.trim() !== ''; }); if (a) location.href = a.href; }
+    if (e.key === 'Escape') { q.value = ''; q.dispatchEvent(new Event('input')); }
+  });
+
+  // The star on each page's title.
+  var star = document.getElementById('fav-star');
+  if (star) star.addEventListener('click', function(){
+    var fd = new FormData(); fd.append('action','fav'); fd.append('ajax','1');
+    fd.append('url', star.dataset.url); fd.append('title', star.dataset.title);
+    var tok = document.querySelector('input[name=csrf_token]'); if (tok) fd.append('csrf_token', tok.value);
+    fetch(<?= json_encode($prefsUrl) ?>, {method:'POST', body:fd, credentials:'same-origin'}).then(function(r){ return r.json(); })
+      .then(function(j){ if (j.ok) location.reload(); else if (typeof showToast==='function') showToast(j.error||'Could not save', true); });
+  });
+
+  // Ctrl/⌘+K: every page in the menu, and leads by name, phone or code.
+  var dlg = document.getElementById('cmdk'); if (!dlg || !dlg.showModal) return;
+  var inp = document.getElementById('cmdk-q'), list = document.getElementById('cmdk-list'), sel = 0, items = [], timer = null, seq = 0;
+  var pages = [], seen = {};
+  document.querySelectorAll('#sidebar a[href]').forEach(function(a){
+    var t = a.textContent.replace(/\s+\d+\s*$/,'').replace(/\s+/g,' ').trim();
+    if (!t || /logout\.php/.test(a.getAttribute('href')) || seen[a.href]) return;
+    var grp = a.closest('.sb-group'); var parent = grp ? grp.querySelector('.sb-head .sb-link').textContent.trim() : '';
+    seen[a.href] = 1; pages.push({label: t, sub: parent && parent !== t ? parent : '', href: a.href});
+  });
+  function draw(){
+    list.innerHTML = '';
+    items.forEach(function(it, i){
+      var li = document.createElement('li'); li.setAttribute('role','option'); li.className = i === sel ? 'on' : '';
+      var b = document.createElement('strong'); b.textContent = it.label; li.appendChild(b);
+      if (it.sub) { var s = document.createElement('span'); s.textContent = it.sub; li.appendChild(s); }
+      if (it.kind) { var k = document.createElement('em'); k.textContent = it.kind; li.appendChild(k); }
+      li.addEventListener('mousedown', function(e){ e.preventDefault(); location.href = it.href; });
+      list.appendChild(li);
+    });
+    if (!items.length) { var li = document.createElement('li'); li.className = 'cmdk-none'; li.textContent = <?= json_encode($T('Nothing found')) ?>; list.appendChild(li); }
+  }
+  function run(){
+    var v = norm(inp.value);
+    items = pages.filter(function(p){ return v === '' || norm(p.label + ' ' + p.sub).indexOf(v) >= 0; }).slice(0, 8);
+    sel = 0; draw();
+    var url = dlg.dataset.leadUrl; clearTimeout(timer);
+    if (url && inp.value.trim().length >= 2) timer = setTimeout(function(){
+      var my = ++seq;
+      fetch(url + '?q=' + encodeURIComponent(inp.value.trim()), {credentials:'same-origin', headers:{'Accept':'application/json'}})
+        .then(function(r){ return r.json(); }).then(function(j){
+          if (my !== seq || !j.ok) return;
+          j.leads.forEach(function(l){ items.push({label: l.name, sub: l.phone + (l.code ? ' · ' + l.code : ''), kind: l.stage, href: dlg.dataset.base + l.href}); });
+          draw();
+        }).catch(function(){});
+    }, 180);
+  }
+  function open(){ inp.value = ''; run(); dlg.showModal(); inp.focus(); }
+  document.addEventListener('keydown', function(e){
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); dlg.open ? dlg.close() : open(); }
+  });
+  var btn = document.getElementById('cmdk-open'); if (btn) btn.addEventListener('click', open);
+  inp.addEventListener('input', run);
+  inp.addEventListener('keydown', function(e){
+    if (e.key === 'ArrowDown') { e.preventDefault(); sel = Math.min(items.length - 1, sel + 1); draw(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); sel = Math.max(0, sel - 1); draw(); }
+    else if (e.key === 'Enter' && items[sel]) { e.preventDefault(); location.href = items[sel].href; }
+    else if (e.key === 'Escape') { e.preventDefault(); dlg.close(); }   // a search box would only clear itself
+  });
+  dlg.addEventListener('mousedown', function(e){ if (e.target === dlg) dlg.close(); });
+})();
+</script>
 <?php
   // Help + intro video, on every signed-in page. The path back to the app root differs
   // between admin/, client/ and the root itself, so work it out from the running script.
@@ -546,7 +688,18 @@ function page_head(string $title, string $actionHtml = ''): void
     $guide = '';
     if (function_exists('guide_html')) $guide = guide_html(layout_active());
 
-    echo '<div class="page-head"><h1>' . e($title) . '</h1>'
+    // A star to put this page in the menu's Favourites.
+    $star = '';
+    $me = function_exists('current_user_full') ? (current_user_full() ?: []) : [];
+    if (array_key_exists('nav_favs', $me) && function_exists('nav_favs')) {
+        $here = nav_here();
+        $on = in_array($here, array_column(nav_favs(), 'u'), true);
+        $star = '<button type="button" class="fav-star' . ($on ? ' on' : '') . '" id="fav-star" aria-pressed="' . ($on ? 'true' : 'false') . '"'
+              . ' data-url="' . e($here) . '" data-title="' . e($title) . '" title="' . ($on ? 'Remove from favourites' : 'Star this page') . '">'
+              . '<svg width="17" height="17" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.6l1.9 4 4.4.5-3.3 3 .9 4.3L8 11.2l-3.9 2.2.9-4.3-3.3-3 4.4-.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg></button>';
+    }
+
+    echo '<div class="page-head"><h1>' . e($title) . $star . '</h1>'
        . ($guide !== '' || $actionHtml !== ''
             ? '<div class="page-actions">' . $guide . $actionHtml . '</div>' : '')
        . '</div>';

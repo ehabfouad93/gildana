@@ -288,7 +288,7 @@ if ($ok):  ?><div class="alert success"><?= e($ok) ?></div><?php endif; ?>
       <div class="field"><span class="lbl">Auth header</span>
         <input type="text" name="pw_auth_header" value="<?= e($gwHdr) ?>" placeholder="apikey">
         <span class="text-muted" style="font-size:11.5px">Header name the gateway expects, or <code>bearer</code>.</span></div>
-      <div class="field"><span class="lbl">API key <?= $gwKey !== '' ? '<span class="pill green" style="margin-left:6px">••• set</span>' : '' ?></span>
+      <div class="field"><span class="lbl">API key <?= $gwKey !== '' ? '<span class="pill green" style="margin-inline-start:6px">••• set</span>' : '' ?></span>
         <input type="text" name="pw_api_key" autocomplete="off" placeholder="<?= $gwKey !== '' ? 'Leave blank to keep current' : 'Gateway API key' ?>"></div>
       <div class="field"><span class="lbl">Callback base URL <span class="text-muted">(optional)</span></span>
         <input type="text" name="pw_hook_base" value="<?= e($gwHook) ?>" placeholder="<?= e(app_base_url()) ?>">
@@ -318,7 +318,7 @@ if ($ok):  ?><div class="alert success"><?= e($ok) ?></div><?php endif; ?>
 
   <div class="alert info" style="font-size:12.5px;margin-bottom:14px">
     <strong>One-time setup</strong> at <span class="mono">console.cloud.google.com</span>:
-    <ol style="margin:8px 0 0;padding-left:18px;line-height:1.8">
+    <ol style="margin:8px 0 0;padding-inline-start:18px;line-height:1.8">
       <li>Create a project → <strong>APIs &amp; Services</strong> → enable <strong>Google Sheets API</strong> and <strong>Google Picker API</strong></li>
       <li><strong>OAuth consent screen</strong> → External → add the two scopes offered for
           <span class="mono">drive.file</span> and <span class="mono">userinfo.email</span></li>
@@ -340,7 +340,7 @@ if ($ok):  ?><div class="alert success"><?= e($ok) ?></div><?php endif; ?>
     <div class="grid2">
       <div class="field"><span class="lbl">Client ID</span>
         <input type="text" name="google_client_id" value="<?= e($gCfg['client_id']) ?>" placeholder="…apps.googleusercontent.com"></div>
-      <div class="field"><span class="lbl">Client Secret <?= $gCfg['client_secret'] !== '' ? '<span class="pill green" style="margin-left:6px">••• set</span>' : '' ?></span>
+      <div class="field"><span class="lbl">Client Secret <?= $gCfg['client_secret'] !== '' ? '<span class="pill green" style="margin-inline-start:6px">••• set</span>' : '' ?></span>
         <input type="text" name="google_client_secret" autocomplete="off" placeholder="<?= $gCfg['client_secret'] !== '' ? 'Leave blank to keep current' : 'Paste the client secret' ?>"></div>
       <div class="field"><span class="lbl">API key <span class="text-muted">(optional — for the sheet picker)</span></span>
         <input type="text" name="google_api_key" value="<?= e($gCfg['api_key']) ?>" placeholder="AIza…"></div>
@@ -364,7 +364,7 @@ if ($ok):  ?><div class="alert success"><?= e($ok) ?></div><?php endif; ?>
   </p>
   <div class="alert info" style="font-size:12.5px;margin-bottom:14px">
     <strong>One-time setup</strong> at <span class="mono">developers.facebook.com</span> (the same app as WhatsApp is fine):
-    <ol style="margin:8px 0 0;padding-left:18px;line-height:1.8">
+    <ol style="margin:8px 0 0;padding-inline-start:18px;line-height:1.8">
       <li><strong>App settings → Basic</strong>: add <span class="mono"><?= e((string) parse_url(app_base_url(), PHP_URL_HOST)) ?></span>
           to <strong>App Domains</strong>, and under <strong>Add platform → Website</strong> set Site URL to
           <span class="mono"><?= e(rtrim(app_base_url(), '/') . '/') ?></span>. Without this Facebook shows "Can't load URL".</li>
@@ -387,7 +387,7 @@ if ($ok):  ?><div class="alert success"><?= e($ok) ?></div><?php endif; ?>
     <div class="grid2">
       <div class="field"><span class="lbl">App ID</span>
         <input type="text" name="meta_app_id" value="<?= e($mCfg['app_id']) ?>" inputmode="numeric" placeholder="1234567890123456"></div>
-      <div class="field"><span class="lbl">App Secret <?= $mCfg['app_secret'] !== '' ? '<span class="pill green" style="margin-left:6px">••• set</span>' : '' ?></span>
+      <div class="field"><span class="lbl">App Secret <?= $mCfg['app_secret'] !== '' ? '<span class="pill green" style="margin-inline-start:6px">••• set</span>' : '' ?></span>
         <input type="text" name="meta_app_secret" autocomplete="off" placeholder="<?= $mCfg['app_secret'] !== '' ? 'Leave blank to keep current' : 'Paste the app secret' ?>"></div>
       <div class="field"><span class="lbl">Login configuration ID <span class="text-muted">(optional)</span></span>
         <input type="text" name="meta_config_id" value="<?= e($mCfg['config_id']) ?>" inputmode="numeric" placeholder="Only if Facebook says Invalid Scopes">

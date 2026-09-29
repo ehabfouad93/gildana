@@ -12,53 +12,53 @@ $IB_UPLOAD   = $IB_UPLOAD ?? '';
 $IB_SEP = strpos($IB_ENDPOINT, '?') === false ? '?' : '&';
 ?>
 <style>
-  .ib-wrap{display:flex;gap:0;height:72vh;min-height:460px;border:1px solid var(--line,rgba(13,19,33,.10));border-radius:12px;overflow:hidden;background:var(--surface,#fff)}
-  .ib-list{width:320px;min-width:260px;border-right:1px solid var(--line,rgba(13,19,33,.10));display:flex;flex-direction:column;background:var(--surface,#fff)}
-  .ib-search{padding:10px;border-bottom:1px solid var(--line,rgba(13,19,33,.10))}
-  .ib-search input{width:100%;padding:8px 10px;border:1px solid var(--line,rgba(13,19,33,.10));border-radius:8px;font-size:13px}
+  .ib-wrap{display:flex;gap:0;height:72vh;min-height:460px;border:1px solid var(--line,rgba(var(--ink-rgb,13,19,33),.10));border-radius:12px;overflow:hidden;background:var(--surface,#fff)}
+  .ib-list{width:320px;min-width:260px;border-inline-end:1px solid var(--line,rgba(var(--ink-rgb,13,19,33),.10));display:flex;flex-direction:column;background:var(--surface,#fff)}
+  .ib-search{padding:10px;border-bottom:1px solid var(--line,rgba(var(--ink-rgb,13,19,33),.10))}
+  .ib-search input{width:100%;padding:8px 10px;border:1px solid var(--line,rgba(var(--ink-rgb,13,19,33),.10));border-radius:8px;font-size:13px}
   .ib-threads{overflow-y:auto;flex:1}
   .ib-th{display:flex;gap:10px;align-items:center;padding:11px 12px;cursor:pointer;border-bottom:1px solid var(--line,#f0eee9)}
   .ib-th:hover{background:var(--brand-tint,rgba(124,58,237,.06))} .ib-th.active{background:var(--brand-tint,rgba(124,58,237,.10))}
   .ib-av{width:38px;height:38px;border-radius:50%;background:var(--brand,#7C3AED);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:15px;flex-shrink:0}
-  .ib-th .nm{font-weight:600;font-size:13.5px} .ib-th .pv{color:var(--muted,rgba(13,19,33,.55));font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px}
-  .ib-th .meta{margin-left:auto;text-align:right;display:flex;flex-direction:column;gap:3px;align-items:flex-end}
-  .ib-th .tm{color:var(--muted,rgba(13,19,33,.55));font-size:11px}
+  .ib-th .nm{font-weight:600;font-size:13.5px} .ib-th .pv{color:var(--muted,rgba(var(--ink-rgb,13,19,33),.55));font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px}
+  .ib-th .meta{margin-inline-start:auto;text-align: end;display:flex;flex-direction:column;gap:3px;align-items:flex-end}
+  .ib-th .tm{color:var(--muted,rgba(var(--ink-rgb,13,19,33),.55));font-size:11px}
   .ib-badge{background:var(--brand,#7C3AED);color:#fff;border-radius:10px;font-size:11px;padding:1px 7px;font-weight:600}
-  .ib-chat{flex:1;display:flex;flex-direction:column;position:relative;background:#efe7dd;background-image:linear-gradient(rgba(255,255,255,.55),rgba(255,255,255,.55))}
-  .ib-chat-h{padding:12px 16px;background:var(--surface,#fff);border-bottom:1px solid var(--line,rgba(13,19,33,.10));display:flex;align-items:center;gap:10px}
+  .ib-chat{flex:1;display:flex;flex-direction:column;position:relative;background:var(--chat-bg,#efe7dd)}
+  .ib-chat-h{padding:12px 16px;background:var(--surface,#fff);border-bottom:1px solid var(--line,rgba(var(--ink-rgb,13,19,33),.10));display:flex;align-items:center;gap:10px}
   .ib-body{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:6px}
   .ib-b{max-width:74%;padding:7px 11px;border-radius:9px;font-size:13.5px;line-height:1.35;white-space:pre-wrap;word-wrap:break-word;box-shadow:0 1px .5px rgba(0,0,0,.08)}
-  .ib-in{align-self:flex-start;background:#fff}
-  .ib-out{align-self:flex-end;background:#d9fdd3}
-  .ib-b .st{display:block;text-align:right;font-size:10.5px;color:#667;margin-top:2px}
+  .ib-in{align-self:flex-start;background:var(--bubble-in,#fff)}
+  .ib-out{align-self:flex-end;background:var(--bubble-out,#d9fdd3)}
+  .ib-b .st{display:block;text-align: end;font-size:10.5px;color:#667;margin-top:2px}
   .ib-b .st.failed{color:#c0392b}
   /* The explanation under a failed send. Left-aligned and wrapping, unlike the timestamp it
      sits beneath, because it is a sentence to read rather than a status to glance at. */
   .ib-b .ib-err-code{opacity:.7;font-weight:400}
-  .ib-b .ib-err-hint{display:block;text-align:left;font-size:11px;line-height:1.45;
-    color:#8a6d3b;background:#fdf6e3;border-radius:6px;padding:5px 7px;margin-top:4px;white-space:normal}
+  .ib-b .ib-err-hint{display:block;text-align: start;font-size:11px;line-height:1.45;
+    color:var(--tint-warn-ink,#8a6d3b);background:var(--tint-warn,#fdf6e3);border-radius:6px;padding:5px 7px;margin-top:4px;white-space:normal}
   .ib-b .ib-resend{display:inline-block;margin-top:6px;font-size:11.5px;font-weight:600;
     color:#fff;background:var(--brand,#6c4cf1);border:0;border-radius:6px;padding:5px 10px;cursor:pointer}
   .ib-b .ib-resend:hover{filter:brightness(1.08)}
   .ib-b .ib-resend[disabled]{opacity:.55;cursor:default}
-  .ib-b .ib-later{background:transparent;color:var(--brand,#6c4cf1);border:1px solid currentColor;margin-left:6px}
-  .ib-b .ib-resend-err{color:#8a1f11;background:#fdecea}
+  .ib-b .ib-later{background:transparent;color:var(--brand,#6c4cf1);border:1px solid currentColor;margin-inline-start:6px}
+  .ib-b .ib-resend-err{color:var(--tint-red-ink,#8a1f11);background:var(--tint-red,#fdecea)}
   /* When a template is the only thing that can work, it stops being the secondary option. */
-  .ib-b .ib-tpl-alt.only{background:var(--brand,#6c4cf1);color:#fff;border-color:transparent;margin-left:0}
+  .ib-b .ib-tpl-alt.only{background:var(--brand,#6c4cf1);color:#fff;border-color:transparent;margin-inline-start:0}
   .ib-b .ib-tpl-alt{display:inline-block;margin:6px 0 0 6px;font-size:11.5px;font-weight:600;
     color:var(--brand,#6c4cf1);background:transparent;border:1px solid currentColor;border-radius:6px;
     padding:4px 9px;cursor:pointer}
-  .ib-note .ib-tpl-open{margin-left:8px;font-size:12px;font-weight:600;color:#fff;
+  .ib-note .ib-tpl-open{margin-inline-start:8px;font-size:12px;font-weight:600;color:#fff;
     background:var(--brand,#6c4cf1);border:0;border-radius:6px;padding:5px 10px;cursor:pointer}
   /* Template picker. Anchored over the thread rather than the page so the conversation the
      agent is answering stays visible behind it. */
-  .ib-tpl-overlay{position:absolute;inset:0;background:rgba(13,19,33,.34);display:flex;
+  .ib-tpl-overlay{position:absolute;inset:0;background:rgba(var(--ink-rgb,13,19,33),.34);display:flex;
     align-items:center;justify-content:center;z-index:30;padding:16px}
   /* [hidden] is display:none in the UA sheet, which a class selector outranks — without this
      the closed picker stays laid out, invisible over the whole chat pane, and eats every
      click in the thread. */
   .ib-tpl-overlay[hidden]{display:none}
-  .ib-tpl-card{background:var(--card,#fff);border-radius:12px;width:min(520px,100%);
+  .ib-tpl-card{background:var(--surface,#fff);border-radius:12px;width:min(520px,100%);
     max-height:82%;display:flex;flex-direction:column;box-shadow:0 18px 48px rgba(13,19,33,.24)}
   .ib-tpl-head{display:flex;justify-content:space-between;align-items:center;
     padding:12px 14px;border-bottom:1px solid var(--line,#e6e8ef)}
@@ -66,7 +66,7 @@ $IB_SEP = strpos($IB_ENDPOINT, '?') === false ? '?' : '&';
   .ib-tpl-body{overflow:auto;padding:8px 14px 14px}
   .ib-tpl-foot{display:flex;justify-content:space-between;gap:8px;padding:12px 14px;
     border-top:1px solid var(--line,#e6e8ef)}
-  .ib-tpl-row{width:100%;text-align:left;background:0;border:1px solid var(--line,#e6e8ef);
+  .ib-tpl-row{width:100%;text-align: start;background:0;border:1px solid var(--line,#e6e8ef);
     border-radius:9px;padding:9px 11px;margin-top:8px;cursor:pointer;display:block}
   .ib-tpl-row:hover{border-color:var(--brand,#6c4cf1)}
   .ib-tpl-row b{display:block;font-size:13px}
@@ -78,24 +78,24 @@ $IB_SEP = strpos($IB_ENDPOINT, '?') === false ? '?' : '&';
   .ib-tpl-f input{width:100%;padding:7px 9px;border:1px solid var(--line,#e6e8ef);border-radius:7px;font-size:13px}
   .ib-tpl-err{color:#c0392b;font-size:12px;margin-top:8px}
   .ib-tpl-tag{font-size:10px;font-weight:600;padding:1px 6px;border-radius:9px;vertical-align:middle}
-  .ib-tpl-tag.warn{background:#fdf0e3;color:#a9631a}
-  .ib-tpl-tag.ok{background:#e8f5ea;color:#1e7a3c}
-  .ib-foot{padding:10px 12px;background:var(--surface,#fff);border-top:1px solid var(--line,rgba(13,19,33,.10))}
+  .ib-tpl-tag.warn{background:var(--tint-orange,#fdf0e3);color:var(--tint-orange-ink,#a9631a)}
+  .ib-tpl-tag.ok{background:var(--tint-green,#e8f5ea);color:var(--tint-green-ink,#1e7a3c)}
+  .ib-foot{padding:10px 12px;background:var(--surface,#fff);border-top:1px solid var(--line,rgba(var(--ink-rgb,13,19,33),.10))}
   .ib-foot form{display:flex;gap:8px;align-items:flex-end}
-  .ib-foot textarea{flex:1;resize:none;border:1px solid var(--line,rgba(13,19,33,.10));border-radius:20px;padding:9px 14px;font-size:13.5px;max-height:120px}
-  .ib-note{font-size:12px;color:var(--muted,rgba(13,19,33,.55));text-align:center;padding:8px}
-  .ib-empty{margin:auto;color:var(--muted,rgba(13,19,33,.55));text-align:center;font-size:13px}
+  .ib-foot textarea{flex:1;resize:none;border:1px solid var(--line,rgba(var(--ink-rgb,13,19,33),.10));border-radius:20px;padding:9px 14px;font-size:13.5px;max-height:120px}
+  .ib-note{font-size:12px;color:var(--muted,rgba(var(--ink-rgb,13,19,33),.55));text-align:center;padding:8px}
+  .ib-empty{margin:auto;color:var(--muted,rgba(var(--ink-rgb,13,19,33),.55));text-align:center;font-size:13px}
   .ib-bot{font-size:11.5px;padding:3px 9px;border-radius:11px;white-space:nowrap;font-weight:600}
-  .ib-owner{width:auto;max-width:150px;font-size:12px;padding:4px 6px;margin-right:6px}
-  .ib-bot.on{background:#e8f5ea;color:#1e7a3c}
-  .ib-bot.off{background:#fdf0e3;color:#a9631a}
+  .ib-owner{width:auto;max-width:150px;font-size:12px;padding:4px 6px;margin-inline-end:6px}
+  .ib-bot.on{background:var(--tint-green,#e8f5ea);color:var(--tint-green-ink,#1e7a3c)}
+  .ib-bot.off{background:var(--tint-orange,#fdf0e3);color:var(--tint-orange-ink,#a9631a)}
   .ib-back{display:none;background:0;border:0;cursor:pointer;color:var(--ink,#2a221a);padding:2px 6px 2px 0;font-size:19px;line-height:1}
   /* Phones: one pane at a time — the thread list fills the screen, and opening a chat
      swaps to the conversation with a back arrow (the two-pane desktop view is unusable
      at this width). */
   @media(max-width:720px){
     .ib-wrap{height:calc(100vh - 190px);min-height:0;border-radius:10px}
-    .ib-list{width:100%;min-width:0;border-right:0}
+    .ib-list{width:100%;min-width:0;border-inline-end:0}
     .ib-chat{display:none}
     .ib-th .pv{max-width:60vw}
     .ib-wrap.chatting .ib-list{display:none}
@@ -117,7 +117,7 @@ $IB_SEP = strpos($IB_ENDPOINT, '?') === false ? '?' : '&';
       <button type="button" class="ib-back" id="ib-back" aria-label="Back to conversations">&#8592;</button>
       <div class="ib-av" id="ib-hav"></div>
       <div><div class="nm" id="ib-hname"></div><div class="pv" id="ib-hphone"></div></div>
-      <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+      <div style="margin-inline-start:auto;display:flex;align-items:center;gap:8px">
         <?php
           // The owner picker: Admins only, and only where the account has the CRM.
           $ibPeople = (function_exists('is_client_admin') && is_client_admin() && isset($CLIENT)

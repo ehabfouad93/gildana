@@ -62,7 +62,7 @@ page_head('Overview');
         <tr>
           <td><?= e($c['name']) ?></td>
           <td><span class="pill red"><?= (int) $c['credits_balance'] ?> credits</span></td>
-          <td style="text-align:right"><a class="btn-link" href="client.php?id=<?= (int) $c['id'] ?>#credits">Top up →</a></td>
+          <td style="text-align: end"><a class="btn-link" href="client.php?id=<?= (int) $c['id'] ?>#credits">Top up →</a></td>
         </tr>
       <?php endforeach; ?>
       </tbody>

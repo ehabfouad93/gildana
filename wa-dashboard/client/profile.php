@@ -85,6 +85,28 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 </div>
 <?php endif; ?>
 
+<?php if (db_has_column('users', 'lang')): $theme = ui_theme(); ?>
+<div class="card" id="display">
+  <h2>Language and appearance</h2>
+  <form method="post" action="../prefs.php" style="max-width:520px">
+    <?= csrf_field() ?><input type="hidden" name="action" value="display"><input type="hidden" name="back" value="client/profile.php#display">
+    <div class="field"><span class="lbl">Language</span>
+      <div class="lead-quick">
+        <label class="act-kind"><input type="radio" name="lang" value="en" <?= ui_lang() === 'en' ? 'checked' : '' ?>><span lang="en">English</span></label>
+        <label class="act-kind"><input type="radio" name="lang" value="ar" <?= ui_lang() === 'ar' ? 'checked' : '' ?>><span lang="ar">العربية</span></label>
+      </div></div>
+    <div class="field"><span class="lbl">Appearance</span>
+      <div class="lead-quick">
+        <?php foreach (['auto' => 'Automatic', 'light' => 'Light', 'dark' => 'Dark'] as $k => $lbl): ?>
+          <label class="act-kind"><input type="radio" name="theme" value="<?= $k ?>" <?= $theme === $k ? 'checked' : '' ?>><span><?= $lbl ?></span></label>
+        <?php endforeach; ?>
+      </div>
+      <small class="text-muted">Automatic follows your phone or computer.</small></div>
+    <button class="btn btn-primary btn-sm mt10">Save</button>
+  </form>
+</div>
+<?php endif; ?>
+
 <div class="card">
   <h2>Change Password</h2>
   <form method="post" style="max-width:420px">

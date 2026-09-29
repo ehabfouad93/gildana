@@ -333,7 +333,7 @@ client_header('Qualifier · ' . $flow['name'], 'qualifier', $CLIENT);
   </div>
 
   <div class="card"><button type="submit" class="btn btn-primary">Save Qualifier</button>
-    <span class="text-muted" style="font-size:12px;margin-left:10px">Activate it from the <a href="qualifiers.php">Lead Qualifier</a> list when ready.</span></div>
+    <span class="text-muted" style="font-size:12px;margin-inline-start:10px">Activate it from the <a href="qualifiers.php">Lead Qualifier</a> list when ready.</span></div>
 </form>
 
 <script>

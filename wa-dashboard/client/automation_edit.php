@@ -1458,7 +1458,7 @@ function cfgForm(n){ const c=n.config;
         paths.map((p,i)=>`<div style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
             <input data-k="paths.${i}.label" value="${esc(p.label)}" placeholder="Path ${String.fromCharCode(65+i)}" style="flex:1">
             <input data-k="paths.${i}.weight" type="number" min="1" value="${Number(p.weight)||1}" style="width:70px">
-            <span class="muted" style="width:44px;text-align:right">${Math.round((Math.max(1,Number(p.weight)||1)/total)*100)}%</span>
+            <span class="muted" style="width:44px;text-align: end">${Math.round((Math.max(1,Number(p.weight)||1)/total)*100)}%</span>
             ${paths.length>2?`<button type="button" class="btn-link" onclick="splitDel(${i})">✕</button>`:''}
           </div>`).join('') +
         `<button type="button" class="btn-link" onclick="splitAdd()">+ path</button>`;

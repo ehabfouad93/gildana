@@ -51,7 +51,7 @@ page_head('Reports');
           <td><?= (int) $c['delivered_count'] ?> <small class="text-muted">(<?= $pct((int) $c['delivered_count'], $s) ?>%)</small></td>
           <td><?= (int) $c['read_count'] ?> <small class="text-muted">(<?= $pct((int) $c['read_count'], $s) ?>%)</small></td>
           <td><?= (int) $c['failed_count'] ? '<span class="pill red">' . (int) $c['failed_count'] . '</span>' : '0' ?></td>
-          <td style="text-align:right"><a class="btn btn-ghost btn-sm" href="report.php?id=<?= (int) $c['id'] ?>">Details</a></td>
+          <td style="text-align: end"><a class="btn btn-ghost btn-sm" href="report.php?id=<?= (int) $c['id'] ?>">Details</a></td>
         </tr>
       <?php endforeach; ?>
       </tbody>

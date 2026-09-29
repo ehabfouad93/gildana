@@ -231,7 +231,7 @@ page_head('Leads — ' . $flow['name'], $actions);
           <td><?= grade_pill($r['grade']) ?></td>
           <td class="text-muted" style="max-width:220px;font-size:12px"><?= $reason !== '' ? e($reason) : '<span class="text-muted">—</span>' ?></td>
           <td class="text-muted"><?= e(date('d M, H:i', strtotime((string) $r['created_at']))) ?></td>
-          <td style="text-align:right;white-space:nowrap">
+          <td style="text-align: end;white-space:nowrap">
             <button class="btn-link" onclick='editLead(this)' data-run="<?= (int) $r['id'] ?>" data-phone="<?= e((string) $r['phone_e164']) ?>" data-name="<?= e((string) $r['name']) ?>">Edit</button>
             <form method="post" style="display:inline" onsubmit="return confirm('Send the outreach to this lead again?')"><?= csrf_field() ?><input type="hidden" name="action" value="resend"><input type="hidden" name="run_id" value="<?= (int) $r['id'] ?>"><button class="btn-link">Resend</button></form>
             <button class="btn-link" onclick='markNI(this)' data-run="<?= (int) $r['id'] ?>">Not interested</button>

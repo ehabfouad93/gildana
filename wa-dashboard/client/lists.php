@@ -144,7 +144,7 @@ if ($detailId) {
               <td class="mono">+<?= e((string) $m['phone_e164']) ?></td>
               <td><?= e((string) $m['name']) ?: '<span class="text-muted">—</span>' ?></td>
               <td><?= $m['opt_in_status'] === 'out' ? '<span class="pill red">Opted out</span>' : '<span class="pill green">Opted in</span>' ?></td>
-              <td style="text-align:right"><button class="btn-link" onclick="removeMember(<?= (int) $m['id'] ?>)">Remove</button></td>
+              <td style="text-align: end"><button class="btn-link" onclick="removeMember(<?= (int) $m['id'] ?>)">Remove</button></td>
             </tr>
           <?php endforeach; ?>
           </tbody>
@@ -170,7 +170,7 @@ if ($detailId) {
         const box=document.getElementById('search-results');
         if(!rows.length){ box.innerHTML='<p class="text-muted" style="font-size:12.5px">No matching contacts not already in this list.</p>'; return; }
         box.innerHTML='<div class="table-wrap"><table class="data"><tbody>'+rows.map(c=>
-          `<tr id="sr-${c.id}"><td class="mono">+${c.phone}</td><td>${c.name||'—'}</td><td style="text-align:right"><button class="btn btn-ghost btn-sm" onclick="addMember(${c.id})">Add</button></td></tr>`
+          `<tr id="sr-${c.id}"><td class="mono">+${c.phone}</td><td>${c.name||'—'}</td><td style="text-align: end"><button class="btn btn-ghost btn-sm" onclick="addMember(${c.id})">Add</button></td></tr>`
         ).join('')+'</tbody></table></div>';
       },250);
     }
@@ -227,7 +227,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
           <td><strong><?= e((string) $l['name']) ?></strong></td>
           <td><?= (int) $l['members'] ?></td>
           <td class="text-muted"><?= e(date('d M Y', strtotime((string) $l['created_at']))) ?></td>
-          <td style="text-align:right;white-space:nowrap">
+          <td style="text-align: end;white-space:nowrap">
             <a class="btn btn-ghost btn-sm" href="lists.php?id=<?= (int) $l['id'] ?>">Manage</a>
             <form method="post" style="display:inline" onsubmit="return confirm('Delete this list? Contacts are not deleted.')">
               <?= csrf_field() ?><input type="hidden" name="action" value="delete_list"><input type="hidden" name="list_id" value="<?= (int) $l['id'] ?>">

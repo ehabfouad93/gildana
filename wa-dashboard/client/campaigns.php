@@ -75,7 +75,7 @@ page_head('Campaigns', $actions);
                 ? e(date('d M, H:i', strtotime((string) $c['scheduled_at'])))
                 : e(date('d M, H:i', strtotime((string) $c['created_at']))) ?>
           </td>
-          <td style="text-align:right;white-space:nowrap">
+          <td style="text-align: end;white-space:nowrap">
             <a class="btn btn-ghost btn-sm" href="report.php?id=<?= (int) $c['id'] ?>">Report</a>
             <?php /* Opens the new-campaign form filled in, rather than queueing a send behind
                       a single click — the audience and timing deserve a second look. */ ?>

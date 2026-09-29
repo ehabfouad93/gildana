@@ -81,7 +81,7 @@ if ($gs['done'] < $gs['total'] && is_client_admin()): ?>
           <td><?= (int) $c['delivered_count'] ?></td>
           <td><?= (int) $c['failed_count'] ? '<span class="pill red">' . (int) $c['failed_count'] . '</span>' : '0' ?></td>
           <td class="text-muted"><?= e(date('d M, H:i', strtotime((string) $c['created_at']))) ?></td>
-          <td style="text-align:right"><a class="btn-link" href="report.php?id=<?= (int) $c['id'] ?>">View →</a></td>
+          <td style="text-align: end"><a class="btn-link" href="report.php?id=<?= (int) $c['id'] ?>">View →</a></td>
         </tr>
       <?php endforeach; ?>
       </tbody>

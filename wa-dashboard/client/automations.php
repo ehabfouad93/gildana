@@ -134,7 +134,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
               <span class="slider"></span>
             </label>
           </td>
-          <td style="text-align:right;white-space:nowrap">
+          <td style="text-align: end;white-space:nowrap">
             <a class="btn btn-ghost btn-sm" href="automation_edit.php?id=<?= (int) $f['id'] ?>">Edit</a>
             <a class="btn btn-ghost btn-sm" href="automation_report.php?id=<?= (int) $f['id'] ?>">Report</a>
             <form method="post" style="display:inline">

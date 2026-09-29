@@ -86,7 +86,7 @@ page_head('Chats — ' . $flow['name'], $actions);
           <td><?= chat_status_pill((string) $r['status']) ?></td>
           <td class="text-muted" style="max-width:260px;font-size:12px"><?= $capStr !== '' ? e($capStr) : '<span class="text-muted">—</span>' ?></td>
           <td class="text-muted"><?= e(date('d M, H:i', strtotime((string) $r['created_at']))) ?></td>
-          <td style="text-align:right"><button class="btn-link" onclick='viewChat(this)' data-tr='<?= e($tr) ?>' data-name="<?= e((string) $r['name'] ?: $r['phone_e164']) ?>">Transcript</button></td>
+          <td style="text-align: end"><button class="btn-link" onclick='viewChat(this)' data-tr='<?= e($tr) ?>' data-name="<?= e((string) $r['name'] ?: $r['phone_e164']) ?>">Transcript</button></td>
         </tr>
       <?php endforeach; ?>
       </tbody>
