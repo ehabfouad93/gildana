@@ -2,6 +2,7 @@
 declare(strict_types=1);
 require __DIR__ . '/_init.php';
 require_once __DIR__ . '/../includes/meta_leads.php';
+require_once __DIR__ . '/../includes/meta_ads.php';
 
 /**
  * Lead forms from Facebook and Instagram, feeding the CRM.
@@ -120,6 +121,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         db_run("DELETE FROM meta_forms WHERE client_id=? AND page_id=?", [$cid, (string) $page['page_id']]);
         db_run("DELETE FROM meta_pages WHERE id=?", [(int) $page['id']]);
         flash('Disconnected ' . $page['name'] . '. Leads already in your CRM stay.');
+    }
+    /* Ad spend: a System User token pasted, an account switched on or off, or read now. */
+    if ($a === 'ads_token') {
+        $tok = trim((string) ($_POST['token'] ?? ''));
+        $r = $tok !== '' ? meta_ads_accounts_for($tok) : ['ok' => false, 'error' => 'Paste the token first.'];
+        if ($r['ok'] && !$r['accounts']) $r = ['ok' => false, 'error' => 'That token can read no ad accounts. In Business Settings, give the System User access to your ad account.'];
+        if ($r['ok']) { $n = meta_ads_save_accounts($cid, $tok, 'system', $r['accounts']); flash($n . ' ad account' . ($n === 1 ? '' : 's') . ' connected. Spend is read within the hour — or press Read now.'); }
+        else flash($r['error'], 'error');
+        redirect('meta_leads.php#ads');
+    }
+    if ($a === 'ads_toggle') {
+        db_run("UPDATE meta_ad_accounts SET enabled=1-enabled WHERE id=? AND client_id=?", [(int) ($_POST['acc'] ?? 0), $cid]);
+        redirect('meta_leads.php#ads');
+    }
+    if ($a === 'ads_sync') {
+        $acc = db_row("SELECT * FROM meta_ad_accounts WHERE id=? AND client_id=?", [(int) ($_POST['acc'] ?? 0), $cid]);
+        if ($acc) {
+            $since = $acc['last_synced_at'] ? date('Y-m-d', strtotime('-' . META_ADS_REFRESH_DAYS . ' days')) : date('Y-m-d', strtotime('-' . META_ADS_BACKFILL_DAYS . ' days'));
+            $r = meta_ads_sync_account($acc, $since, date('Y-m-d'));
+            flash($r['ok'] ? 'Read ' . number_format($r['rows']) . ' days of ad spend.' : $r['error'], $r['ok'] ? 'success' : 'error');
+        }
+        redirect('meta_leads.php#ads');
+    }
+    if ($a === 'ads_remove') {
+        db_run("DELETE FROM meta_ad_accounts WHERE id=? AND client_id=?", [(int) ($_POST['acc'] ?? 0), $cid]);
+        flash('Ad account removed. Spend already read stays in the reports.');
+        redirect('meta_leads.php#ads');
     }
     if ($a === 'capi') {
         $events = [];
@@ -432,4 +460,47 @@ function mfEdit(pageId, formId){
 </script>
 <?php endif; ?>
 <?php endif; ?>
+<?php /* Ad spend works without a Page connected: click-to-WhatsApp advertisers need it too. */ ?>
+<?php if ($isAdmin): $adAccs = meta_ads_accounts($cid); $spend30 = 0.0;
+  try { $spend30 = (float) db_val("SELECT COALESCE(SUM(spend),0) FROM meta_ad_spend WHERE client_id=? AND day >= CURDATE() - INTERVAL 29 DAY", [$cid]); } catch (Throwable $e) {} ?>
+<div class="card" id="ads">
+  <h2>Ad spend, for cost per lead and per sale</h2>
+  <p class="text-muted" style="font-size:12.5px;margin-top:-4px">Reads what each campaign, ad set and ad spent, day by day, so
+    <a href="crm_reports.php?r=roi">Reports → Return on ad spend</a> can show the cost of a lead, a visit and a sale — and which campaigns pay back.</p>
+  <?php if ($adAccs): ?>
+  <div class="table-wrap"><table class="data">
+    <thead><tr><th>Ad account</th><th>Connected with</th><th>Last read</th><th></th></tr></thead><tbody>
+    <?php foreach ($adAccs as $a_): ?>
+      <tr><td><strong><?= e((string) $a_['name']) ?></strong> <span class="text-muted" style="font-size:12px"><?= e((string) $a_['account_id']) ?><?= $a_['currency'] ? ' · ' . e((string) $a_['currency']) : '' ?></span>
+          <?php if (!(int) $a_['enabled']): ?><span class="pill gray">Off</span><?php endif; ?></td>
+        <td style="font-size:12.5px"><?= $a_['token_kind'] === 'system' ? 'System User token' : 'Facebook login' ?>
+          <?php if ($a_['token_kind'] === 'login' && $a_['token_expires']): $left = (int) floor((strtotime((string) $a_['token_expires']) - time()) / 86400); ?>
+            <span class="<?= $left < 10 ? 'crm-late' : 'text-muted' ?>" style="display:block;font-size:11.5px"><?= $left > 0 ? 'expires in ' . $left . ' days — connect again before' : 'expired — connect again' ?></span><?php endif; ?></td>
+        <td style="font-size:12.5px"><?= $a_['last_synced_at'] ? e(date('j M, H:i', strtotime((string) $a_['last_synced_at']))) : 'Not yet' ?>
+          <?php if ($a_['last_error']): ?><span class="crm-late" style="display:block;font-size:11.5px"><?= e((string) $a_['last_error']) ?></span><?php endif; ?></td>
+        <td style="text-align:right;white-space:nowrap">
+          <form method="post" style="display:inline"><?= csrf_field() ?><input type="hidden" name="acc" value="<?= (int) $a_['id'] ?>">
+            <button class="btn btn-ghost btn-sm" name="action" value="ads_sync">Read now</button>
+            <button class="btn-link" name="action" value="ads_toggle"><?= (int) $a_['enabled'] ? 'Turn off' : 'Turn on' ?></button>
+            <button class="btn-link" style="color:var(--danger)" name="action" value="ads_remove" onclick="return confirm('Remove this ad account? Spend already read stays.')">Remove</button></form></td></tr>
+    <?php endforeach; ?></tbody></table></div>
+  <p class="text-muted" style="font-size:12.5px">Last 30 days: <strong><?= e(crm_money_fmt($spend30, $cid)) ?></strong> spent. The last three days are read again every hour, because Meta keeps correcting them.</p>
+  <?php else: ?>
+    <p class="note">No ad account yet. Connecting Facebook above (again) with <strong>ads_read</strong> allowed brings your ad accounts here —
+      or paste a System User token below, which never expires.</p>
+  <?php endif; ?>
+  <details class="mt10"><summary class="btn-link">Use a System User token (recommended — it does not expire)</summary>
+    <ol style="font-size:12.5px;line-height:1.6;margin:8px 0">
+      <li>Meta Business Settings → Users → <strong>System users</strong> → Add (Admin or Employee).</li>
+      <li><strong>Assign assets</strong> → your ad account → <em>View performance</em>.</li>
+      <li><strong>Generate new token</strong> for your app with <code>ads_read</code>, and paste it here.</li>
+    </ol>
+    <form method="post" style="display:flex;gap:8px;flex-wrap:wrap"><?= csrf_field() ?><input type="hidden" name="action" value="ads_token">
+      <input name="token" type="password" autocomplete="off" placeholder="EAAB…" style="flex:1;min-width:220px" aria-label="System User token">
+      <button class="btn btn-primary btn-sm">Connect ad accounts</button></form>
+    <p class="text-muted" style="font-size:12px">Stored encrypted, never shown again. It only reads spend; it cannot change or pause your ads.</p>
+  </details>
+</div>
+<?php endif; ?>
+
 <?php layout_footer();

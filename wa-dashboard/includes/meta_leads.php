@@ -22,7 +22,7 @@ require_once __DIR__ . '/crm.php';
 require_once __DIR__ . '/whatsapp.php';
 
 // pages_manage_ads is what lets us LIST a Page's forms and their questions; leads_retrieval reads the leads.
-const META_SCOPES = 'pages_show_list,pages_read_engagement,pages_manage_metadata,pages_manage_ads,leads_retrieval,business_management';
+const META_SCOPES = 'pages_show_list,pages_read_engagement,pages_manage_metadata,pages_manage_ads,leads_retrieval,business_management,ads_read';
 
 /** Where a form's answer can go. */
 /** What we read about each lead: the answers, and which campaign, ad set, ad and platform brought it. */
@@ -150,6 +150,12 @@ function meta_finish_connect(int $clientId, string $code): array
         db_run("INSERT INTO meta_pages (client_id,page_id,name,token_enc,connected_at) VALUES (?,?,?,?,NOW())
                 ON DUPLICATE KEY UPDATE name=VALUES(name), token_enc=VALUES(token_enc), last_error=NULL",
                [$clientId, (string) $p['id'], mb_substr((string) ($p['name'] ?? ''), 0, 190), encrypt_secret((string) $p['access_token'])]);
+    }
+    // The same login can read ad spend, when it was allowed (ads_read). Not having it is fine:
+    // lead forms work without it, and the ad spend card says how to add it.
+    if (function_exists('meta_ads_accounts_for')) {
+        $acc = meta_ads_accounts_for($userToken);
+        if ($acc['ok'] && $acc['accounts']) meta_ads_save_accounts($clientId, $userToken, 'login', $acc['accounts'], date('Y-m-d H:i:s', strtotime('+60 days')));
     }
     return ['ok' => true, 'pages' => count($list)];
 }

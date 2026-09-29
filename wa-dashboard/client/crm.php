@@ -376,7 +376,7 @@ $link = function (array $set, array $drop = []) use ($active, $view, $f): string
     return '?' . http_build_query(array_filter($q, fn($v) => $v !== '' && $v !== null));
 };
 /** Words for an active filter, for the chips. */
-$chip = function (string $k, string $v) use ($stageMap, $people, $pnames, $teamNames, $cfields, $builtin): string {
+$chip = function (string $k, string $v) use ($stageMap, $people, $pnames, $teamNames, $cfields, $builtin, $cid): string {
     $names = array_column($people, 'name', 'id');
     return match (true) {
         $k === 'q'        => '“' . $v . '”',
@@ -399,6 +399,9 @@ $chip = function (string $k, string $v) use ($stageMap, $people, $pnames, $teamN
         $k === 'from'     => 'Added from ' . date('j M Y', strtotime($v)),
         $k === 'to'       => 'Added until ' . date('j M Y', strtotime($v)),
         $k === 'idle'     => 'Quiet for ' . (int) $v . '+ days',
+        $k === 'ceq'      => $v === '__none' ? 'No campaign' : 'Campaign: ' . $v,
+        $k === 'mcamp'    => 'Meta campaign ' . (db_val("SELECT campaign FROM contacts WHERE client_id=? AND meta_campaign_id=? AND campaign IS NOT NULL LIMIT 1", [$cid, $v]) ?: $v),
+        $k === 'mad'      => 'Meta ad ' . (db_val("SELECT ad_name FROM contacts WHERE client_id=? AND meta_ad_id=? AND ad_name IS NOT NULL LIMIT 1", [$cid, $v]) ?: $v),
         $k === 'mfrom'    => 'Reached this stage from ' . date('j M Y', strtotime($v)),
         $k === 'mto'      => 'Reached this stage until ' . date('j M Y', strtotime($v)),
         $k === 'noans'    => 'No answer ' . (int) $v . '+ times',

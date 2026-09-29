@@ -107,6 +107,13 @@ function crm_lib_catalog(): array
         'first_reply'=> ['Daily & delays', 'First response time',         'How fast each salesperson first answered new leads.', 'crm_lib_first_reply'],
         'rotation'   => ['Daily & delays', 'Rotation',                    'Leads moved between people, and whether moving them helped.', 'crm_lib_rotation'],
         'churn'      => ['Daily & delays', 'Good leads going cold',       'Warm and hot leads with nothing done for days — reassign or call today.', 'crm_lib_churn'],
+        'roi'        => ['Marketing',      'Return on ad spend',          'Each campaign: spend, cost per lead, per visit and per sale, and what it earned back.', 'crm_lib_roi'],
+        'roi_ads'    => ['Marketing',      'Return on ad spend, by ad',   'The same, ad by ad — which creative actually sells.', 'crm_lib_roi_ads'],
+        'quality'    => ['Marketing',      'Lead quality by source',      'Wrong numbers, not qualified, no answer, repeats — per source.', 'crm_lib_quality_source'],
+        'quality_campaign' => ['Marketing', 'Lead quality by campaign',   'The same, per campaign: which campaigns bring real buyers.', 'crm_lib_quality_campaign'],
+        'platform_status' => ['Marketing', 'Platform × stage × sales',   'Facebook, Instagram, WhatsApp… and where their leads stand now.', 'crm_lib_platform_status'],
+        'project_status'  => ['Sales & status', 'Project × stage',       'Each project\'s leads, stage by stage.', 'crm_lib_project_status'],
+        'campaign_sales'  => ['Marketing', 'Campaign × salesperson',     'Who sells each campaign\'s leads best.', 'crm_lib_campaign_sales'],
         'substatus'  => ['Sales & status', 'Stage × sub-status',          'Each stage broken down by what actually happened.', 'crm_lib_substatus'],
     ];
 }
@@ -134,6 +141,7 @@ function crm_lib_fmt($v, string $type, int $clientId): string
         'pct'   => rtrim(rtrim(number_format((float) $v, 1), '0'), '.') . '%',
         'dur'   => crm_duration((float) $v),
         'days'  => rtrim(rtrim(number_format((float) $v, 1), '0'), '.') . ' d',
+        'x'     => rtrim(rtrim(number_format((float) $v, 1), '0'), '.') . '×',
         default => (string) $v,
     };
 }
@@ -252,8 +260,8 @@ function crm_lib_split(int $cid, array $f, string $dim, string $title): array
     $t['rate'] = $t['leads'] ? round(100 * $t['won'] / $t['leads'], 1) : null;
     $slice = function (array $r) use ($drillKey, $dim) {
         if ($r['label'] === 'Total' || !$drillKey) return [];
-        if ($r['k'] === null) return $dim === 'project' ? ['project' => 'none'] : ($dim === 'campaign' ? ['campaign' => '__none'] : []);
-        return [$drillKey => (string) $r['k']];
+        if ($r['k'] === null) return $dim === 'project' ? ['project' => 'none'] : ($dim === 'campaign' ? ['ceq' => '__none'] : []);
+        return [$dim === 'campaign' ? 'ceq' : $drillKey => (string) $r['k']];
     };
     return ['cols' => ['label' => [$title, 'text'], 'leads' => ['Leads', 'num'], 'won' => ['Won', 'num'], 'lost' => ['Lost', 'num'],
                        'rate' => ['Won ÷ leads', 'pct'], 'won_value' => ['Won value', 'money']],
@@ -601,6 +609,182 @@ function crm_lib_substatus(int $cid, array $f): array
             'rows' => $rows,
             'drill' => fn($r, $c) => $c === 'n' ? crm_lib_drill_base($f) + ['stage' => (string) $r['stage_id']] + (!empty($r['subkey']) ? ['sub' => $r['subkey']] : []) : null,
             'empty' => !$rows, 'note' => 'Leads that arrived in the period, by the stage and sub-status they are in today.'];
+}
+
+/* ───────────────────────── marketing: return on ad spend, quality ───────────────────────── */
+
+/**
+ * Spend against what it brought, by campaign or by ad. Leads are the ones that arrived in the
+ * period from that campaign (Meta says which, for forms and click-to-WhatsApp ads); spend is what
+ * Meta charged in the same period. Cost per sale counts sales among those leads, as they stand.
+ */
+function crm_lib_roi_level(int $cid, array $f, string $level): array
+{
+    require_once __DIR__ . '/meta_ads.php';
+    [$w, $p] = crm_report_where($cid, $f);
+    $col = $level === 'ad' ? 'meta_ad_id' : 'meta_campaign_id';
+    $spend = meta_ads_spend($cid, $f['from'], $f['to'], $level);
+    $kinds = crm_stage_kinds($cid); $won = $kinds['won'] ?: [0];
+    $ph = implode(',', array_fill(0, count($won), '?'));
+    $leads = [];
+    foreach (db_all("SELECT c.$col k, MAX(c." . ($level === 'ad' ? 'ad_name' : 'campaign') . ") name, COUNT(*) n, SUM(c.stage_id IN ($ph)) won,
+                            SUM(CASE WHEN c.stage_id IN ($ph) THEN COALESCE(c.deal_value,0) ELSE 0 END) won_value,
+                            SUM(EXISTS (SELECT 1 FROM crm_visits v WHERE v.contact_id=c.id AND v.status='done')) visited
+                       FROM contacts c WHERE c.crm_added_at BETWEEN ? AND ? AND c.$col IS NOT NULL AND c.$col <> '' AND {$w} GROUP BY c.$col",
+                    array_merge($won, $won, [$f['from'] . ' 00:00:00', $f['to'] . ' 23:59:59'], $p)) as $r) $leads[(string) $r['k']] = $r;
+    $rows = [];
+    foreach (array_unique(array_merge(array_keys($spend), array_keys($leads))) as $k) {
+        $s = $spend[$k] ?? null; $l = $leads[$k] ?? null;
+        $sp = $s ? $s['spend'] : 0.0; $n = (int) ($l['n'] ?? 0); $wn = (int) ($l['won'] ?? 0); $vis = (int) ($l['visited'] ?? 0); $wv = (float) ($l['won_value'] ?? 0);
+        $rows[] = ['label' => (string) (($s['name'] ?? '') ?: ($l['name'] ?? '') ?: $k), 'k' => $k, 'spend' => $sp ?: null, 'leads' => $n,
+                   'cpl' => $n && $sp ? $sp / $n : null, 'visited' => $vis, 'cpv' => $vis && $sp ? $sp / $vis : null,
+                   'won' => $wn, 'cps' => $wn && $sp ? $sp / $wn : null, 'won_value' => $wv ?: null, 'return' => $sp > 0 && $wv > 0 ? $wv / $sp : null];
+    }
+    usort($rows, fn($a, $b) => [(float) $b['spend'], $b['leads']] <=> [(float) $a['spend'], $a['leads']]);
+    $ts = array_sum(array_map(fn($r) => (float) $r['spend'], $rows)); $tl = array_sum(array_column($rows, 'leads'));
+    $tw = array_sum(array_column($rows, 'won')); $tv = array_sum(array_map(fn($r) => (float) $r['won_value'], $rows)); $tvis = array_sum(array_column($rows, 'visited'));
+    $hasSpend = (bool) db_val("SELECT COUNT(*) FROM meta_ad_accounts WHERE client_id=?", [$cid]);
+    return ['tiles' => [['Spent', $ts ?: null, 'money_short'], ['Leads', $tl, 'num'], ['Cost per lead', $tl && $ts ? $ts / $tl : null, 'money_short'],
+                        ['Won', $tw, 'num'], ['Cost per sale', $tw && $ts ? $ts / $tw : null, 'money_short'], ['Return', $ts > 0 && $tv > 0 ? $tv / $ts : null, 'x']],
+            'cols' => ['label' => [$level === 'ad' ? 'Ad' : 'Campaign', 'text'], 'spend' => ['Spent', 'money'], 'leads' => ['Leads', 'num'], 'cpl' => ['Per lead', 'money'],
+                       'visited' => ['Came to a visit', 'num'], 'cpv' => ['Per visit', 'money'], 'won' => ['Won', 'num'], 'cps' => ['Per sale', 'money'],
+                       'won_value' => ['Won value', 'money'], 'return' => ['Return', 'x']],
+            'rows' => $rows,
+            'total' => ['label' => 'Total', 'spend' => $ts ?: null, 'leads' => $tl, 'cpl' => $tl && $ts ? $ts / $tl : null, 'visited' => $tvis,
+                        'cpv' => $tvis && $ts ? $ts / $tvis : null, 'won' => $tw, 'cps' => $tw && $ts ? $ts / $tw : null, 'won_value' => $tv ?: null,
+                        'return' => $ts > 0 && $tv > 0 ? $tv / $ts : null],
+            'chart' => ['type' => 'pair', 'label' => 'label', 'series' => ['leads' => 'Leads', 'won' => 'Won']],
+            'drill' => function ($r, $c) use ($f, $level) {
+                if ($r['label'] === 'Total' || empty($r['k'])) return null;
+                $base = crm_lib_drill_base($f) + [$level === 'ad' ? 'mad' : 'mcamp' => (string) $r['k']];
+                return match ($c) { 'leads' => $base, 'won' => $base + ['state' => 'won'], default => null };
+            },
+            'empty' => !$rows,
+            'note' => $hasSpend ? 'Spend as Meta charged it in the period; leads that arrived in the period from each ' . ($level === 'ad' ? 'ad' : 'campaign')
+                                  . ', and how many of them came to a visit and bought. Return = won value ÷ spend.'
+                                : 'No ad account is connected, so there is no spend yet — connect one in Lead forms → Ad spend. Leads and sales per '
+                                  . ($level === 'ad' ? 'ad' : 'campaign') . ' still show.'];
+}
+function crm_lib_roi(int $cid, array $f): array     { return crm_lib_roi_level($cid, $f, 'campaign'); }
+function crm_lib_roi_ads(int $cid, array $f): array { return crm_lib_roi_level($cid, $f, 'ad'); }
+
+/** How good the leads are, per source or campaign: reachable, real, interested. */
+function crm_lib_quality(int $cid, array $f, string $dim): array
+{
+    [$w, $p] = crm_report_where($cid, $f);
+    $col = $dim === 'campaign' ? "COALESCE(NULLIF(c.campaign,''), '')" : 'c.source';
+    $hasOut = db_has_column('crm_notes', 'outcome');
+    $rows = db_all("SELECT $col k, COUNT(*) leads,
+                           SUM(c.submissions > 1) again,
+                           SUM(" . ($hasOut ? "EXISTS (SELECT 1 FROM crm_notes n WHERE n.contact_id=c.id AND n.outcome='wrong_number') OR " : '') . "c.lost_reason LIKE 'Wrong number%') wrong,
+                           SUM(c.qualification='not_qualified') notq, SUM(c.qualification='qualified') qual,
+                           " . ($hasOut ? "SUM((SELECT COUNT(*) FROM crm_notes n WHERE n.contact_id=c.id AND n.outcome='no_answer') >= 3)" : "0") . " noans,
+                           " . ($hasOut ? "SUM(EXISTS (SELECT 1 FROM crm_notes n WHERE n.contact_id=c.id AND n.outcome IN ('answered','interested','not_interested','booked','busy','visited')))" : "0") . " reached
+                      FROM contacts c WHERE c.crm_added_at BETWEEN ? AND ? AND {$w} GROUP BY $col ORDER BY leads DESC LIMIT 50",
+                   array_merge([$f['from'] . ' 00:00:00', $f['to'] . ' 23:59:59'], $p));
+    $out = [];
+    foreach ($rows as $r) {
+        $n = (int) $r['leads'];
+        $out[] = ['label' => $dim === 'campaign' ? ((string) $r['k'] !== '' ? (string) $r['k'] : 'No campaign') : crm_source_label($r['k']), 'k' => (string) $r['k'],
+                  'leads' => $n, 'reached' => $n ? round(100 * $r['reached'] / $n, 1) : null, 'qual' => (int) $r['qual'], 'notq' => (int) $r['notq'],
+                  'wrong' => (int) $r['wrong'], 'noans' => (int) $r['noans'], 'again' => (int) $r['again'],
+                  'junk' => $n ? round(100 * ((int) $r['wrong'] + (int) $r['notq']) / $n, 1) : null];
+    }
+    $sum = fn($k) => array_sum(array_column($out, $k));
+    $tn = $sum('leads');
+    return ['cols' => ['label' => [$dim === 'campaign' ? 'Campaign' : 'Source', 'text'], 'leads' => ['Leads', 'num'], 'reached' => ['Reached on the phone', 'pct'],
+                       'qual' => ['Qualified', 'num'], 'notq' => ['Not qualified', 'num'], 'wrong' => ['Wrong number', 'num'], 'noans' => ['No answer 3+', 'num'],
+                       'again' => ['Came in again', 'num'], 'junk' => ['Junk (wrong + not qualified)', 'pct']],
+            'rows' => $out,
+            'total' => ['label' => 'Total', 'leads' => $tn, 'reached' => null, 'qual' => $sum('qual'), 'notq' => $sum('notq'), 'wrong' => $sum('wrong'),
+                        'noans' => $sum('noans'), 'again' => $sum('again'), 'junk' => $tn ? round(100 * ($sum('wrong') + $sum('notq')) / $tn, 1) : null],
+            'chart' => ['type' => 'pair', 'label' => 'label', 'series' => ['leads' => 'Leads', 'qual' => 'Qualified']],
+            'drill' => function ($r, $c) use ($f, $dim) {
+                if ($r['label'] === 'Total') return null;
+                $slice = $dim === 'campaign' ? ['ceq' => $r['k'] !== '' ? $r['k'] : '__none'] : ['source' => $r['k']];
+                $base = crm_lib_drill_base($f) + $slice;
+                return match ($c) { 'leads' => $base, 'qual' => $base + ['qual' => 'qualified'], 'notq' => $base + ['qual' => 'not_qualified'],
+                                    'noans' => $base + ['noans' => '3'], 'again' => $base + ['status' => 'again'], default => null };
+            },
+            'empty' => !$out, 'note' => 'Leads that arrived in the period. "Reached" means at least one call answered or a real conversation logged.'];
+}
+function crm_lib_quality_source(int $cid, array $f): array   { return crm_lib_quality($cid, $f, 'source'); }
+function crm_lib_quality_campaign(int $cid, array $f): array { return crm_lib_quality($cid, $f, 'campaign'); }
+
+/** Leads of the period by one slice (platform, project) and by the stage they are in now. */
+function crm_lib_by_stage(int $cid, array $f, string $dim): array
+{
+    [$w, $p] = crm_report_where($cid, $f);
+    $col = $dim === 'project' ? 'c.project_id' : 'c.platform';
+    $stages = crm_stages($cid);
+    $cnt = db_all("SELECT $col k, c.stage_id, COUNT(*) n FROM contacts c WHERE c.crm_added_at BETWEEN ? AND ? AND c.stage_id IS NOT NULL AND {$w} GROUP BY $col, c.stage_id",
+                  array_merge([$f['from'] . ' 00:00:00', $f['to'] . ' 23:59:59'], $p));
+    $pn = crm_project_names($cid);
+    $by = [];
+    foreach ($cnt as $r) {
+        $k = (string) ($r['k'] ?? '');
+        $by[$k] ??= ['label' => $dim === 'project' ? ($k !== '' ? ($pn[(int) $k] ?? 'A removed project') : 'No project') : ($k !== '' ? crm_platform_label($k) : 'Not known'),
+                     'k' => $k, 'leads' => 0];
+        $by[$k]['s' . $r['stage_id']] = (int) $r['n'];
+        $by[$k]['leads'] += (int) $r['n'];
+    }
+    $wonIds = crm_stage_kinds($cid)['won'];
+    foreach ($by as &$r) {
+        $wn = 0; foreach ($wonIds as $sid) $wn += (int) ($r['s' . $sid] ?? 0);
+        $r['rate'] = $r['leads'] ? round(100 * $wn / $r['leads'], 1) : null;
+        foreach ($stages as $s) $r['s' . $s['id']] ??= 0;
+    }
+    unset($r);
+    $rows = array_values($by);
+    usort($rows, fn($a, $b) => $b['leads'] <=> $a['leads']);
+    $cols = ['label' => [$dim === 'project' ? 'Project' : 'Platform', 'text'], 'leads' => ['Leads', 'num']];
+    foreach ($stages as $s) $cols['s' . $s['id']] = [$s['name'], 'num'];
+    $cols['rate'] = ['Won ÷ leads', 'pct'];
+    $t = ['label' => 'Total', 'leads' => array_sum(array_column($rows, 'leads'))];
+    foreach ($stages as $s) $t['s' . $s['id']] = array_sum(array_column($rows, 's' . $s['id']));
+    $t['rate'] = null;
+    return ['cols' => $cols, 'rows' => $rows, 'total' => $t, 'chart' => ['type' => 'bars', 'label' => 'label', 'series' => ['leads' => 'Leads']],
+            'drill' => function ($r, $c) use ($f, $dim) {
+                if ($r['label'] === 'Total') return null;
+                $slice = $dim === 'project' ? ['project' => $r['k'] !== '' ? $r['k'] : 'none'] : ($r['k'] !== '' ? ['platform' => $r['k']] : null);
+                if ($slice === null) return null;
+                if ($c === 'leads') return crm_lib_drill_base($f) + $slice;
+                if (str_starts_with($c, 's') && ctype_digit(substr($c, 1))) return crm_lib_drill_base($f) + $slice + ['stage' => substr($c, 1)];
+                return null;
+            },
+            'empty' => !$rows, 'note' => 'Leads that arrived in the period, by the stage they are in today.'];
+}
+function crm_lib_platform_status(int $cid, array $f): array { return crm_lib_by_stage($cid, $f, 'platform'); }
+function crm_lib_project_status(int $cid, array $f): array  { return crm_lib_by_stage($cid, $f, 'project'); }
+
+/** Each campaign's leads, split by who they went to, and how each person did with them. */
+function crm_lib_campaign_sales(int $cid, array $f): array
+{
+    [$w, $p] = crm_report_where($cid, $f);
+    $won = crm_stage_kinds($cid)['won'] ?: [0]; $ph = implode(',', array_fill(0, count($won), '?'));
+    $rows = db_all("SELECT COALESCE(NULLIF(c.campaign,''), '') camp, c.owner_user_id uid, COUNT(*) leads, SUM(c.stage_id IN ($ph)) won,
+                           SUM(CASE WHEN c.stage_id IN ($ph) THEN COALESCE(c.deal_value,0) ELSE 0 END) won_value
+                      FROM contacts c WHERE c.crm_added_at BETWEEN ? AND ? AND c.owner_user_id IS NOT NULL AND {$w}
+                     GROUP BY camp, c.owner_user_id ORDER BY camp = '', camp, won DESC, leads DESC LIMIT 300",
+                   array_merge($won, $won, [$f['from'] . ' 00:00:00', $f['to'] . ' 23:59:59'], $p));
+    $out = []; $last = null;
+    foreach ($rows as $r) {
+        $camp = (string) $r['camp'];
+        $out[] = ['label' => $camp !== $last ? ($camp !== '' ? $camp : 'No campaign') : '', 'camp' => $camp, 'uid' => (int) $r['uid'],
+                  'person' => crm_user_name((int) $r['uid']), 'leads' => (int) $r['leads'], 'won' => (int) $r['won'],
+                  'rate' => (int) $r['leads'] ? round(100 * $r['won'] / $r['leads'], 1) : null, 'won_value' => (float) $r['won_value'] ?: null,
+                  '_stage' => $camp !== $last];
+        $last = $camp;
+    }
+    foreach ($out as &$r) $r['_stage'] = false;
+    unset($r);
+    return ['cols' => ['label' => ['Campaign', 'text'], 'person' => ['Salesperson', 'text'], 'leads' => ['Leads', 'num'], 'won' => ['Won', 'num'],
+                       'rate' => ['Won ÷ leads', 'pct'], 'won_value' => ['Won value', 'money']],
+            'rows' => $out,
+            'drill' => fn($r, $c) => in_array($c, ['leads', 'won'], true)
+                ? crm_lib_drill_base($f) + ['owner' => (string) $r['uid'], 'ceq' => $r['camp'] !== '' ? $r['camp'] : '__none'] + ($c === 'won' ? ['state' => 'won'] : [])
+                : null,
+            'empty' => !$out, 'note' => 'Leads that arrived in the period, by campaign and by the salesperson who has them now.'];
 }
 
 /* ───────────────────────── favourites ───────────────────────── */

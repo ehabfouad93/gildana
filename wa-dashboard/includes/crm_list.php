@@ -14,7 +14,7 @@ declare(strict_types=1);
 function crm_list_filter_keys(): array
 {
     return ['q', 'stage', 'sub', 'state', 'owner', 'team', 'source', 'platform', 'campaign', 'project', 'unit', 'dtype', 'qual',
-            'heat', 'status', 'due', 'added', 'from', 'to', 'idle', 'noans', 'mfrom', 'mto', 'sort', 'dir'];
+            'heat', 'status', 'due', 'added', 'from', 'to', 'idle', 'noans', 'mfrom', 'mto', 'mcamp', 'mad', 'ceq', 'sort', 'dir'];
 }
 
 /** The filters in a request, cleaned. Custom-field filters arrive as cf_<key>. */
@@ -78,6 +78,14 @@ function crm_list_where(int $clientId, array $f): array
         if ($g('campaign') === '__none') $w .= " AND (c.campaign IS NULL OR c.campaign = '')";
         else { $w .= " AND c.campaign LIKE ?"; $p[] = '%' . $g('campaign') . '%'; }
     }
+    // A Meta campaign or ad, exactly (from the return-on-ad-spend report).
+    // A campaign by its exact name (reports' drill-downs; "Camp 1" must not open "Camp 10").
+    if ($g('ceq') !== '' && $has('campaign')) {
+        if ($g('ceq') === '__none') $w .= " AND (c.campaign IS NULL OR c.campaign = '')";
+        else { $w .= " AND c.campaign = ?"; $p[] = $g('ceq'); }
+    }
+    if ($g('mcamp') !== '' && $has('meta_campaign_id')) { $w .= " AND c.meta_campaign_id = ?"; $p[] = $g('mcamp'); }
+    if ($g('mad') !== '' && $has('meta_ad_id'))         { $w .= " AND c.meta_ad_id = ?"; $p[] = $g('mad'); }
     if ($g('project') !== '' && $has('project_id')) {
         if ($g('project') === 'none') $w .= " AND c.project_id IS NULL";
         else { $w .= " AND c.project_id = ?"; $p[] = (int) $g('project'); }
