@@ -114,6 +114,13 @@ function crm_lib_catalog(): array
         'platform_status' => ['Marketing', 'Platform × stage × sales',   'Facebook, Instagram, WhatsApp… and where their leads stand now.', 'crm_lib_platform_status'],
         'project_status'  => ['Sales & status', 'Project × stage',       'Each project\'s leads, stage by stage.', 'crm_lib_project_status'],
         'campaign_sales'  => ['Marketing', 'Campaign × salesperson',     'Who sells each campaign\'s leads best.', 'crm_lib_campaign_sales'],
+        'profile'    => ['Analysis',       'Salesperson profile',         'One person against the team: speed, calls, answer rate, visits, sales, best project and source.', 'crm_lib_profile'],
+        'golden'     => ['Analysis',       'Golden hours',                'When calls get answered: weekday by hour.', 'crm_lib_golden'],
+        'weekdays'   => ['Analysis',       'Weekday vs weekend',          'Calls, answers, visits and sales by day of the week.', 'crm_lib_weekdays'],
+        'cohort'     => ['Analysis',       'Cohorts',                     'Leads by the month they arrived, and how many were sold within 30, 60 and 90 days.', 'crm_lib_cohort'],
+        'velocity'   => ['Analysis',       'Lead velocity',               'Days from lead to sale, by source and by salesperson.', 'crm_lib_velocity'],
+        'comeback'   => ['Analysis',       'Leads that came back',        'Lost or quiet leads that returned — and those that then bought.', 'crm_lib_comeback'],
+        'team_compare' => ['Team',         'Team comparison',             'Teams side by side: speed, activity, visits, sales, conversion.', 'crm_lib_team_compare'],
         'substatus'  => ['Sales & status', 'Stage × sub-status',          'Each stage broken down by what actually happened.', 'crm_lib_substatus'],
     ];
 }
@@ -142,6 +149,7 @@ function crm_lib_fmt($v, string $type, int $clientId): string
         'dur'   => crm_duration((float) $v),
         'days'  => rtrim(rtrim(number_format((float) $v, 1), '0'), '.') . ' d',
         'x'     => rtrim(rtrim(number_format((float) $v, 1), '0'), '.') . '×',
+        'dec'   => rtrim(rtrim(number_format((float) $v, 1), '0'), '.'),
         default => (string) $v,
     };
 }
@@ -785,6 +793,263 @@ function crm_lib_campaign_sales(int $cid, array $f): array
                 ? crm_lib_drill_base($f) + ['owner' => (string) $r['uid'], 'ceq' => $r['camp'] !== '' ? $r['camp'] : '__none'] + ($c === 'won' ? ['state' => 'won'] : [])
                 : null,
             'empty' => !$out, 'note' => 'Leads that arrived in the period, by campaign and by the salesperson who has them now.'];
+}
+
+/* ───────────────────────── analysis ───────────────────────── */
+
+/**
+ * One salesperson against the team. With no one chosen: everyone, each linking to their own.
+ */
+function crm_lib_profile(int $cid, array $f): array
+{
+    $people = crm_lib_people($cid, array_merge($f, ['owner' => '']));   // everyone: the team average needs them all
+    $uid = (int) ($f['owner'] ?? 0);
+    if (!$uid && count($people) === 1) $uid = (int) array_key_first($people);        // a salesperson sees their own profile
+    $sales = array_column(crm_report_sales($cid, array_merge($f, ['owner' => ''])), null, 'user_id');
+    [$w, $p] = crm_report_where($cid, array_merge($f, ['owner' => '']));
+    $from = $f['from'] . ' 00:00:00'; $to = $f['to'] . ' 23:59:59';
+    $calls = [];
+    if (db_has_column('crm_notes', 'kind')) {
+        foreach (db_all("SELECT n.user_id uid, SUM(n.kind='call') calls, SUM(n.kind='whatsapp') wa, SUM(n.kind='meeting') meet,
+                                SUM(n.kind='call' AND n.outcome IN ('answered','interested','not_interested','booked','busy','sent_info')) ans
+                           FROM crm_notes n JOIN contacts c ON c.id=n.contact_id WHERE n.user_id IS NOT NULL AND n.created_at BETWEEN ? AND ? AND {$w} GROUP BY n.user_id",
+                        array_merge([$from, $to], $p)) as $r) $calls[(int) $r['uid']] = $r;
+    }
+    $visits = [];
+    foreach (crm_report_visits($cid, $f['from'], $f['to'], 'user') as $v) $visits[(int) ($v['k'] ?? 0)] = $v;
+    $m = function (int $u) use ($sales, $calls, $visits) {
+        $s = $sales[$u] ?? []; $c = $calls[$u] ?? [];
+        return ['given' => (int) ($s['assigned'] ?? 0), 'reply' => $s['median_response'] ?? null, 'calls' => (int) ($c['calls'] ?? 0),
+                'wa' => (int) ($c['wa'] ?? 0), 'ans' => (int) ($c['calls'] ?? 0) ? 100 * (int) $c['ans'] / (int) $c['calls'] : null,
+                'visits' => (int) ($visits[$u]['came'] ?? 0), 'won' => (int) ($s['won'] ?? 0), 'value' => (float) ($s['won_value'] ?? 0),
+                'conv' => $s['conversion'] ?? null, 'overdue' => (int) ($s['overdue'] ?? 0)];
+    };
+    if (!$uid || !isset($people[$uid])) {
+        $rows = [];
+        foreach ($people as $u => $name) {
+            $x = $m($u);
+            $rows[] = ['label' => $name, '_href' => 'crm_reports.php?' . http_build_query(['r' => 'profile', 'owner' => $u] + crm_lib_active(array_merge($f, ['owner' => '']))),
+                       'given' => $x['given'], 'reply' => $x['reply'], 'calls' => $x['calls'], 'ans' => $x['ans'], 'visits' => $x['visits'], 'won' => $x['won'], 'conv' => $x['conv']];
+        }
+        return ['cols' => ['label' => ['Salesperson', 'text'], 'given' => ['Leads given', 'num'], 'reply' => ['Typical reply', 'dur'], 'calls' => ['Calls', 'num'],
+                           'ans' => ['Answer rate', 'pct'], 'visits' => ['Visits', 'num'], 'won' => ['Won', 'num'], 'conv' => ['Won ÷ given', 'pct']],
+                'rows' => $rows, 'empty' => !$rows, 'note' => 'Choose a person (click a name) to see their profile against the team.'];
+    }
+    $me = $m($uid);
+    $team = ['given' => [], 'reply' => [], 'calls' => [], 'wa' => [], 'ans' => [], 'visits' => [], 'won' => [], 'value' => [], 'conv' => [], 'overdue' => []];
+    foreach (array_keys($people) as $u) { $x = $m($u); if (!$x['given'] && !$x['calls'] && !$x['won']) continue; foreach ($team as $k => $_) if ($x[$k] !== null) $team[$k][] = $x[$k]; }
+    $avg = fn(string $k) => $team[$k] ? array_sum($team[$k]) / count($team[$k]) : null;
+    $fmtd = fn($v, $t) => crm_lib_fmt($v, $t, $cid);
+    $best = function (string $dim) use ($cid, $f, $uid) {
+        $rows = array_filter(crm_split($cid, array_merge($f, ['owner' => (string) $uid]), $dim), fn($r) => (int) $r['leads'] >= 3);
+        usort($rows, fn($a, $b) => [(float) $b['rate'], (int) $b['won']] <=> [(float) $a['rate'], (int) $a['won']]);
+        $r = $rows[0] ?? null;
+        return $r && (int) $r['won'] ? $r['label'] . ' (' . $r['won'] . ' of ' . $r['leads'] . ')' : '—';
+    };
+    $lines = [['Leads given', $me['given'], $avg('given'), 'num'], ['Typical first reply', $me['reply'], $avg('reply'), 'dur'],
+              ['Calls', $me['calls'], $avg('calls'), 'num'], ['Answer rate on calls', $me['ans'], $avg('ans'), 'pct'],
+              ['WhatsApps logged', $me['wa'], $avg('wa'), 'num'], ['Came to a visit', $me['visits'], $avg('visits'), 'num'],
+              ['Won', $me['won'], $avg('won'), 'num'], ['Won value', $me['value'] ?: null, $avg('value'), 'money'],
+              ['Won ÷ leads given', $me['conv'], $avg('conv'), 'pct'], ['Overdue follow-ups now', $me['overdue'], $avg('overdue'), 'num']];
+    // An average of counts reads 3.5, not 4.
+    $rows = array_map(fn($l) => ['label' => $l[0], 'me' => $fmtd($l[1], $l[3]), 'team' => $l[2] !== null ? $fmtd($l[2], $l[3] === 'num' ? 'dec' : $l[3]) : '—'], $lines);
+    $rows[] = ['label' => 'Sells best — project', 'me' => $best('project'), 'team' => ''];
+    $rows[] = ['label' => 'Sells best — source', 'me' => $best('source'), 'team' => ''];
+    return ['tiles' => [['Leads given', $me['given'], 'num'], ['Typical reply', $me['reply'], 'dur'], ['Answer rate', $me['ans'], 'pct'], ['Won', $me['won'], 'num'],
+                        ['Won ÷ given', $me['conv'], 'pct']],
+            'cols' => ['label' => ['', 'text'], 'me' => [$people[$uid], 'text'], 'team' => ['Team average', 'text']],
+            'rows' => $rows, 'empty' => false,
+            'note' => 'Team average is across salespeople who had leads or calls in the period. "Sells best" needs at least 3 leads.'];
+}
+
+/** Hours of the working day, and the days of the week in the order an Egyptian office reads them. */
+function crm_lib_week(): array
+{
+    return [7 => 'Saturday', 1 => 'Sunday', 2 => 'Monday', 3 => 'Tuesday', 4 => 'Wednesday', 5 => 'Thursday', 6 => 'Friday'];   // MySQL DAYOFWEEK
+}
+
+/** Answered ÷ calls, by weekday and hour. */
+function crm_lib_golden(int $cid, array $f): array
+{
+    if (!db_has_column('crm_notes', 'outcome')) return ['rows' => [], 'empty' => true];
+    [$w, $p] = crm_report_where($cid, $f);
+    $cells = [];
+    foreach (db_all("SELECT DAYOFWEEK(n.created_at) d, HOUR(n.created_at) h, COUNT(*) calls,
+                            SUM(n.outcome IN ('answered','interested','not_interested','booked','busy','sent_info')) ans
+                       FROM crm_notes n JOIN contacts c ON c.id=n.contact_id
+                      WHERE n.kind='call' AND n.created_at BETWEEN ? AND ? AND {$w} GROUP BY d, h",
+                    array_merge([$f['from'] . ' 00:00:00', $f['to'] . ' 23:59:59'], $p)) as $r) $cells[(int) $r['d']][(int) $r['h']] = [(int) $r['calls'], (int) $r['ans']];
+    $hours = range(9, 22);
+    $rows = []; $tot = 0;
+    foreach (crm_lib_week() as $d => $name) {
+        $row = ['label' => $name];
+        foreach ($hours as $h) {
+            [$c, $a] = $cells[$d][$h] ?? [0, 0];
+            $row['h' . $h] = $c >= 3 ? round(100 * $a / $c) : null;      // fewer than 3 calls says nothing
+            $row['n' . $h] = $c; $tot += $c;
+        }
+        $rows[] = $row;
+    }
+    $cols = ['label' => ['', 'text']];
+    foreach ($hours as $h) $cols['h' . $h] = [sprintf('%02d', $h), 'pct'];
+    return ['cols' => $cols, 'rows' => $rows, 'heat' => true, 'empty' => $tot === 0,
+            'note' => 'Share of calls answered, by the day and hour they were made (cells with fewer than 3 calls are left blank). '
+                    . 'Darker means more answered — call then.'];
+}
+
+function crm_lib_weekdays(int $cid, array $f): array
+{
+    [$w, $p] = crm_report_where($cid, $f);
+    $from = $f['from'] . ' 00:00:00'; $to = $f['to'] . ' 23:59:59';
+    $by = [];
+    if (db_has_column('crm_notes', 'outcome')) {
+        foreach (db_all("SELECT DAYOFWEEK(n.created_at) d, SUM(n.kind='call') calls,
+                                SUM(n.kind='call' AND n.outcome IN ('answered','interested','not_interested','booked','busy','sent_info')) ans
+                           FROM crm_notes n JOIN contacts c ON c.id=n.contact_id WHERE n.created_at BETWEEN ? AND ? AND {$w} GROUP BY d",
+                        array_merge([$from, $to], $p)) as $r) $by[(int) $r['d']] = ['calls' => (int) $r['calls'], 'ans' => (int) $r['ans']];
+    }
+    foreach (db_all("SELECT DAYOFWEEK(c.crm_added_at) d, COUNT(*) n FROM contacts c WHERE c.crm_added_at BETWEEN ? AND ? AND {$w} GROUP BY d", array_merge([$from, $to], $p)) as $r)
+        $by[(int) $r['d']]['leads'] = (int) $r['n'];
+    try {
+        foreach (db_all("SELECT DAYOFWEEK(v.starts_at) d, COUNT(*) n FROM crm_visits v JOIN contacts c ON c.id=v.contact_id WHERE v.status='done' AND v.starts_at BETWEEN ? AND ? AND {$w} GROUP BY d",
+                        array_merge([$from, $to], $p)) as $r) $by[(int) $r['d']]['visits'] = (int) $r['n'];
+    } catch (Throwable $e) {}
+    $won = crm_stage_kinds($cid)['won'];
+    if ($won) {
+        $ph = implode(',', array_fill(0, count($won), '?'));
+        foreach (db_all("SELECT DAYOFWEEK(e.created_at) d, COUNT(DISTINCT c.id) n FROM crm_events e JOIN contacts c ON c.id=e.contact_id
+                          WHERE e.kind='stage' AND e.to_val IN ($ph) AND c.stage_id IN ($ph) AND e.created_at BETWEEN ? AND ? AND {$w} GROUP BY d",
+                        array_merge(array_map('strval', $won), $won, [$from, $to], $p)) as $r) $by[(int) $r['d']]['won'] = (int) $r['n'];
+    }
+    $rows = [];
+    foreach (crm_lib_week() as $d => $name) {
+        $x = $by[$d] ?? [];
+        $rows[] = ['label' => $name . (in_array($d, [6, 7], true) ? ' (weekend)' : ''), 'leads' => (int) ($x['leads'] ?? 0), 'calls' => (int) ($x['calls'] ?? 0),
+                   'ans' => !empty($x['calls']) ? round(100 * $x['ans'] / $x['calls'], 1) : null, 'visits' => (int) ($x['visits'] ?? 0), 'won' => (int) ($x['won'] ?? 0)];
+    }
+    return ['cols' => ['label' => ['Day', 'text'], 'leads' => ['Leads arrived', 'num'], 'calls' => ['Calls', 'num'], 'ans' => ['Answered', 'pct'],
+                       'visits' => ['Came to a visit', 'num'], 'won' => ['Won', 'num']],
+            'rows' => $rows, 'chart' => ['type' => 'pair', 'label' => 'label', 'series' => ['leads' => 'Leads', 'calls' => 'Calls']],
+            'empty' => !array_sum(array_map(fn($r) => $r['leads'] + $r['calls'] + $r['won'], $rows)),
+            'note' => 'Friday and Saturday are the weekend. Leads that arrive when nobody calls wait — compare leads arrived with calls made.'];
+}
+
+/** Leads by the month they arrived: how many were sold within 30, 60, 90 days, and by now. */
+function crm_lib_cohort(int $cid, array $f): array
+{
+    $f2 = $f; $f2['from'] = date('Y-m-01', strtotime('-11 months')); $f2['to'] = date('Y-m-d');
+    [$w, $p] = crm_report_where($cid, $f2);
+    $won = crm_stage_kinds($cid)['won'] ?: [0];
+    $ph = implode(',', array_fill(0, count($won), '?'));
+    $rows = db_all("SELECT DATE_FORMAT(c.crm_added_at, '%Y-%m') m, COUNT(*) leads,
+                           SUM(x.won_at IS NOT NULL AND x.won_at <= c.crm_added_at + INTERVAL 30 DAY) d30,
+                           SUM(x.won_at IS NOT NULL AND x.won_at <= c.crm_added_at + INTERVAL 60 DAY) d60,
+                           SUM(x.won_at IS NOT NULL AND x.won_at <= c.crm_added_at + INTERVAL 90 DAY) d90,
+                           SUM(c.stage_id IN ($ph)) now
+                      FROM contacts c LEFT JOIN (SELECT e.contact_id, MIN(e.created_at) won_at FROM crm_events e
+                                                  WHERE e.kind='stage' AND e.to_val IN ($ph) GROUP BY e.contact_id) x ON x.contact_id=c.id
+                     WHERE c.crm_added_at BETWEEN ? AND ? AND {$w} GROUP BY m ORDER BY m",
+                   array_merge($won, array_map('strval', $won), [$f2['from'] . ' 00:00:00', $f2['to'] . ' 23:59:59'], $p));
+    $out = [];
+    foreach ($rows as $r) {
+        $n = (int) $r['leads']; $age = (int) floor((time() - strtotime($r['m'] . '-01')) / 86400);
+        $out[] = ['label' => date('M Y', strtotime($r['m'] . '-01')), 'leads' => $n,
+                  'd30' => $age >= 30 ? round(100 * $r['d30'] / max(1, $n), 1) : null, 'd60' => $age >= 60 ? round(100 * $r['d60'] / max(1, $n), 1) : null,
+                  'd90' => $age >= 90 ? round(100 * $r['d90'] / max(1, $n), 1) : null, 'now' => round(100 * $r['now'] / max(1, $n), 1), 'won' => (int) $r['now']];
+    }
+    return ['cols' => ['label' => ['Arrived in', 'text'], 'leads' => ['Leads', 'num'], 'd30' => ['Sold in 30 days', 'pct'], 'd60' => ['In 60 days', 'pct'],
+                       'd90' => ['In 90 days', 'pct'], 'now' => ['Sold by now', 'pct'], 'won' => ['Won', 'num']],
+            'rows' => $out, 'heat' => true, 'empty' => !$out,
+            'note' => 'The last 12 months, whatever the period above. A blank means the month is too recent to know yet.'];
+}
+
+/** Days from becoming a lead to being won, by source and by salesperson. */
+function crm_lib_velocity(int $cid, array $f): array
+{
+    [$w, $p] = crm_report_where($cid, $f);
+    $won = crm_stage_kinds($cid)['won'] ?: [0];
+    $ph = implode(',', array_fill(0, count($won), '?'));
+    $list = db_all("SELECT c.source, c.owner_user_id uid, TIMESTAMPDIFF(HOUR, c.crm_added_at, MIN(e.created_at)) / 24 days
+                      FROM crm_events e JOIN contacts c ON c.id=e.contact_id
+                     WHERE e.kind='stage' AND e.to_val IN ($ph) AND c.stage_id IN ($ph) AND e.created_at BETWEEN ? AND ? AND {$w}
+                     GROUP BY c.id, c.source, c.owner_user_id, c.crm_added_at", array_merge(array_map('strval', $won), $won, [$f['from'] . ' 00:00:00', $f['to'] . ' 23:59:59'], $p));
+    $group = function (string $key, callable $label) use ($list) {
+        $by = [];
+        foreach ($list as $r) $by[(string) $r[$key]][] = (float) $r['days'];
+        $rows = [];
+        foreach ($by as $k => $xs) $rows[] = ['label' => $label($k), 'won' => count($xs), 'median' => crm_median($xs), 'fast' => min($xs), 'slow' => max($xs)];
+        usort($rows, fn($a, $b) => $b['won'] <=> $a['won']);
+        return $rows;
+    };
+    $rows = array_merge([['label' => 'By source', '_stage' => true]], $group('source', fn($k) => crm_source_label($k)),
+                        [['label' => 'By salesperson', '_stage' => true]], $group('uid', fn($k) => crm_user_name($k !== '' ? (int) $k : null)));
+    $all = array_map(fn($r) => (float) $r['days'], $list);
+    return ['tiles' => [['Won in the period', count($list), 'num'], ['Typical days to sale', crm_median($all), 'days']],
+            'cols' => ['label' => ['', 'text'], 'won' => ['Won', 'num'], 'median' => ['Typical days to sale', 'days'], 'fast' => ['Fastest', 'days'], 'slow' => ['Slowest', 'days']],
+            'rows' => $list ? $rows : [], 'empty' => !$list, 'note' => 'Sales closed in the period, counted from when each became a lead.'];
+}
+
+/** Leads that were lost, or had gone quiet a month, and came back — and those that then bought. */
+function crm_lib_comeback(int $cid, array $f): array
+{
+    [$w, $p] = crm_report_where($cid, array_merge($f, ['from' => '2000-01-01']));
+    $from = $f['from'] . ' 00:00:00'; $to = $f['to'] . ' 23:59:59';
+    $kinds = crm_stage_kinds($cid);
+    $lost = $kinds['lost'] ?: [0]; $won = $kinds['won'] ?: [0];
+    $phl = implode(',', array_fill(0, count($lost), '?')); $phw = implode(',', array_fill(0, count($won), '?'));
+    // Came back = moved out of a lost stage, or filled in a form / wrote again, in the period, after being lost or quiet 30+ days.
+    $rows = db_all("SELECT c.id, c.name, c.source, c.stage_id, c.deal_value, COALESCE(NULLIF(u.name,''), u.email) owner, MIN(e.created_at) back_at,
+                           MAX(e.kind) how
+                      FROM crm_events e JOIN contacts c ON c.id=e.contact_id LEFT JOIN users u ON u.id=c.owner_user_id
+                     WHERE e.created_at BETWEEN ? AND ? AND {$w}
+                       AND ((e.kind='stage' AND e.from_val IN ($phl) AND e.to_val NOT IN ($phl))
+                         OR (e.kind='resubmitted' AND EXISTS (SELECT 1 FROM crm_events q WHERE q.contact_id=c.id AND q.kind IN ('added','stage','resubmitted')
+                                                             AND q.created_at < e.created_at - INTERVAL 30 DAY)
+                             AND NOT EXISTS (SELECT 1 FROM crm_events q WHERE q.contact_id=c.id AND q.created_at < e.created_at
+                                             AND q.created_at > e.created_at - INTERVAL 30 DAY AND q.id <> e.id)))
+                     GROUP BY c.id, c.name, c.source, c.stage_id, c.deal_value, u.name, u.email ORDER BY back_at DESC LIMIT 200",
+                   array_merge([$from, $to], $p, array_map('strval', $lost), array_map('strval', $lost)));
+    $out = []; $wonN = 0; $val = 0.0;
+    $stageNames = array_column(crm_stages($cid), 'name', 'id');
+    foreach ($rows as $r) {
+        $isWon = in_array((int) $r['stage_id'], $won, true);
+        if ($isWon) { $wonN++; $val += (float) $r['deal_value']; }
+        $out[] = ['label' => (string) ($r['name'] ?: '#' . crm_code((int) $r['id'])), '_href' => 'crm_lead.php?id=' . (int) $r['id'],
+                  'how' => $r['how'] === 'resubmitted' ? 'Came in again (' . crm_source_label($r['source']) . ')' : 'Taken out of Lost',
+                  'back' => date('j M', strtotime((string) $r['back_at'])), 'stage' => (string) ($stageNames[(int) $r['stage_id']] ?? ''),
+                  'owner' => (string) ($r['owner'] ?? 'Unassigned'), 'won' => $isWon ? 'Yes' : ''];
+    }
+    return ['tiles' => [['Came back', count($out), 'num'], ['Then bought', $wonN, 'num'], ['Worth', $val ?: null, 'money_short']],
+            'cols' => ['label' => ['Lead', 'text'], 'how' => ['How', 'text'], 'back' => ['When', 'text'], 'stage' => ['Now', 'text'], 'owner' => ['Owner', 'text'], 'won' => ['Bought', 'text']],
+            'rows' => $out, 'empty' => !$out,
+            'note' => 'Leads that were lost and put back in play, or that came in again after a month or more of nothing, in the period.'];
+}
+
+/** Teams side by side. */
+function crm_lib_team_compare(int $cid, array $f): array
+{
+    $teams = crm_teams($cid);
+    $rows = [];
+    foreach ($teams as $t) {
+        $ft = array_merge($f, ['team' => (string) $t['id'], 'owner' => '']);
+        $sales = crm_report_sales($cid, $ft);
+        $given = array_sum(array_column($sales, 'assigned')); $contacted = array_sum(array_column($sales, 'contacted'));
+        $resp = array_filter(array_column($sales, 'median_response'), fn($x) => $x !== null);
+        $acts = array_sum(array_column($sales, 'activities')); $won = array_sum(array_column($sales, 'won'));
+        $visits = array_sum(array_map(fn($v) => (int) $v['came'], array_filter(crm_report_visits($cid, $f['from'], $f['to'], 'user'),
+                                                                                fn($v) => in_array((int) $v['k'], crm_team_member_ids((int) $t['id']), true))));
+        $rows[] = ['label' => (string) $t['name'], 'team' => (string) $t['id'], 'members' => (int) $t['members'], 'given' => $given,
+                   'contacted' => $given ? round(100 * $contacted / $given, 1) : null, 'reply' => $resp ? crm_median($resp) : null,
+                   'acts' => $given ? round($acts / $given, 1) : null, 'visits' => $visits, 'won' => $won,
+                   'conv' => $given ? round(100 * $won / $given, 1) : null, 'value' => array_sum(array_column($sales, 'won_value')) ?: null,
+                   'overdue' => array_sum(array_column($sales, 'overdue'))];
+    }
+    return ['cols' => ['label' => ['Team', 'text'], 'members' => ['People', 'num'], 'given' => ['Leads given', 'num'], 'contacted' => ['Contacted', 'pct'],
+                       'reply' => ['Typical reply', 'dur'], 'acts' => ['Activities per lead', 'dec'], 'visits' => ['Visits', 'num'], 'won' => ['Won', 'num'],
+                       'conv' => ['Won ÷ given', 'pct'], 'value' => ['Won value', 'money'], 'overdue' => ['Overdue now', 'num']],
+            'rows' => $rows, 'chart' => ['type' => 'pair', 'label' => 'label', 'series' => ['given' => 'Leads given', 'won' => 'Won']],
+            'drill' => fn($r, $c) => $c === 'overdue' ? ['team' => $r['team'], 'due' => 'overdue'] : null,
+            'empty' => !$rows, 'note' => $teams ? 'Each team: its people\'s leads and results in the period.' : 'No teams yet — set them up in Team & transfer.'];
 }
 
 /* ───────────────────────── favourites ───────────────────────── */

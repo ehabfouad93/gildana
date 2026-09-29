@@ -194,12 +194,15 @@ if (!$rep):
       <table class="data rep-table" id="report">
         <thead><tr><?php foreach ($rep['cols'] as $k => [$l, $t]): ?><th class="<?= $t === 'text' ? '' : 'num' ?>"><?= e($l) ?></th><?php endforeach; ?></tr></thead>
         <tbody>
-        <?php foreach (array_merge($rep['rows'], $rep['total'] ? [$rep['total']] : []) as $i => $r): $isTotal = $rep['total'] && $i === count($rep['rows']); ?>
+        <?php /* A heat map (golden hours, cohorts): each number's cell shaded by its size, one hue, light to dark. */
+          $heatMax = 0.0;
+          if (!empty($rep['heat'])) foreach ($rep['rows'] as $r_) foreach ($rep['cols'] as $k_ => [$l_, $t_]) if ($t_ !== 'text' && is_numeric($r_[$k_] ?? null)) $heatMax = max($heatMax, (float) $r_[$k_]);
+        foreach (array_merge($rep['rows'], $rep['total'] ? [$rep['total']] : []) as $i => $r): $isTotal = $rep['total'] && $i === count($rep['rows']); ?>
           <tr class="<?= $isTotal ? 'rep-total' : '' ?><?= !empty($r['_stage']) ? ' rep-group-row' : '' ?>">
             <?php foreach ($rep['cols'] as $k => [$l, $t]):
-              $txt = crm_lib_fmt($r[$k] ?? null, $t, $cid);
+              $txt = $heatMax > 0 && ($r[$k] ?? null) === null && $t !== 'text' ? '' : crm_lib_fmt($r[$k] ?? null, $t, $cid);   // a heat map's empty cell stays empty
               $dr = $rep['drill'] && $k !== 'label' && ($r[$k] ?? 0) ? ($rep['drill'])($r, $k) : null; ?>
-              <td class="<?= $t === 'text' ? '' : 'num' ?>"><?php if ($k === 'label' && !empty($r['_href'])): ?><a href="<?= e($r['_href']) ?>"><?= e($txt) ?></a>
+              <td class="<?= $t === 'text' ? '' : 'num' ?>"<?php if ($heatMax > 0 && $t !== 'text' && is_numeric($r[$k] ?? null)): $lv = (float) $r[$k] / $heatMax; ?> style="background:rgba(18,140,98,<?= round(0.08 + 0.82 * $lv, 2) ?>);<?= $lv > 0.72 ? 'color:#fff' : '' ?>"<?php endif; ?>><?php if ($k === 'label' && !empty($r['_href'])): ?><a href="<?= e($r['_href']) ?>"><?= e($txt) ?></a>
                 <?php elseif ($dr !== null): ?><a href="crm.php?<?= e(http_build_query(['view' => 'table'] + $dr)) ?>" title="Open these leads"><?= e($txt) ?></a>
                 <?php else: ?><?= e($txt) ?><?php endif; ?></td>
             <?php endforeach; ?>
