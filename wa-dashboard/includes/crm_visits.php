@@ -107,6 +107,7 @@ function crm_visit_outcome(array $client, int $visitId, string $status, ?int $by
          'cancelled' => 'Site visit on ' . $when . ' cancelled.'][$status], $by);
     $s = crm_settings((int) $client['id']);
     if ($status === 'done' && (int) $s['visit_done_stage']) crm_set_stage($client, $cId, (int) $s['visit_done_stage'], $by);
+    if ($status === 'done' && !empty($s['capi_visit_event']) && function_exists('crm_capi_queue')) crm_capi_queue($client, $cId, (string) $s['capi_visit_event']);
     return true;
 }
 

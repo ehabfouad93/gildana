@@ -197,6 +197,7 @@ function crm_auto_on_stage(array $client, int $contactId, int $stageId, bool $ar
 {
     if (!db_has_column('crm_msg_queue', 'context')) return;              // migration 041 not applied yet
     $cid = (int) $client['id'];
+    if (function_exists('crm_capi_on_stage')) crm_capi_on_stage($client, $contactId, $stageId);   // tell Meta, for form leads
     try {
         $m = db_row("SELECT * FROM crm_stage_msgs WHERE client_id=? AND stage_id=? AND active=1", [$cid, $stageId]);
         if ($m && (!$arrival || (int) $m['on_arrival'])) {

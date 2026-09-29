@@ -404,3 +404,4 @@ function crm_source_label(?string $source): string
 // Messages the CRM sends by itself. Loaded last: it needs the inbox, which loads this file.
 require_once __DIR__ . '/crm_automation.php';
 require_once __DIR__ . '/crm_visits.php';
+require_once __DIR__ . '/crm_capi.php';

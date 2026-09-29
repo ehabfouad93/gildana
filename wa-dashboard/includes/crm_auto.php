@@ -39,6 +39,7 @@ function crm_auto_tick(): array
     $sum['visits']     = crm_visits_tick();
     $sum['seq_queued'] = crm_seq_tick();
     $sum['auto_sent']  = crm_queue_tick();
+    $sum['meta_events'] = crm_capi_tick();
     // Last, so this pass's alerts go out in this pass.
     $sum['staff_wa'] = crm_staff_wa_tick();
     return $sum;

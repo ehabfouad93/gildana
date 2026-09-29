@@ -19,7 +19,8 @@ function crm_settings(int $clientId): array
           'followup_reminders' => 1, 'require_lost_reason' => 1,
           'staff_wa_on' => 0, 'staff_wa_template' => null, 'staff_wa_kinds' => 'assigned,sla,followup,reclaimed,visit',
           'visit_confirm_tpl' => null, 'visit_confirm_vars' => null, 'visit_remind_tpl' => null, 'visit_remind_vars' => null,
-          'visit_remind_hour' => 18, 'visit_staff_minutes' => 60, 'visit_booked_stage' => null, 'visit_done_stage' => null];
+          'visit_remind_hour' => 18, 'visit_staff_minutes' => 60, 'visit_booked_stage' => null, 'visit_done_stage' => null,
+          'capi_on' => 0, 'capi_dataset' => null, 'capi_token_enc' => null, 'capi_test_code' => null, 'capi_events' => null, 'capi_visit_event' => null];
     try { $row = db_row("SELECT * FROM crm_settings WHERE client_id=?", [$clientId]); }
     catch (Throwable $e) { return $d; }
     return $row ? array_merge($d, $row) : $d;

@@ -121,6 +121,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         db_run("DELETE FROM meta_pages WHERE id=?", [(int) $page['id']]);
         flash('Disconnected ' . $page['name'] . '. Leads already in your CRM stay.');
     }
+    if ($a === 'capi') {
+        $events = [];
+        foreach ((array) ($_POST['ev'] ?? []) as $sid => $name) {
+            $name = mb_substr(trim((string) $name), 0, 60);
+            if ($name !== '' && isset(crm_stage_map($cid)[(int) $sid])) $events[(string) (int) $sid] = $name;
+        }
+        $kv = ['capi_on' => !empty($_POST['on']) ? 1 : 0, 'capi_dataset' => preg_replace('/\D+/', '', (string) ($_POST['dataset'] ?? '')) ?: null,
+               'capi_test_code' => mb_substr(trim((string) ($_POST['test_code'] ?? '')), 0, 40) ?: null,
+               'capi_events' => json_encode($events, JSON_UNESCAPED_UNICODE),
+               'capi_visit_event' => mb_substr(trim((string) ($_POST['visit_event'] ?? '')), 0, 60) ?: null];
+        $tok = trim((string) ($_POST['token'] ?? ''));
+        if ($tok !== '') $kv['capi_token_enc'] = encrypt_secret($tok);                 // blank = keep the saved one
+        crm_settings_set($cid, $kv);
+        flash('Saved.' . ($kv['capi_on'] && !$events && !$kv['capi_visit_event'] ? ' Name at least one event below, or nothing will be sent.' : ''));
+        redirect('meta_leads.php#capi');
+    }
+    if ($a === 'capi_test') {
+        // One real lead, sent with the test code so it shows under Test events and never counts.
+        $row = db_row("SELECT l.contact_id FROM meta_lead_log l WHERE l.client_id=? AND l.outcome='imported' ORDER BY l.id DESC LIMIT 1", [$cid]);
+        $code = trim((string) (crm_settings($cid)['capi_test_code'] ?? ''));
+        if (!$row) flash('No lead from a Meta form yet to test with.', 'error');
+        elseif ($code === '') flash('Add the test code from Events Manager → Test events first, so the test does not count as a real result.', 'error');
+        else {
+            $r = crm_capi_send($CLIENT, [['contact_id' => (int) $row['contact_id'], 'event_name' => 'Test from ' . brand_name(), 'event_time' => time()]], $code);
+            flash($r['sent'] ? 'Meta received the test event. Check Events Manager → Test events.' : 'Meta refused it: ' . $r['error'], $r['sent'] ? 'success' : 'error');
+        }
+        redirect('meta_leads.php#capi');
+    }
     if ($a === 'check_now') {
         db_run("UPDATE meta_forms SET last_polled_at=NULL WHERE client_id=?", [$cid]);
         $r = meta_poll(0, 200);
@@ -284,7 +312,53 @@ page_head('Facebook & Instagram lead forms', '<a class="btn btn-ghost btn-sm" hr
     <?php endforeach; ?></tbody></table></div>
 </div>
 
-<?php if ($isAdmin): ?>
+<?php if ($isAdmin): $cs = crm_settings($cid); $cev = crm_capi_stage_events($cs);
+  $capiLog = db_all("SELECT e.*, c.name, c.phone_e164 FROM crm_capi_events e JOIN contacts c ON c.id=e.contact_id WHERE e.client_id=? ORDER BY e.id DESC LIMIT 15", [$cid]);
+  $capiN = array_column(db_all("SELECT status, COUNT(*) n FROM crm_capi_events WHERE client_id=? GROUP BY status", [$cid]), 'n', 'status'); ?>
+<div class="card" id="capi">
+  <h2>Send results back to Meta</h2>
+  <p class="text-muted" style="font-size:12.5px;margin-top:-4px">When a lead from your forms is contacted, comes to a visit or buys, tell Meta. Its ads then look
+    for more people who buy — not just more people who fill in forms — which usually lowers the cost per real buyer.
+    Only leads from Meta forms are sent, each event once, with the phone and email hashed.</p>
+  <details style="font-size:12.5px;margin-bottom:12px"><summary><strong>Setting it up in Meta (once)</strong></summary>
+    <ol style="margin:8px 0 0;padding-left:18px;line-height:1.8">
+      <li>Events Manager → <strong>Connect data sources</strong> → <strong>CRM</strong> → create a dataset (or use your existing one) and copy its <strong>Dataset ID</strong>.</li>
+      <li>In its <strong>Settings</strong>, under Conversions API, <strong>Generate access token</strong> and paste it here.</li>
+      <li>Name the events for the stages that matter below — for example <em>Contacted</em>, <em>Visit</em>, <em>Converted</em>.</li>
+      <li>Optional: copy the code from <strong>Test events</strong>, then press "Send a test event" to check. Clear the code when it works.</li>
+      <li>In Ads Manager, lead-form campaigns can then optimise for "Conversion leads".</li>
+    </ol></details>
+  <form method="post">
+    <?= csrf_field() ?><input type="hidden" name="action" value="capi">
+    <label class="mod-all"><input type="checkbox" name="on" value="1" <?= (int) $cs['capi_on'] ? 'checked' : '' ?>> Send results to Meta</label>
+    <div class="grid2" style="margin-top:10px">
+      <div class="field"><span class="lbl">Dataset ID</span><input type="text" name="dataset" inputmode="numeric" value="<?= e((string) ($cs['capi_dataset'] ?? '')) ?>" placeholder="1234567890123456"></div>
+      <div class="field"><span class="lbl">Access token <?= !empty($cs['capi_token_enc']) ? '<span class="pill green" style="margin-left:6px">••• saved</span>' : '' ?></span>
+        <input type="text" name="token" autocomplete="off" placeholder="<?= !empty($cs['capi_token_enc']) ? 'Leave blank to keep the saved one' : 'Paste the token' ?>"></div>
+      <div class="field"><span class="lbl">Test code (optional)</span><input type="text" name="test_code" value="<?= e((string) ($cs['capi_test_code'] ?? '')) ?>" placeholder="TEST12345"></div>
+    </div>
+    <p class="lbl" style="margin:8px 0 6px">Event to send when a lead reaches…</p>
+    <div class="capi-grid">
+      <?php foreach (crm_stages($cid) as $st): ?>
+        <label><span><?= e($st['name']) ?></span><input type="text" name="ev[<?= (int) $st['id'] ?>]" maxlength="60" value="<?= e($cev[(string) $st['id']] ?? '') ?>"
+          placeholder="<?= $st['kind'] === 'won' ? 'Converted' : ($st['kind'] === 'lost' ? 'Leave empty' : 'e.g. ' . e($st['name'])) ?>"></label>
+      <?php endforeach; ?>
+      <label><span>…comes to a site visit</span><input type="text" name="visit_event" maxlength="60" value="<?= e((string) ($cs['capi_visit_event'] ?? '')) ?>" placeholder="Visit"></label>
+    </div>
+    <button class="btn btn-primary mt10">Save</button>
+  </form>
+  <form method="post" style="margin-top:8px"><?= csrf_field() ?><input type="hidden" name="action" value="capi_test"><button class="btn btn-ghost btn-sm">Send a test event</button></form>
+  <?php if ($capiLog): ?>
+    <p class="text-muted" style="font-size:12.5px;margin:14px 0 6px">Sent so far: <?= (int) ($capiN['sent'] ?? 0) ?><?= !empty($capiN['failed']) ? ' · refused: ' . (int) $capiN['failed'] : '' ?><?= !empty($capiN['queued']) ? ' · waiting: ' . (int) $capiN['queued'] : '' ?></p>
+    <div class="table-wrap"><table class="data"><thead><tr><th>When</th><th>Lead</th><th>Event</th><th>Result</th></tr></thead><tbody>
+      <?php foreach ($capiLog as $l): ?><tr><td class="text-muted"><?= e(date('j M, H:i', strtotime((string) $l['created_at']))) ?></td>
+        <td><a href="crm_lead.php?id=<?= (int) $l['contact_id'] ?>"><?= e((string) ($l['name'] ?: '+' . $l['phone_e164'])) ?></a></td><td><?= e((string) $l['event_name']) ?></td>
+        <td><span class="pill <?= ['sent' => 'green', 'failed' => 'red', 'queued' => 'blue'][$l['status']] ?? 'gray' ?>"><?= e(['queued' => 'Waiting'][$l['status']] ?? ucfirst((string) $l['status'])) ?></span>
+          <?php if ($l['error']): ?><span class="text-muted" style="display:block;font-size:12px"><?= e((string) $l['error']) ?></span><?php endif; ?></td></tr><?php endforeach; ?>
+    </tbody></table></div>
+  <?php endif; ?>
+</div>
+
 <details class="card" style="font-size:13px"><summary><strong>Connected Pages (<?= count($pages) ?>)</strong></summary>
   <div class="table-wrap" style="margin-top:10px"><table class="data"><tbody>
   <?php foreach ($pages as $p): ?>
