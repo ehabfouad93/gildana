@@ -313,7 +313,7 @@ function import_contacts(array $client, array $header, array $rows, array $map, 
 
         $value = $col($r, 'value');
         $fu    = import_date($col($r, 'followup'));
-        $num   = $value !== '' ? (float) preg_replace('/[^\d.]/', '', $value) : null;
+        $num   = crm_deal_value($value, $phone);
         if ($num !== null || $fu !== null) {
             db_run("UPDATE contacts SET deal_value=COALESCE(?, deal_value), next_followup_at=COALESCE(?, next_followup_at) WHERE id=?",
                    [$num, $fu, $contactId]);

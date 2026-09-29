@@ -91,10 +91,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['ajax'])) {
         $owner = is_sales() ? $me : (string) ($_POST['owner'] ?? 'auto');
         crm_add_lead($CLIENT, $contactId, 'manual', $owner === '' ? 'auto' : $owner, (int) ($_POST['stage_id'] ?? 0) ?: null, $me);
 
-        $value = trim((string) ($_POST['value'] ?? ''));
+        $value = (string) ($_POST['deal_value'] ?? $_POST['value'] ?? '');
         $fu    = trim((string) ($_POST['followup'] ?? ''));
         db_run("UPDATE contacts SET deal_value=?, next_followup_at=? WHERE id=?",
-               [$value !== '' ? (float) preg_replace('/[^\d.]/', '', $value) : null,
+               [crm_deal_value($value, $phone),
                 $fu !== '' ? date('Y-m-d H:i:s', strtotime($fu)) : null, $contactId]);
         crm_add_note($CLIENT, $contactId, (string) ($_POST['note'] ?? ''), $me);
         json_out(['ok' => true, 'id' => $contactId, 'reused' => (bool) $existing]);
@@ -321,9 +321,9 @@ function crm_when(?string $d): string {
     <h2>Add a lead</h2>
     <div class="grid2">
       <div class="field"><span class="lbl">Name</span><input name="name" placeholder="Ahmed Mahmoud"></div>
-      <div class="field"><span class="lbl">Phone *</span><input name="phone" required placeholder="01001234567 or +201001234567"></div>
+      <div class="field"><span class="lbl">Phone *</span><input name="phone" type="tel" autocomplete="tel" required placeholder="01001234567 or +201001234567"></div>
       <div class="field"><span class="lbl">Email</span><input name="email" type="email"></div>
-      <div class="field"><span class="lbl">Deal value</span><input name="value" inputmode="decimal" placeholder="5,000,000"></div>
+      <div class="field"><span class="lbl">Deal value</span><input name="deal_value" inputmode="decimal" autocomplete="off" placeholder="5,000,000"></div>
       <div class="field"><span class="lbl">Stage</span><select name="stage_id">
         <?php foreach ($stages as $s): ?><option value="<?= (int) $s['id'] ?>"><?= e($s['name']) ?></option><?php endforeach; ?></select></div>
       <?php if (!is_sales()): ?>

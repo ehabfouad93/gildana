@@ -63,10 +63,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
             $err = 'That email address does not look right.';
         } else {
-            $val = trim((string) ($_POST['value'] ?? ''));
+            $val = (string) ($_POST['deal_value'] ?? $_POST['value'] ?? '');
             db_run("UPDATE contacts SET name=?, email=?, deal_value=? WHERE id=? AND client_id=?",
                 [trim((string) ($_POST['name'] ?? '')), $email !== '' ? $email : null,
-                 $val !== '' ? (float) preg_replace('/[^\d.]/', '', $val) : null, $id, $cid]);
+                 crm_deal_value($val, (string) $lead['phone_e164']), $id, $cid]);
             if (db_has_column('contacts', 'project_id')) {
                 $pj = (int) ($_POST['project_id'] ?? 0);
                 $pay = (string) ($_POST['payment_pref'] ?? '');
@@ -517,7 +517,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
         <div class="grid2">
           <div class="field"><span class="lbl">Name</span><input name="name" value="<?= e((string) $lead['name']) ?>"></div>
           <div class="field"><span class="lbl">Email</span><input name="email" type="email" value="<?= e((string) ($lead['email'] ?? '')) ?>"></div>
-          <div class="field"><span class="lbl">Deal value</span><input name="value" inputmode="decimal"
+          <div class="field"><span class="lbl">Deal value</span><input name="deal_value" inputmode="decimal" autocomplete="off"
                value="<?= $lead['deal_value'] !== null ? e(number_format((float) $lead['deal_value'], 0, '.', '')) : '' ?>"></div>
           <div class="field"><span class="lbl">Project</span><select name="project_id"><option value="0">—</option>
             <?php foreach ($projects as $p): if (!(int) $p['active'] && (int) $p['id'] !== (int) ($lead['project_id'] ?? 0)) continue; ?>

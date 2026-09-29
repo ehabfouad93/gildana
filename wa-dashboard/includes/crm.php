@@ -207,6 +207,24 @@ function crm_add_note(array $client, int $contactId, string $body, ?int $by = nu
               [(int) $client['id'], $contactId, $by, mb_substr($body, 0, 5000)]);
 }
 
+/**
+ * A deal value from what was typed or imported — or NULL when there is none, or when it is really
+ * the lead's phone number. Browsers' autofill drops a phone into any number box it guesses at,
+ * and a "value" of 201,022,627,976 would then top every report.
+ */
+function crm_deal_value(string $raw, string $phone): ?float
+{
+    $raw = trim($raw);
+    if ($raw === '') return null;
+    $digits = preg_replace('/\D+/', '', explode('.', str_replace(',', '', $raw))[0]);
+    if ($digits === '') return null;
+    $ph = preg_replace('/\D+/', '', $phone);
+    // Same digits as the phone, with or without the country code or the local leading 0.
+    if ($ph !== '' && strlen($digits) >= 9 && (str_ends_with($ph, ltrim($digits, '0')) || str_ends_with($digits, substr($ph, -9)))) return null;
+    $v = (float) preg_replace('/[^\d.]/', '', str_replace(',', '', $raw));
+    return $v > 0 ? $v : null;
+}
+
 /** The kinds of thing a salesperson logs against a lead. */
 function crm_activity_kinds(): array
 {
