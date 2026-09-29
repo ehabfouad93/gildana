@@ -650,6 +650,7 @@ function pw_parse_one(array $d): ?array
         ?? $m['extendedTextMessage']['text']
         ?? $m['imageMessage']['caption']
         ?? $m['videoMessage']['caption']
+        ?? $m['documentWithCaptionMessage']['message']['documentMessage']['caption']
         ?? $d['text'] ?? $d['body'] ?? '');
 
     $type = 'text';
@@ -657,6 +658,8 @@ function pw_parse_one(array $d): ?array
     elseif (isset($m['audioMessage'])) $type = 'audio';
     elseif (isset($m['documentMessage'])) $type = 'document';
     elseif (isset($m['videoMessage'])) $type = 'video';
+    elseif (isset($m['documentWithCaptionMessage'])) $type = 'document';
+    elseif (isset($m['stickerMessage'])) $type = 'sticker';
 
     // Button/list replies arrive as their own message types; treat the selected title as text.
     if (isset($m['buttonsResponseMessage'])) { $type = 'button'; $text = (string) ($m['buttonsResponseMessage']['selectedDisplayText'] ?? $text); }
@@ -673,6 +676,8 @@ function pw_parse_one(array $d): ?array
         'text'    => trim($text),
         'type'    => $type,
         'wamid'   => (string) ($key['id'] ?? $d['id'] ?? ''),
+        // A picture, voice note, video or file: its type and name; the gateway gives the file by id.
+        'media'   => function_exists('inbox_media_from_gateway') ? inbox_media_from_gateway($d) : [null, null, null],
         'from_me' => !empty($key['fromMe']),
         'name'    => (string) ($d['pushName'] ?? ''),
     ];

@@ -12,6 +12,7 @@ require_once __DIR__ . '/channel.php';
 require_once __DIR__ . '/credits.php';
 require_once __DIR__ . '/crm.php';
 require_once __DIR__ . '/sending.php';
+require_once __DIR__ . '/inbox_media.php';     // pictures, voice notes and files people send
 
 /** Record one message. Returns the row id. $opts: type, wamid, status, error, source.
  *  Never throws — logging must not break sending if the `messages` table is missing
@@ -43,6 +44,10 @@ function msg_log(int $clientId, int $contactId, string $direction, string $body,
             // Who sent it by hand, and through which number — see includes/sending.php.
             'sent_by_user_id' => isset($opts['sent_by']) && (int) $opts['sent_by'] > 0 ? (int) $opts['sent_by'] : null,
             'via'             => isset($opts['via']) && $opts['via'] !== '' ? substr((string) $opts['via'], 0, 20) : null,
+            // A picture, voice note, video or file: where to fetch it (includes/inbox_media.php).
+            'media_ref'       => isset($opts['media_ref']) && $opts['media_ref'] !== '' ? substr((string) $opts['media_ref'], 0, 255) : null,
+            'media_mime'      => isset($opts['media_mime']) && $opts['media_mime'] !== '' ? substr((string) $opts['media_mime'], 0, 100) : null,
+            'media_name'      => isset($opts['media_name']) && $opts['media_name'] !== '' ? substr((string) $opts['media_name'], 0, 255) : null,
         ] as $col => $val) {
             if (!db_has_column('messages', $col)) continue;
             $cols[] = $col; $vals[] = $val;
@@ -87,7 +92,7 @@ function inbox_threads(int $clientId, string $q = '', int $limit = 200): array
     [$scope, $sp] = crm_scope('c');
     $search .= $scope; $params = array_merge($params, $sp);
     $limit = max(1, min(500, $limit));
-    return db_all(
+    $rows = db_all(
         "SELECT c.id contact_id, c.phone_e164, c.name, c.last_inbound_at,
                 m.body last_body, m.direction last_dir, m.type last_type, m.created_at last_at,
                 (SELECT COUNT(*) FROM messages mi
@@ -100,6 +105,12 @@ function inbox_threads(int $clientId, string $q = '', int $limit = 200): array
           LIMIT {$limit}",
         $params
     );
+    // "[audio]" in the list reads like a fault; say what it is.
+    $label = ['[audio]' => '🎤 Voice note', '[voice]' => '🎤 Voice note', '[image]' => '📷 Photo', '[video]' => '🎥 Video',
+              '[document]' => '📎 File', '[sticker]' => 'Sticker'];
+    foreach ($rows as &$r) $r['last_body'] = $label[(string) $r['last_body']] ?? $r['last_body'];
+    unset($r);
+    return $rows;
 }
 
 /** Messages in a thread after $afterId (ascending). */
@@ -117,7 +128,7 @@ function inbox_thread(int $clientId, int $contactId, int $afterId = 0, int $limi
     // Same reason as msg_log below: between a pull and its migration these may not exist yet,
     // and a thread that will not load at all is far worse than one missing a Send again button.
     $extra = '';
-    foreach (['error_code', 'source_ref_id', 'template_id'] as $col) {
+    foreach (['error_code', 'source_ref_id', 'template_id', 'media_mime', 'media_name', 'wa_message_id', 'media_ref', 'media_path', 'via'] as $col) {
         if (db_has_column('messages', $col)) $extra .= ', ' . $col;
     }
     $rows = db_all(
@@ -135,6 +146,20 @@ function inbox_thread(int $clientId, int $contactId, int $afterId = 0, int $limi
        the button had done nothing — the client could not tell "not retried" from "retried and
        refused". Attempts are linked by the queued item they re-ran (source + source_ref_id),
        which is exact; manual sends have no such item, so those fall back to the same body. */
+    /* A picture, voice note, video or file: what it is and where the Inbox gets it. The body
+       stays "[audio]" in the database; the thread shows a player instead. */
+    $hasPhone = null;
+    foreach ($rows as &$r) {
+        $kind = in_array($r['type'] ?? '', ['image', 'audio', 'voice', 'video', 'document', 'sticker'], true) ? ($r['type'] === 'voice' ? 'audio' : $r['type']) : null;
+        if ($kind) {
+            $r['media'] = ['kind' => $kind, 'url' => 'media.php?m=' . (int) $r['id'], 'name' => (string) ($r['media_name'] ?? ''),
+                           'gone' => !inbox_media_fetchable($r, $hasPhone ??= (bool) db_val("SELECT personal_instance IS NOT NULL AND personal_instance<>'' FROM clients WHERE id=?", [$clientId]))];
+            if (preg_match('/^\[\w+\]$/', (string) $r['body'])) $r['body'] = '';        // "[audio]" says nothing the player does not
+        }
+        unset($r['wa_message_id'], $r['media_ref'], $r['media_path'], $r['via']);
+    }
+    unset($r);
+
     $seen = [];
     foreach ($rows as &$r) {
         if (($r['direction'] ?? '') !== 'out') continue;

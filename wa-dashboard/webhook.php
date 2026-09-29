@@ -23,6 +23,7 @@ require_once __DIR__ . '/includes/crm.php';
 require_once __DIR__ . '/includes/notify.php';
 require_once __DIR__ . '/includes/automation.php';
 require_once __DIR__ . '/includes/push.php';
+require_once __DIR__ . '/includes/inbox_media.php';
 
 /* ── GET verification ── */
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
@@ -254,10 +255,14 @@ foreach (($data['entry'] ?? []) as $entry) {
                    refusal rather than nothing at all. */
                 if ($referral) ads_record($cid, (int) ($contact['id'] ?? 0), $referral);
 
-                // Log the inbound message into the unified Inbox.
+                // Log the inbound message into the unified Inbox. A picture, voice note, video or
+                // file keeps its media id, so the Inbox can fetch and play it; a caption is its text.
+                [$mRef, $mMime, $mName, $mCaption] = inbox_media_from_cloud($in);
+                if ($text === '' && $mCaption !== '') $text = $mCaption;
                 $logBody = $text !== '' ? $text : '[' . $mtype . ']';
                 msg_log($cid, (int) $contact['id'], 'in', $logBody, [
                     'type' => $mtype, 'source' => 'inbound', 'wamid' => (string) ($in['id'] ?? '') ?: null,
+                    'media_ref' => $mRef, 'media_mime' => $mMime, 'media_name' => $mName,
                 ]);
 
                 // Flag the client for a push. This is one cheap UPSERT — the actual

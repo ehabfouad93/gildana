@@ -30,11 +30,11 @@ declare(strict_types=1);
 function perm_modules(): array
 {
     return [
-        'inbox'       => ['label' => 'Inbox',          'pages' => ['inbox.php', 'upload_media.php']],
+        'inbox'       => ['label' => 'Inbox',          'pages' => ['inbox.php', 'upload_media.php', 'media.php']],
         'crm'         => ['label' => 'CRM',            'pages' => ['crm.php', 'crm_lead.php', 'crm_import.php',
                                                                    'crm_reports.php', 'meta_leads.php',
                                                                    'crm_team.php', 'crm_rules.php', 'crm_setup.php',
-                                                                   'crm_messages.php', 'crm_calendar.php', 'crm_dashboard.php']],
+                                                                   'crm_messages.php', 'crm_calendar.php', 'crm_dashboard.php', 'media.php']],
         'contacts'    => ['label' => 'Contacts',       'pages' => ['contacts.php']],
         'lists'       => ['label' => 'Lists',          'pages' => ['lists.php', 'contact_search.php']],
         'templates'   => ['label' => 'Templates',      'pages' => ['templates.php']],

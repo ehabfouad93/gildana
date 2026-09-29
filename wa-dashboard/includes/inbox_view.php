@@ -160,6 +160,24 @@ $IB_SEP = strpos($IB_ENDPOINT, '?') === false ? '?' : '&';
 </div>
 
 <script>
+/* A picture, voice note, video or file someone sent: shown and played right in the thread.
+   Fetched through media.php, which checks this person may see the conversation. */
+function mediaHtml(m){
+  if (!m.media) return '';
+  const u = m.media.url, n = m.media.name || '';
+  const fail = `onerror="this.closest('.ib-media').classList.add('gone')"`;
+  if (m.media.gone) {
+    const what = {audio:'voice note', image:'picture', sticker:'sticker', video:'video'}[m.media.kind] || 'file';
+    return `<div class="ib-media gone"><span class="ib-media-gone">This ${what} arrived before files were kept, so it cannot be played here — it is still on the phone that received it.</span></div>`;
+  }
+  switch (m.media.kind) {
+    case 'audio':   return `<div class="ib-media"><audio controls preload="none" src="${u}" ${fail}></audio><a class="ib-media-dl" href="${u}&download=1">Download</a><span class="ib-media-gone">This voice note is no longer available.</span></div>`;
+    case 'image':
+    case 'sticker': return `<div class="ib-media"><a href="${u}" target="_blank" rel="noopener"><img src="${u}" alt="Picture" loading="lazy" ${fail}></a><span class="ib-media-gone">This picture is no longer available.</span></div>`;
+    case 'video':   return `<div class="ib-media"><video controls preload="metadata" src="${u}" ${fail}></video><span class="ib-media-gone">This video is no longer available.</span></div>`;
+    default:        return `<div class="ib-media"><a class="ib-file" href="${u}&download=1">📎 ${n ? n.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])) : 'Download the file'}</a></div>`;
+  }
+}
 const IB_URL = <?= json_encode($IB_ENDPOINT) ?>;
 const IB_UPLOAD = <?= json_encode($IB_UPLOAD) ?>;
 const IB_SEP = <?= json_encode($IB_SEP) ?>;
@@ -235,7 +253,7 @@ async function pollThread(){
       const where = again + alt;
       errLine = `<span class="st failed" style="display:block">⚠ ${label}</span>${hint}${where}`;
     }
-    div.innerHTML=esc(m.body)+st+errLine;
+    div.innerHTML=mediaHtml(m)+(m.body?`<span class="ib-caption">${esc(m.body)}</span>`:'')+st+errLine;
     body.appendChild(div);
   });
   if(d.messages.length && atBottom) body.scrollTop=body.scrollHeight;

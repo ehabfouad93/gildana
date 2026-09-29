@@ -27,6 +27,7 @@ require_once __DIR__ . '/includes/automation.php';
 require_once __DIR__ . '/includes/crm.php';
 require_once __DIR__ . '/includes/sending.php';   // pulls in channel.php + inbox.php
 require_once __DIR__ . '/includes/push.php';
+require_once __DIR__ . '/includes/inbox_media.php';
 
 // Some gateways probe the URL with a GET before they will save it.
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
@@ -190,6 +191,7 @@ function pw_handle_inbound(array $client, array $in): void
     msg_log($cid, (int) $contact['id'], 'in', $text !== '' ? $text : '[' . $type . ']', [
         'type' => $type, 'source' => 'inbound', 'wamid' => $in['wamid'] !== '' ? $in['wamid'] : null,
         'via' => $ownerOfPhone > 0 ? 'own' : 'company_personal',
+        'media_ref' => $in['media'][0] ?? null, 'media_mime' => $in['media'][1] ?? null, 'media_name' => $in['media'][2] ?? null,
     ]);
 
     // Flag for a push; the worker sends it (a slow webhook gets retried).

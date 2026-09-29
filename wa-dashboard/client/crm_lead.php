@@ -200,8 +200,12 @@ try {
 
 /* One timeline, newest first. Each item carries its group, so the filter chips can narrow it. */
 $feed = [];
-foreach (db_all("SELECT direction, body, status, created_at FROM messages WHERE contact_id=? ORDER BY id DESC LIMIT 80", [$id]) as $m) {
-    $feed[] = ['t' => $m['created_at'], 'group' => 'messages', 'kind' => 'msg', 'dir' => $m['direction'], 'body' => $m['body'], 'status' => $m['status']];
+$hasPhone = !empty($CLIENT['personal_instance']);
+foreach (db_all("SELECT * FROM messages WHERE contact_id=? ORDER BY id DESC LIMIT 80", [$id]) as $m) {
+    $mk = inbox_media_kind($m);
+    $feed[] = ['t' => $m['created_at'], 'group' => 'messages', 'kind' => 'msg', 'dir' => $m['direction'],
+               'body' => $mk && preg_match('/^\[\w+\]$/', (string) $m['body']) ? '' : $m['body'], 'status' => $m['status'],
+               'media' => $mk, 'mid' => (int) $m['id'], 'gone' => $mk && !inbox_media_fetchable($m, $hasPhone)];
 }
 foreach (db_all("SELECT * FROM crm_notes WHERE contact_id=? ORDER BY id DESC LIMIT 150", [$id]) as $n) {
     $k = $hasKinds ? (string) $n['kind'] : 'note';
@@ -613,7 +617,17 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
       <?php if (!$feed): ?><p class="text-muted">Nothing yet.</p><?php endif; ?>
       <?php foreach ($feed as $it): $when = date('j M, H:i', strtotime((string) $it['t'])); ?>
         <?php if ($it['kind'] === 'msg'): ?>
-          <div class="lead-item lead-msg <?= $it['dir'] === 'out' ? 'out' : 'in' ?>" data-g="messages"><?= nl2br(e((string) $it['body'])) ?>
+          <div class="lead-item lead-msg <?= $it['dir'] === 'out' ? 'out' : 'in' ?>" data-g="messages">
+            <?php if (!empty($it['media'])): $u = 'media.php?m=' . $it['mid']; ?>
+              <div class="ib-media<?= $it['gone'] ? ' gone' : '' ?>">
+                <?php if ($it['gone']): ?><span class="ib-media-gone">This <?= $it['media'] === 'audio' ? 'voice note' : ($it['media'] === 'image' ? 'picture' : 'file') ?> arrived before files were kept, so it cannot be played here.</span>
+                <?php elseif ($it['media'] === 'audio'): ?><audio controls preload="none" src="<?= $u ?>"></audio><a class="ib-media-dl" href="<?= $u ?>&download=1">Download</a>
+                <?php elseif (in_array($it['media'], ['image', 'sticker'], true)): ?><a href="<?= $u ?>" target="_blank" rel="noopener"><img src="<?= $u ?>" alt="Picture" loading="lazy"></a>
+                <?php elseif ($it['media'] === 'video'): ?><video controls preload="metadata" src="<?= $u ?>"></video>
+                <?php else: ?><a class="ib-file" href="<?= $u ?>&download=1">📎 Download the file</a><?php endif; ?>
+              </div>
+            <?php endif; ?>
+            <?= nl2br(e((string) $it['body'])) ?>
             <span class="when"><?= e($when) ?><?= $it['status'] === 'failed' ? ' · not delivered' : '' ?></span></div>
         <?php elseif ($it['kind'] === 'act'): $k = $it['act']; ?>
           <div class="lead-item act act-<?= e($k) ?>" data-g="activity">
