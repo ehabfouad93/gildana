@@ -40,10 +40,17 @@ function team_modules_from_post(array $clientHas): ?string
  */
 function team_crm_pages_from_post(): ?string
 {
-    if (($_POST['mod_mode'] ?? 'role') !== 'custom' || !in_array('crm', (array) ($_POST['modules'] ?? []), true)) return null;
-    $all = array_keys(perm_crm_pages());
-    $picked = array_values(array_unique(array_merge(['pipeline'], array_intersect($all, array_map('strval', (array) ($_POST['crm_pages'] ?? []))))));
-    return count($picked) === count($all) ? null : implode(',', $picked);
+    $pages = null;
+    if (($_POST['mod_mode'] ?? 'role') === 'custom' && in_array('crm', (array) ($_POST['modules'] ?? []), true)) {
+        $all = array_keys(perm_crm_pages());
+        $picked = array_values(array_unique(array_merge(['pipeline'], array_intersect($all, array_map('strval', (array) ($_POST['crm_pages'] ?? []))))));
+        $pages = count($picked) === count($all) ? null : implode(',', $picked);
+    }
+    // What they may do with the lead data (export, see phone numbers, delete) — off unless ticked,
+    // and stored beside the pages. An Admin can do all of it anyway.
+    $actions = ($_POST['client_role'] ?? '') === 'admin' ? [] : array_values(array_intersect(array_keys(perm_crm_actions()), array_map('strval', (array) ($_POST['crm_actions'] ?? []))));
+    if (!$actions) return $pages;
+    return implode(',', array_merge($pages === null ? array_keys(perm_crm_pages()) : explode(',', $pages), $actions));
 }
 
 /** How many active Admins the account has — so the last one cannot remove themselves. */
@@ -179,7 +186,8 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
                 'role' => user_client_role($p), 'status' => $p['status'], 'send_via' => (string) ($p['send_via'] ?? ''),
                 'phone' => (string) ($p['phone'] ?? ''), 'wa_alerts' => (int) ($p['wa_alerts'] ?? 1),
                 'modules' => perm_parse($p['modules'] ?? null),
-                'crm_pages' => ($cp = user_crm_pages($p + ['role' => 'client'])) === null ? null : $cp], JSON_HEX_APOS | JSON_HEX_QUOT) ?>)'>Edit</button>
+                'crm_pages' => ($cp = user_crm_pages($p + ['role' => 'client'])) === null ? null : $cp,
+                'crm_actions' => array_values(array_intersect(array_keys(perm_crm_actions()), array_map('trim', explode(',', (string) ($p['crm_pages'] ?? '')))))], JSON_HEX_APOS | JSON_HEX_QUOT) ?>)'>Edit</button>
           </td>
         </tr>
       <?php endforeach; ?>
@@ -229,6 +237,18 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
       <?php endif; ?>
       <span class="text-muted" style="font-size:11.5px">Only modules your account has are listed.</span>
     </div>
+
+    <?php if (in_array('crm', $clientHas, true) && function_exists('perm_crm_actions')): ?>
+    <div class="field" id="t-actions"><span class="lbl">With the lead data, they may also</span>
+      <div class="mod-grid">
+        <?php foreach (perm_crm_actions() as $k => $l): ?>
+          <label class="mod-opt"><input type="checkbox" class="t-act" name="crm_actions[]" value="<?= e($k) ?>"> <?= e($l) ?></label>
+        <?php endforeach; ?>
+      </div>
+      <span class="text-muted" style="font-size:11.5px">Off unless ticked. Admins can always do these. Phone numbers are hidden from Sales only when
+        <a href="crm_manage.php#settings">the account hides them</a>; every number opened to call is recorded.</span>
+    </div>
+    <?php endif; ?>
 
     <div class="field"><span class="lbl">Sends messages from</span>
       <select name="send_via" id="t-send">
@@ -285,7 +305,9 @@ function teamCrmSub(){
   // Manager pages only mean something for an Admin; for anyone else they would never open anyway.
   const admin = $t('t-role').value === 'admin';
   document.querySelectorAll('#t-crm-sub [data-admin-only]').forEach(l => l.hidden = !admin);
+  const acts = $t('t-actions'); if (acts) acts.hidden = admin;
 }
+$t('t-role')?.addEventListener('change', teamCrmSub);
 document.querySelector('.t-mod[value="crm"]')?.addEventListener('change', teamCrmSub);
 function teamOpen(p){
   const edit = !!p;
@@ -310,6 +332,8 @@ function teamOpen(p){
   if (custom) document.querySelectorAll('.t-mod').forEach(c => c.checked = p.modules.includes(c.value));
   teamMode();
   if (custom) document.querySelectorAll('.t-crm').forEach(c => c.checked = c.dataset.always === '1' || !p.crm_pages || p.crm_pages.includes(c.value));
+  document.querySelectorAll('.t-act').forEach(c => c.checked = !!(edit && (p.crm_actions || []).includes(c.value)));
+  teamCrmSub();
   $t('m-team').classList.add('open');
 }
 </script>

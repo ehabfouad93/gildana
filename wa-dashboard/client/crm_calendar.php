@@ -50,7 +50,7 @@ page_head('Site visits', $isAdmin ? '<a class="btn btn-ghost btn-sm" href="crm_m
   <p class="text-muted" style="font-size:12.5px;margin-top:-4px">These visits have passed without an answer. Mark them on the lead — it is what the
     visit-to-sale numbers count.</p>
   <?php foreach ($unmarked as $v): ?>
-    <div class="dup-row"><div><a href="crm_lead.php?id=<?= (int) $v['contact_id'] ?>#visits"><strong><?= e((string) ($v['lead_name'] ?: '+' . $v['phone_e164'])) ?></strong></a>
+    <div class="dup-row"><div><a href="crm_lead.php?id=<?= (int) $v['contact_id'] ?>#visits"><strong><?= e((string) ($v['lead_name'] ?: crm_phone_show((string) $v['phone_e164']))) ?></strong></a>
       <span class="text-muted" style="display:block;font-size:12.5px"><?= e(date('D j M, H:i', strtotime((string) $v['starts_at']))) ?>
         <?= $v['project_name'] ? ' · ' . e((string) $v['project_name']) : '' ?><?= $v['host_name'] ? ' · ' . e((string) $v['host_name']) : '' ?></span></div>
       <a class="btn btn-ghost btn-sm" href="crm_lead.php?id=<?= (int) $v['contact_id'] ?>#visits">Mark it</a></div>
@@ -68,7 +68,7 @@ page_head('Site visits', $isAdmin ? '<a class="btn btn-ghost btn-sm" href="crm_m
         <a class="cal-visit <?= e((string) $v['status']) ?> <?= $focus === (int) $v['id'] ? 'focus' : '' ?>" id="visit-<?= (int) $v['id'] ?>"
            href="crm_lead.php?id=<?= (int) $v['contact_id'] ?>#visits">
           <span class="cal-time"><?= e(date('H:i', strtotime((string) $v['starts_at']))) ?></span>
-          <strong><?= e((string) ($v['lead_name'] ?: '+' . $v['phone_e164'])) ?></strong>
+          <strong><?= e((string) ($v['lead_name'] ?: crm_phone_show((string) $v['phone_e164']))) ?></strong>
           <?php if ($v['project_name']): ?><span class="cal-meta"><?= e((string) $v['project_name']) ?></span><?php endif; ?>
           <?php if ($v['host_name'] && !is_sales()): ?><span class="cal-meta">with <?= e((string) $v['host_name']) ?></span><?php endif; ?>
           <?php if ($v['status'] !== 'scheduled'): ?><span class="cal-status"><?= e(crm_visit_statuses()[$v['status']]) ?></span><?php endif; ?>

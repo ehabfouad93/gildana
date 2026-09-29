@@ -381,10 +381,5 @@ function crm_xlsx(array $head, array $rows, string $sheet = 'Leads'): string
 /** Keep a record of every export: who took which leads out, and how many. */
 function crm_log_export(int $clientId, int $userId, int $rows, array $filters): void
 {
-    try {
-        db_run("INSERT INTO crm_audit (client_id,user_id,action,detail,n,created_at) VALUES (?,?,'export',?,?,NOW())",
-               [$clientId, $userId ?: null, mb_substr(http_build_query(crm_list_active($filters, [])), 0, 1000) ?: null, $rows]);
-    } catch (Throwable $e) {
-        error_log("crm export by user $userId: $rows leads");
-    }
+    crm_audit($clientId, $userId ?: null, 'export', null, http_build_query(crm_list_active($filters, [])) ?: null, $rows);
 }

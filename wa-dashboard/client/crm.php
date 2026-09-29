@@ -22,6 +22,8 @@ $isAdmin = is_client_admin();
 $isLeader = !$isAdmin && crm_is_team_leader();
 $canMove = $isAdmin || $isLeader;                        // pass leads to someone else
 $canExport = function_exists('can_crm_export') ? can_crm_export() : $isAdmin;
+$hidePhones = crm_phone_hidden();
+$canDelete = $isAdmin || can_crm_action('delete');
 $stages  = crm_stages($cid);
 $stageMap = crm_stage_map($cid);
 $people  = crm_assignable_users($cid);
@@ -92,6 +94,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['ajax'])) {
         if (!$ids) json_out(['ok' => false, 'error' => 'Choose some leads first.']);
         $n = 0;
         foreach ($ids as $id) {
+            $before = crm_field_snapshot($cid, db_row("SELECT * FROM contacts WHERE id=?", [$id]) ?: []);
             switch (true) {
                 case $field === 'project':
                     $pid = (int) $val;
@@ -114,7 +117,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['ajax'])) {
                 default:
                     json_out(['ok' => false, 'error' => 'Choose which field to change.']);
             }
-            if ($field !== 'followup') crm_rescore($id);
+            if ($field !== 'followup') { crm_rescore($id); crm_log_changes($cid, $id, $before, $me); }
             $n++;
         }
         json_out(['ok' => true, 'n' => $n]);
@@ -183,46 +186,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['ajax'])) {
     }
 
     if ($a === 'add') {
-        $country = (string) ($CLIENT['default_country'] ?? '');
-        $phone = normalize_phone((string) ($_POST['phone'] ?? ''), $country);
-        if ($phone === '') json_out(['ok' => false, 'error' => 'Enter a valid phone number, with the country code or a local number.']);
-        $name  = trim((string) ($_POST['name'] ?? ''));
-        $email = trim((string) ($_POST['email'] ?? ''));
-        if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) json_out(['ok' => false, 'error' => 'That email address does not look right.']);
-
-        $existing = db_row("SELECT * FROM contacts WHERE client_id=? AND phone_e164=?", [$cid, $phone]);
-        if ($existing && $existing['stage_id'] !== null) {
-            // Already a lead. Say whose, so nobody creates a second one or quietly takes it over —
-            // unless it is someone else's and this is a salesperson, who is told only that it exists.
-            $who = crm_can_see($existing) ? ' (' . crm_user_name($existing['owner_user_id'] !== null ? (int) $existing['owner_user_id'] : null) . ')' : '';
-            json_out(['ok' => false, 'error' => 'That number is already a lead' . $who . '.',
-                      'id' => crm_can_see($existing) ? (int) $existing['id'] : 0]);
-        }
-        if ($existing) {
-            db_run("UPDATE contacts SET name=COALESCE(NULLIF(?,''),name), email=COALESCE(NULLIF(?,''),email) WHERE id=?",
-                   [$name, $email, (int) $existing['id']]);
-            $contactId = (int) $existing['id'];
-        } else {
-            $contactId = db_insert("INSERT INTO contacts (client_id,phone_e164,name,email,opt_in_status,source,created_at)
-                                    VALUES (?,?,?,?, 'in','manual',NOW())", [$cid, $phone, $name, $email !== '' ? $email : null]);
-        }
-        if (db_has_column('contacts', 'project_id')) {
-            $pj = (int) ($_POST['project_id'] ?? 0);
-            db_run("UPDATE contacts SET project_id=?, unit_type=NULLIF(?,''), budget=NULLIF(?,'') WHERE id=?",
-                   [isset(crm_project_names($cid)[$pj]) ? $pj : null, mb_substr(trim((string) ($_POST['unit_type'] ?? '')), 0, 80),
-                    mb_substr(trim((string) ($_POST['budget'] ?? '')), 0, 80), $contactId]);
-        }
         $owner = is_sales() ? $me : (string) ($_POST['owner'] ?? 'auto');
-        crm_add_lead($CLIENT, $contactId, 'manual', $owner === '' ? 'auto' : $owner, (int) ($_POST['stage_id'] ?? 0) ?: null, $me);
-        if (($camp = trim((string) ($_POST['campaign'] ?? ''))) !== '') crm_set_origin($contactId, ['campaign' => $camp]);
+        // When the account wants new leads from Sales approved, this one waits for a manager —
+        // unless the number is already a lead, which is said straight away.
+        if (is_sales() && (int) (crm_settings($cid)['approve_new_leads'] ?? 0)) {
+            $phone = normalize_phone((string) ($_POST['phone'] ?? ''), (string) ($CLIENT['default_country'] ?? ''));
+            if ($phone === '') json_out(['ok' => false, 'error' => 'Enter a valid phone number, with the country code or a local number.']);
+            $ex = db_row("SELECT * FROM contacts WHERE client_id=? AND phone_e164=? AND stage_id IS NOT NULL", [$cid, $phone]);
+            if ($ex) json_out(['ok' => false, 'error' => 'That number is already a lead' . (crm_can_see($ex) ? '' : ' (someone else\'s)') . '.', 'id' => crm_can_see($ex) ? (int) $ex['id'] : 0]);
+            crm_request_create($CLIENT, $me, array_intersect_key($_POST, array_flip(['name', 'phone', 'email', 'deal_value', 'stage_id', 'followup', 'project_id', 'unit_type', 'budget', 'campaign', 'note'])));
+            json_out(['ok' => true, 'pending' => true]);
+        }
+        $r = crm_create_lead($CLIENT, $_POST, $owner === '' ? 'auto' : $owner, $me);
+        json_out($r);
+    }
 
-        $value = (string) ($_POST['deal_value'] ?? $_POST['value'] ?? '');
-        $fu    = trim((string) ($_POST['followup'] ?? ''));
-        db_run("UPDATE contacts SET deal_value=?, next_followup_at=? WHERE id=?",
-               [crm_deal_value($value, $phone),
-                $fu !== '' ? date('Y-m-d H:i:s', strtotime($fu)) : null, $contactId]);
-        crm_add_note($CLIENT, $contactId, (string) ($_POST['note'] ?? ''), $me);
-        json_out(['ok' => true, 'id' => $contactId, 'reused' => (bool) $existing]);
+    if ($a === 'delete') {
+        // To the recycle bin, for 30 days. Admins, and people allowed to; others ask on the lead page.
+        if (!$canDelete) json_out(['ok' => false, 'error' => 'Ask a manager to delete leads — open the lead and choose "Ask to delete".']);
+        $n = 0;
+        foreach ($targets() as $id) if (crm_delete_lead($CLIENT, $id, $me)) $n++;
+        json_out(['ok' => true, 'n' => $n]);
     }
 
     if ($a === 'stages') {
@@ -555,8 +539,8 @@ foreach ($views as $v_) { parse_str((string) $v_['params'], $vq); if ($vq == $ac
             $due  = $l['next_followup_at'] && $l['stage_kind'] === 'open' ? strtotime((string) $l['next_followup_at']) : 0;
             $late = $due && $due < time(); ?>
             <article class="crm-card" draggable="<?= $canEdit ? 'true' : 'false' ?>" data-id="<?= (int) $l['id'] ?>">
-              <a class="crm-card-name" href="crm_lead.php?id=<?= (int) $l['id'] ?>"><?= e((string) ($l['name'] ?: '+' . $l['phone_e164'])) ?></a>
-              <?php if ($l['name']): ?><div class="crm-card-phone">+<?= e((string) $l['phone_e164']) ?></div><?php endif; ?>
+              <a class="crm-card-name" href="crm_lead.php?id=<?= (int) $l['id'] ?>"><?= e((string) ($l['name'] ?: crm_phone_show((string) $l['phone_e164']))) ?></a>
+              <?php if ($l['name']): ?><div class="crm-card-phone"><?= e(crm_phone_show((string) $l['phone_e164'])) ?></div><?php endif; ?>
               <?php [$hc, $hw] = crm_heat(isset($l['score']) && $l['score'] !== null ? (int) $l['score'] : null);
                     $notYet = $l['stage_kind'] === 'open' && $l['owner_user_id'] !== null && empty($l['first_response_at']);
                     $proj = !empty($l['project_id']) ? ($pnames[(int) $l['project_id']] ?? '') : ''; ?>
@@ -604,6 +588,7 @@ foreach ($views as $v_) { parse_str((string) $v_['params'], $vq); if ($vq == $ac
       <button type="button" class="btn btn-ghost btn-sm" data-open="m-seq">Add to sequence</button>
     <?php endif; ?>
     <?php if ($canExport): ?><button type="button" class="btn btn-ghost btn-sm" id="crm-bulk-export">Export selected</button><?php endif; ?>
+    <?php if ($canDelete): ?><button type="button" class="btn btn-ghost btn-sm" id="crm-bulk-delete" style="color:var(--danger)">Delete</button><?php endif; ?>
     <button type="button" class="btn-link" id="crm-bulk-clear">Clear</button>
   </div>
   <?php endif; ?>
@@ -656,15 +641,16 @@ foreach ($views as $v_) { parse_str((string) $v_['params'], $vq); if ($vq == $ac
         $late = $l['next_followup_at'] && strtotime((string) $l['next_followup_at']) < time() && $l['stage_kind'] === 'open';
         $custom = crm_custom_get($l); ?>
         <tr data-id="<?= (int) $l['id'] ?>" data-stage="<?= (int) $l['stage_id'] ?>">
-          <?php if ($canEdit): ?><td class="crm-cb"><input type="checkbox" class="crm-pick" value="<?= (int) $l['id'] ?>" aria-label="Select <?= e((string) ($l['name'] ?: $l['phone_e164'])) ?>"></td><?php endif; ?>
+          <?php if ($canEdit): ?><td class="crm-cb"><input type="checkbox" class="crm-pick" value="<?= (int) $l['id'] ?>" aria-label="Select <?= e((string) ($l['name'] ?: $l['code'])) ?>"></td><?php endif; ?>
           <?php foreach ($cols as $k): $lbl = $allCols[$k][0]; ?>
             <td data-label="<?= e($lbl) ?>" class="<?= 'c-' . e($k) ?><?= in_array($k, ['value', 'effort', 'rotations'], true) ? ' num' : '' ?><?= $k === 'followup' && $late ? ' crm-late' : '' ?>">
             <?php switch ($k):
               case 'lead': ?>
-                <a href="crm_lead.php?id=<?= (int) $l['id'] ?>" class="crm-name"><strong><?= e((string) ($l['name'] ?: '+' . $l['phone_e164'])) ?></strong></a>
+                <a href="crm_lead.php?id=<?= (int) $l['id'] ?>" class="crm-name"><strong><?= e((string) ($l['name'] ?: crm_phone_show((string) $l['phone_e164']))) ?></strong></a>
                 <span class="crm-sub-line"><?php if (!empty($l['code'])): ?><span class="crm-code">#<?= e((string) $l['code']) ?></span><?php endif; ?>
-                  <?php if (!in_array('phone', $cols, true)): ?>+<?= e((string) $l['phone_e164']) ?><?php endif; ?></span>
-              <?php break; case 'phone': ?><a href="tel:+<?= e((string) $l['phone_e164']) ?>">+<?= e((string) $l['phone_e164']) ?></a>
+                  <?php if (!in_array('phone', $cols, true)): ?><?= e(crm_phone_show((string) $l['phone_e164'])) ?><?php endif; ?></span>
+              <?php break; case 'phone': ?><?php if ($hidePhones): ?><button type="button" class="btn-link" data-reveal="<?= (int) $l['id'] ?>" data-how="call" title="Call — the number is recorded as opened"><?= e(crm_phone_mask((string) $l['phone_e164'])) ?></button>
+                <?php else: ?><a href="tel:+<?= e((string) $l['phone_e164']) ?>">+<?= e((string) $l['phone_e164']) ?></a><?php endif; ?>
               <?php break; case 'stage': ?>
                 <span class="pill <?= $l['stage_kind'] === 'won' ? 'green' : ($l['stage_kind'] === 'lost' ? 'red' : 'gray') ?>"><?= e((string) $l['stage_name']) ?></span>
                 <?php $sub = (string) ($l['substatus'] ?? '') ?: ($l['stage_kind'] === 'lost' ? (string) ($l['lost_reason'] ?? '') : ''); if ($sub !== ''): ?><span class="crm-sub-line"><?= e($sub) ?></span><?php endif; ?>
@@ -1067,6 +1053,19 @@ async function logSave(e){
       b.onclick = () => { input.value = local(fn()); box.querySelectorAll('button').forEach(x => x.classList.remove('on')); b.classList.add('on'); }; box.appendChild(b); }); });
 })();
 
+/* A hidden number: pressing it opens the call (or WhatsApp) — and the opening is recorded. */
+document.querySelectorAll('[data-reveal]').forEach(b => b.addEventListener('click', async () => {
+  const fd = new FormData(); fd.append('csrf_token', CSRF); fd.append('action', 'reveal'); fd.append('how', b.dataset.how || 'call'); fd.append('id', b.dataset.reveal);
+  const d = await fetch('crm_lead.php?id=' + b.dataset.reveal, {method:'POST', body:fd}).then(r => r.json()).catch(() => ({}));
+  if (!d.phone) { alert(d.error || 'Could not open the number.'); return; }
+  location.href = (b.dataset.how === 'whatsapp' ? 'https://wa.me/' : 'tel:+') + d.phone;
+}));
+$m('crm-bulk-delete')?.addEventListener('click', async () => {
+  if (!confirm('Delete ' + nTarget().toLocaleString() + ' lead' + (nTarget() === 1 ? '' : 's') + '? They go to the recycle bin and can be brought back for 30 days.')) return;
+  const d = await crmPost(Object.assign({action:'delete'}, target()));
+  if (d.ok) location.reload(); else alert(d.error || 'Could not delete.');
+});
+
 /* Phone: each row is a card; "More" opens the rest of its details. */
 document.querySelectorAll('.crm-more-btn').forEach(b => b.addEventListener('click', () => {
   const tr = b.closest('tr'); tr.classList.toggle('open'); b.setAttribute('aria-expanded', String(tr.classList.contains('open')));
@@ -1078,6 +1077,7 @@ async function crmAddSave(e){
   e.preventDefault();
   const data = Object.fromEntries(new FormData(e.target)); data.action = 'add';
   const d = await crmPost(data);
+  if (d.ok && d.pending) { $m('m-add').classList.remove('open'); alert('Sent to a manager for approval. You will be told when it is added.'); return false; }
   if (d.ok) { location.href = 'crm_lead.php?id=' + d.id; return false; }
   $m('add-err').hidden = false;
   $m('add-err').innerHTML = (d.error || 'Could not add the lead.') + (d.id ? ` <a href="crm_lead.php?id=${d.id}">Open it</a>` : '');

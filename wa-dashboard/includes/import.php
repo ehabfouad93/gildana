@@ -18,6 +18,7 @@ require_once __DIR__ . '/crm.php';
 function import_fields(?int $clientId = null): array
 {
     $f = [
+        'code'     => ['label' => 'Lead code (#4DE2F2)', 'guess' => ['code', 'customer code', 'lead code', 'الكود']],
         'phone'    => ['label' => 'Phone',            'guess' => ['phone', 'mobile', 'number', 'whatsapp', 'msisdn', 'tel', 'رقم', 'موبايل', 'تليفون', 'هاتف']],
         'name'     => ['label' => 'Name',             'guess' => ['name', 'full name', 'full_name', 'fullname', 'contact', 'client', 'الاسم', 'اسم']],
         'email'    => ['label' => 'Email',            'guess' => ['email', 'e-mail', 'mail', 'البريد']],
@@ -235,10 +236,67 @@ function import_contacts(array $client, array $header, array $rows, array $map, 
         if (count($sum['problems']) < 200) $sum['problems'][] = "Row {$line}: {$why}";
     };
     $col = fn(array $r, string $f) => isset($map[$f]) && $map[$f] !== '' ? trim((string) ($r[(int) $map[$f]] ?? '')) : '';
+    $update  = ($opts['mode'] ?? 'add') === 'update' && $toCrm;
+    $byCode  = $update && ($opts['match'] ?? 'phone') === 'code';
+    $importId = (int) ($opts['import_id'] ?? 0);
 
     foreach ($rows as $n => $r) {
         $line = $n + 2;                                         // +1 for the header, +1 for 1-based
         $sum['total']++;
+
+        /* Update mode: change leads the account already has, found by phone or by code. Nothing
+           new is created; only the columns that were mapped, and have a value, are changed. */
+        if ($update) {
+            if ($byCode) {
+                $code = crm_code_from_search($col($r, 'code'));
+                $existing = $code !== '' ? db_row("SELECT * FROM contacts WHERE client_id=? AND code=?", [$cid, $code]) : null;
+                $key = $code !== '' ? '#' . $code : ($col($r, 'code') !== '' ? 'the code "' . $col($r, 'code') . '"' : 'no code');
+            } else {
+                $ph = normalize_phone($col($r, 'phone'), $country);
+                $existing = $ph !== '' ? db_row("SELECT * FROM contacts WHERE client_id=? AND phone_e164=?", [$cid, $ph]) : null;
+                $key = $col($r, 'phone') ?: 'no phone';
+            }
+            if (!$existing || $existing['stage_id'] === null) { $sum['skipped']++; $problem($line, "no lead with {$key} — updating only changes leads you already have."); continue; }
+            if (!crm_can_see($existing)) { $sum['skipped']++; $problem($line, "{$key} is someone else's lead."); continue; }
+            $id = (int) $existing['id'];
+            $before = crm_field_snapshot($cid, $existing);
+            $nm = $col($r, 'name'); $em = $col($r, 'email');
+            if ($em !== '' && !filter_var($em, FILTER_VALIDATE_EMAIL)) { $problem($line, "\"{$em}\" is not an email address — left as it was."); $em = ''; }
+            db_run("UPDATE contacts SET name=COALESCE(NULLIF(?,''), name), email=COALESCE(NULLIF(?,''), email) WHERE id=?", [$nm, $em, $id]);
+            if (($sv = mb_strtolower($col($r, 'stage'))) !== '') {
+                if (isset($stageByName[$sv])) crm_set_stage($client, $id, $stageByName[$sv], $by);
+                else $problem($line, "no stage called \"{$col($r, 'stage')}\" — stage left as it was.");
+            }
+            if (!(function_exists('is_sales') && is_sales()) && ($ov = mb_strtolower($col($r, 'owner'))) !== '') {
+                if (isset($users[$ov])) crm_assign($client, $id, $users[$ov], $by);
+                else $problem($line, "no teammate called \"{$col($r, 'owner')}\" — owner left as it was.");
+            }
+            if (($pv = mb_strtolower($col($r, 'project'))) !== '') {
+                if (isset($projByName[$pv])) db_run("UPDATE contacts SET project_id=? WHERE id=?", [$projByName[$pv], $id]);
+                else $problem($line, "no project called \"{$col($r, 'project')}\".");
+            }
+            if (($uv = $col($r, 'unit_type')) !== '') db_run("UPDATE contacts SET unit_type=? WHERE id=?", [mb_substr($uv, 0, 80), $id]);
+            if (($cv = $col($r, 'campaign')) !== '' && db_has_column('contacts', 'campaign')) db_run("UPDATE contacts SET campaign=? WHERE id=?", [mb_substr($cv, 0, 160), $id]);
+            if (($sv2 = $col($r, 'substatus')) !== '' && !crm_set_substatus($client, $id, $sv2, $by)) $problem($line, "\"{$sv2}\" is not a sub-status of the lead's stage.");
+            if (($qv = mb_strtolower($col($r, 'qualification'))) !== '') {
+                $ql = in_array($qv, ['yes', 'y', '1', 'true', 'qualified', 'نعم', 'مؤهل'], true) ? 'qualified'
+                    : (in_array($qv, ['no', 'n', '0', 'false', 'not qualified', 'not_qualified', 'لا', 'غير مؤهل'], true) ? 'not_qualified' : null);
+                if ($ql) db_run("UPDATE contacts SET qualification=? WHERE id=?", [$ql, $id]);
+            }
+            $cfv = [];
+            foreach ($map as $fk => $_) if (str_starts_with((string) $fk, 'cf:') && ($v = $col($r, (string) $fk)) !== '') $cfv[substr((string) $fk, 3)] = $v;
+            if ($cfv && ($ce = crm_custom_save($cid, $id, $cfv)) !== '') $problem($line, $ce . ' Left as it was.');
+            $num = crm_deal_value($col($r, 'value'), (string) $existing['phone_e164']);
+            $fu = import_date($col($r, 'followup'));
+            if ($num !== null) db_run("UPDATE contacts SET deal_value=? WHERE id=?", [$num, $id]);
+            if ($fu !== null) crm_set_followup($client, $id, $fu, '', $by);
+            if (($note = $col($r, 'note')) !== '') crm_add_note($client, $id, $note, $by);
+            crm_rescore($id);
+            crm_log_changes($cid, $id, $before, $by);
+            if ($importId) db_run("INSERT IGNORE INTO crm_import_items (import_id,contact_id,new_contact,new_lead) VALUES (?,?,0,0)", [$importId, $id]);
+            $sum['updated']++;
+            continue;
+        }
         $rawPhone = $col($r, 'phone');
 
         // Excel shortened this number in the CSV (2.01001E+11): the missing digits are gone for
@@ -317,6 +375,9 @@ function import_contacts(array $client, array $header, array $rows, array $map, 
         }
         $isNew = crm_add_lead($client, $contactId, $source, $rowOwner, $stageId, $by);
         if ($isNew) $sum['leads']++;
+        // What this import made, so it can be undone from Requests, bin & imports.
+        if ($importId) db_run("INSERT IGNORE INTO crm_import_items (import_id,contact_id,new_contact,new_lead) VALUES (?,?,?,?)",
+                              [$importId, $contactId, $existing ? 0 : 1, $isNew ? 1 : 0]);
         elseif ($stageId) crm_set_stage($client, $contactId, $stageId, $by);   // already a lead: honour the sheet's stage
 
         // Fresh or cold, as the person importing said — the sheet is theirs to judge.

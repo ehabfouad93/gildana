@@ -15,6 +15,7 @@ require_once __DIR__ . '/crm_manager.php';     // rules, scoring, notices, merge
 require_once __DIR__ . '/crm_notify.php';      // what those notices say, in the app and on WhatsApp
 require_once __DIR__ . '/crm_fields.php';      // code, sub-status, fresh/cold, campaign, teams, the account's own fields
 require_once __DIR__ . '/crm_list.php';        // the leads list: filters, columns, views, export
+require_once __DIR__ . '/crm_control.php';     // phone numbers, permissions, bin, requests, imports, field history
 
 /** The pipeline a client starts with. Real-estate shaped, because that is who uses this. */
 function crm_default_stages(): array
@@ -306,6 +307,8 @@ function crm_add_lead(array $client, int $contactId, string $source = '', $owner
     if ($c['stage_id'] !== null) return false;                        // already a lead
 
     $stage = $stageId && isset(crm_stage_map($cid)[$stageId]) ? $stageId : crm_first_stage($cid);
+    // Added again after being deleted: it leaves the recycle bin.
+    if (db_has_column('contacts', 'deleted_at')) db_run("UPDATE contacts SET deleted_at=NULL, deleted_by=NULL, deleted_stage_id=NULL WHERE id=?", [$contactId]);
     db_run("UPDATE contacts SET stage_id=?, crm_added_at=NOW(),
                    source=COALESCE(NULLIF(?,''), source) WHERE id=? AND client_id=?",
            [$stage, $source, $contactId, $cid]);

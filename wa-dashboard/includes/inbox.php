@@ -112,7 +112,12 @@ function inbox_threads(int $clientId, string $q = '', int $limit = 200): array
           ORDER BY t.mid DESC",
         array_merge([$clientId], $params)
     );
-    foreach ($rows as &$r) unset($r['inbox_read_at'], $r['mid']);
+    $hide = function_exists('crm_phone_hidden') && crm_phone_hidden();
+    foreach ($rows as &$r) {
+        unset($r['inbox_read_at'], $r['mid']);
+        // The Inbox adds the "+" itself; a hidden number arrives already masked, without it.
+        if ($hide) $r['phone_e164'] = ltrim(crm_phone_mask((string) $r['phone_e164']), '+');
+    }
     unset($r);
     // "[audio]" in the list reads like a fault; say what it is.
     $label = ['[audio]' => '🎤 Voice note', '[voice]' => '🎤 Voice note', '[image]' => '📷 Photo', '[video]' => '🎥 Video',

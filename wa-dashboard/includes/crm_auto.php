@@ -35,6 +35,7 @@ function crm_auto_tick(): array
         }
     }
     $sum['rescored'] = crm_auto_rescore();
+    $sum['bin_purged'] = function_exists('crm_bin_purge') ? crm_bin_purge() : 0;
     // Sequences decide what is due, then the queue sends it (stage messages, sequence steps, visits).
     $sum['visits']     = crm_visits_tick();
     $sum['seq_queued'] = crm_seq_tick();

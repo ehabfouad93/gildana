@@ -6,12 +6,15 @@ require_once __DIR__ . '/../includes/contacts.php';
 $cid     = (int) $CLIENT['id'];
 $country = (string) $CLIENT['default_country'];
 
-/* ── CSV export ── */
+/* ── CSV export ── only for Admins and people ticked "Export leads": it is the same phone list. */
+$canExport = is_client_admin() || (function_exists('can_crm_export') && can_crm_export());
 if (($_GET['export'] ?? '') === '1') {
+    if (!$canExport) { http_response_code(403); exit('Exporting contacts is not allowed for your role.'); }
     // Export what is on screen, not the whole book: someone who filtered to a tag and then
     // pressed Export means that tag.
     [$xw, $xp] = contact_selection_where($cid, ['scope' => 'filter'] + $_GET);
     $rows = db_all("SELECT phone_e164,name,opt_in_status,tags,created_at FROM contacts WHERE {$xw} ORDER BY id DESC", $xp);
+    if (function_exists('crm_audit')) crm_audit($cid, (int) ($PERM_USER['id'] ?? 0) ?: null, 'export', null, 'contacts', count($rows));
     header('Content-Type: text/csv; charset=UTF-8');
     header('Content-Disposition: attachment; filename="contacts-' . date('Y-m-d') . '.csv"');
     echo "\xEF\xBB\xBF";
@@ -183,7 +186,7 @@ $totalContacts = (int) db_val("SELECT COUNT(*) FROM contacts WHERE $where", $par
 $list = db_all("SELECT * FROM contacts WHERE $where ORDER BY id DESC LIMIT $per OFFSET $off", $params);
 $pages = (int) max(1, ceil($totalContacts / $per));
 
-$actions = '<a class="btn btn-ghost btn-sm" href="' . e($qs(['export' => '1'])) . '">Export CSV</a>'
+$actions = ($canExport ? '<a class="btn btn-ghost btn-sm" href="' . e($qs(['export' => '1'])) . '">Export CSV</a>' : '')
          . '<button class="btn btn-ghost btn-sm" onclick="document.getElementById(\'m-import\').classList.add(\'open\')">Import CSV</button>'
          . '<button class="btn btn-primary btn-sm" onclick="document.getElementById(\'m-add\').classList.add(\'open\')">+ Add Contact</button>';
 
@@ -261,8 +264,8 @@ if ($importSummary): ?>
       <?php endif; ?>
       <?php foreach ($list as $c): ?>
         <tr id="c-<?= (int) $c['id'] ?>">
-          <td class="ck"><input type="checkbox" class="ck-row" value="<?= (int) $c['id'] ?>" onchange="onPick()" aria-label="Select <?= e((string) ($c['name'] ?: $c['phone_e164'])) ?>"></td>
-          <td class="mono">+<?= e((string) $c['phone_e164']) ?></td>
+          <td class="ck"><input type="checkbox" class="ck-row" value="<?= (int) $c['id'] ?>" onchange="onPick()" aria-label="Select <?= e((string) ($c['name'] ?: 'contact ' . $c['id'])) ?>"></td>
+          <td class="mono"><?= e(function_exists('crm_phone_show') ? crm_phone_show((string) $c['phone_e164']) : '+' . $c['phone_e164']) ?></td>
           <td><?= e((string) $c['name']) ?: '<span class="text-muted">—</span>' ?></td>
           <td class="tags-cell"><?= tags_html((string) $c['tags']) ?></td>
           <td>

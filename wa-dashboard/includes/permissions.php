@@ -34,7 +34,8 @@ function perm_modules(): array
         'crm'         => ['label' => 'CRM',            'pages' => ['crm.php', 'crm_lead.php', 'crm_import.php',
                                                                    'crm_reports.php', 'meta_leads.php',
                                                                    'crm_team.php', 'crm_rules.php', 'crm_setup.php',
-                                                                   'crm_messages.php', 'crm_calendar.php', 'crm_dashboard.php', 'media.php']],
+                                                                   'crm_messages.php', 'crm_calendar.php', 'crm_dashboard.php', 'media.php',
+                                                                   'crm_manage.php']],
         'contacts'    => ['label' => 'Contacts',       'pages' => ['contacts.php']],
         'lists'       => ['label' => 'Lists',          'pages' => ['lists.php', 'contact_search.php']],
         'templates'   => ['label' => 'Templates',      'pages' => ['templates.php']],
@@ -164,6 +165,7 @@ function perm_crm_pages(): array
         'messages'  => ['label' => 'Automatic messages', 'pages' => ['crm_messages.php'], 'admin' => true],
         'forms'     => ['label' => 'Lead forms',         'pages' => ['meta_leads.php'],   'admin' => true],
         'setup'     => ['label' => 'Projects & lists',   'pages' => ['crm_setup.php'],    'admin' => true],
+        'manage'    => ['label' => 'Requests, bin & imports', 'pages' => ['crm_manage.php'], 'admin' => true],
     ];
 }
 
@@ -174,7 +176,9 @@ function user_crm_pages(array $user): ?array
     $raw = $user['crm_pages'] ?? null;
     if ($raw === null) return null;
     $keys = array_values(array_intersect(array_keys(perm_crm_pages()), array_map('trim', explode(',', (string) $raw))));
-    return array_values(array_unique(array_merge($keys, ['pipeline'])));
+    $keys = array_values(array_unique(array_merge($keys, ['pipeline'])));
+    // Every page ticked (stored alongside actions like "export") means all of them, new ones included.
+    return count($keys) === count(perm_crm_pages()) ? null : $keys;
 }
 
 /** May the signed-in person open this CRM page? Needs the CRM itself, and — unless all — the tick. */
@@ -228,11 +232,7 @@ function is_sales(): bool
  */
 function can_crm_export(): bool
 {
-    [$u] = perm_context();
-    if (!$u) return false;
-    if (($u['role'] ?? '') === 'admin' || user_client_role($u) === 'admin') return true;
-    $raw = $u['crm_pages'] ?? null;
-    return $raw !== null && in_array('export', array_map('trim', explode(',', (string) $raw)), true) && can_use('crm');
+    return function_exists('can_crm_action') && can_crm_action('export');
 }
 
 function is_client_admin(): bool

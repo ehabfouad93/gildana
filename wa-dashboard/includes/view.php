@@ -151,6 +151,7 @@ function nav_children(string $group): array
         $items[] = ['Lead forms',       'meta_leads.php', 'meta_leads.php'];
         $items[] = ['Projects & lists', 'crm_setup.php', 'crm_setup.php'];
         $items[] = ['Stages',           'crm.php?stages=1', 'crm.php?stages'];
+        $items[] = ['Requests & bin',   'crm_manage.php', 'crm_manage.php'];
     }
     // Only the CRM pages this person was given (Team → under the CRM tick).
     if (function_exists('can_crm')) {
@@ -164,6 +165,12 @@ function nav_children(string $group): array
         try {
             $a = crm_alert_counts($GLOBALS['CLIENT'], $admin ? null : (function_exists('crm_actor_id') ? crm_actor_id() : null));
             foreach ($items as &$it) if ($it[0] === 'Follow-ups') { $it[3] = $a['due']; $it[4] = $a['overdue'] > 0; }   // shown as a badge
+            unset($it);
+            if ($admin) {
+                $req = 0;
+                try { $req = (int) db_val("SELECT COUNT(*) FROM crm_requests WHERE client_id=? AND status='pending'", [(int) $GLOBALS['CLIENT']['id']]); } catch (Throwable $e) {}
+                foreach ($items as &$it) if ($it[0] === 'Requests & bin' && $req) { $it[3] = $req; $it[4] = true; }
+            }
             unset($it);
         } catch (Throwable $e) {}
     }

@@ -1243,3 +1243,6 @@ input[type="file"] { max-width: 100%; min-width: 0; }
 .crm-table td.c-lead strong { font-weight: 600; }
 .crm-table td.c-project { min-width: 120px; }
 @media (min-width: 761px) { .crm-table .crm-acts .btn { font-size: 12px; } }
+.imp-mode { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.req-act { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.req-act input { max-width: 200px; }

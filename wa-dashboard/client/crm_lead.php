@@ -48,6 +48,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     verify_csrf();
     $a = (string) ($_POST['action'] ?? '');
 
+    // A hidden number, opened to call or WhatsApp: handed over, and recorded.
+    if ($a === 'reveal') {
+        $ph = crm_phone_reveal($CLIENT, $id, $me, ($_POST['how'] ?? '') === 'whatsapp' ? 'whatsapp' : 'call');
+        json_out($ph ? ['ok' => true, 'phone' => $ph] : ['ok' => false, 'error' => 'Lead not found.']);
+    }
+    if ($a === 'delete' && ($isAdmin || can_crm_action('delete'))) {
+        if (crm_delete_lead($CLIENT, $id, $me)) { flash('Deleted. It is in the recycle bin for 30 days if you need it back.'); redirect('crm.php'); }
+        $err = 'This lead is not in the pipeline.';
+    }
+    if ($a === 'restore' && $isAdmin) {
+        if (crm_restore_lead($CLIENT, $id, $me)) flash('Brought back into the pipeline.');
+        $back();
+    }
+    if ($a === 'delete_request' && can_write()) {
+        $r = crm_request_delete($CLIENT, $id, $me, (string) ($_POST['reason'] ?? ''));
+        if ($r['ok']) { flash('Sent to a manager. You will be told when they decide.'); $back(); }
+        $err = $r['error'];
+    }
+
     // AI, asked for by the page itself: JSON back, no reload.
     if ($a === 'ai_summary') {
         $r = crm_ai_summarize($CLIENT, $lead, $me);
@@ -59,6 +78,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($a === 'save') {
+        $before = crm_field_snapshot($cid, $lead);
         $email = trim((string) ($_POST['email'] ?? ''));
         if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
             $err = 'That email address does not look right.';
@@ -93,6 +113,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $o = (string) $_POST['owner'];
                 crm_assign($CLIENT, $id, $o === 'none' ? null : ($o === 'auto' ? crm_assign_next($CLIENT) : (int) $o), $me);
             }
+            crm_log_changes($cid, $id, $before, $me);
             if ($err === '') { flash('Saved.'); $back(); }
         }
     }
@@ -186,7 +207,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         flash('Added to the pipeline.');
         $back();
     }
-    if ($a === 'remove' && $isAdmin) {
+    if ($a === 'remove' && $isAdmin && false) {   // replaced by delete (to the recycle bin)
         db_run("UPDATE contacts SET stage_id=NULL WHERE id=? AND client_id=?", [$id, $cid]);
         crm_log($cid, $id, 'removed', (string) $lead['stage_id'], null, $me);
         flash('Removed from the pipeline. The contact and its conversation are kept.');
@@ -246,6 +267,10 @@ foreach (db_all("SELECT * FROM crm_events WHERE contact_id=? ORDER BY id DESC LI
         'resubmitted' => 'Came in again (' . crm_source_label($ev['to_val']) . ')',
         'merged'   => 'Merged with the duplicate contact ' . $ev['to_val'],
         'ai_fill'  => 'AI filled in from the chat: ' . $ev['to_val'],
+        'field'    => ($ev['field'] ?? 'A detail') . ': ' . ($ev['from_val'] !== null ? $ev['from_val'] . ' → ' : '') . ($ev['to_val'] ?? '(cleared)'),
+        'deleted'  => 'Deleted (to the recycle bin)',
+        'restored' => 'Brought back from the recycle bin into ' . $sn($ev['to_val']),
+        'del_request' => 'Asked a manager to delete it — ' . $ev['to_val'],
         'substatus'=> $ev['to_val'] !== null ? 'Sub-status: ' . $ev['to_val'] . ($ev['from_val'] !== null ? ' (was ' . $ev['from_val'] . ')' : '') : 'Sub-status cleared',
         'qualified'=> 'Marked ' . (crm_qualifications()[(string) $ev['to_val']] ?? 'not set') ,
         'visit'    => 'Site visit booked for ' . date('D j M, H:i', strtotime((string) $ev['to_val'])),
@@ -269,6 +294,9 @@ $due  = $lead['next_followup_at'] ? strtotime((string) $lead['next_followup_at']
 $dueState = !$due ? '' : ($due < time() ? 'late' : (date('Y-m-d', $due) === date('Y-m-d') ? 'today' : 'later'));
 $curStage = $lead['stage_id'] !== null ? ($stageMap[(int) $lead['stage_id']] ?? null) : null;
 $phone = (string) $lead['phone_e164'];
+$hidePh = crm_phone_hidden();
+$canDel = $isAdmin || can_crm_action('delete');
+$pendingDel = !$canDel && (int) (function () use ($cid, $id) { try { return db_val("SELECT COUNT(*) FROM crm_requests WHERE client_id=? AND kind='delete' AND contact_id=? AND status='pending'", [$cid, $id]); } catch (Throwable $e) { return 0; } })();
 $canW  = can_write();
 
 // Heat is about open leads; a won or lost one has its answer already.
@@ -294,7 +322,13 @@ client_header($title, 'crm', $CLIENT);
 page_head($title, '<a class="btn btn-ghost btn-sm" href="crm.php">&larr; CRM</a>');
 if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 
-<?php if ($lead['stage_id'] === null): ?>
+<?php if ($lead['stage_id'] === null && !empty($lead['deleted_at'])): ?>
+  <div class="alert warn">This lead was deleted <?= e(date('j M', strtotime((string) $lead['deleted_at']))) ?> and is in the recycle bin.
+    <?php if ($isAdmin): ?>
+      <form method="post" style="display:inline"><?= csrf_field() ?><input type="hidden" name="action" value="restore">
+        <button class="btn btn-sm btn-primary" style="margin-left:8px">Bring it back</button></form>
+    <?php endif; ?></div>
+<?php elseif ($lead['stage_id'] === null): ?>
   <div class="alert info">This contact is not in the pipeline.
     <?php if ($canW): ?>
       <form method="post" style="display:inline"><?= csrf_field() ?><input type="hidden" name="action" value="add_to_crm">
@@ -308,7 +342,8 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
     <div>
       <div class="lead-contact">
         <?php if (!empty($lead['code'])): ?><button type="button" class="lead-code" title="Copy the lead's code" onclick="navigator.clipboard&&navigator.clipboard.writeText('#<?= e((string) $lead['code']) ?>');this.classList.add('copied')">#<?= e((string) $lead['code']) ?></button><?php endif; ?>
-        <a href="tel:+<?= e($phone) ?>" class="lead-phone">+<?= e($phone) ?></a>
+        <?php if ($hidePh): ?><button type="button" class="lead-phone btn-link" data-reveal="call" title="Call — opening the number is recorded"><?= e(crm_phone_mask($phone)) ?></button>
+        <?php else: ?><a href="tel:+<?= e($phone) ?>" class="lead-phone">+<?= e($phone) ?></a><?php endif; ?>
         <?php if ($heatCls): ?>
           <details class="lead-heat"><summary><span class="heat <?= $heatCls ?>" id="lead-score"><?= e($heatWord) ?> · <?= (int) $score ?></span></summary>
             <div class="lead-heat-why"><strong>Why <?= (int) $score ?></strong>
@@ -334,9 +369,11 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
       </div>
     </div>
     <div class="lead-actions">
-      <a class="btn btn-ghost btn-sm" href="tel:+<?= e($phone) ?>">Call</a>
+      <?php if ($hidePh): ?><button type="button" class="btn btn-ghost btn-sm" data-reveal="call">Call</button>
+      <?php else: ?><a class="btn btn-ghost btn-sm" href="tel:+<?= e($phone) ?>">Call</a><?php endif; ?>
       <?php if (can_use('inbox')): ?><a class="btn btn-ghost btn-sm" href="inbox.php?contact=<?= $id ?>">Conversation</a><?php endif; ?>
-      <a class="btn btn-ghost btn-sm" href="https://wa.me/<?= e($phone) ?>" target="_blank" rel="noopener">WhatsApp app</a>
+      <?php if ($hidePh): ?><button type="button" class="btn btn-ghost btn-sm" data-reveal="whatsapp">WhatsApp app</button>
+      <?php else: ?><a class="btn btn-ghost btn-sm" href="https://wa.me/<?= e($phone) ?>" target="_blank" rel="noopener">WhatsApp app</a><?php endif; ?>
     </div>
   </div>
 
@@ -613,10 +650,19 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
           <?php foreach ($attrs as $k => $v): ?><tr><td class="text-muted" style="width:40%"><?= e((string) $k) ?></td><td><?= e(is_scalar($v) ? (string) $v : json_encode($v)) ?></td></tr><?php endforeach; ?>
         </tbody></table>
       <?php endif; ?>
-      <?php if ($isAdmin && $lead['stage_id'] !== null): ?>
-        <form method="post" class="mt10" onsubmit="return confirm('Take this lead out of the pipeline? The contact and its messages are kept.')">
-          <?= csrf_field() ?><input type="hidden" name="action" value="remove"><input type="hidden" name="id" value="<?= $id ?>">
-          <button class="btn-link" style="color:var(--danger)">Remove from pipeline</button></form>
+      <?php if ($lead['stage_id'] !== null && $canW): ?>
+        <?php if ($canDel): ?>
+        <form method="post" class="mt10" onsubmit="return confirm('Delete this lead? It goes to the recycle bin and can be brought back for 30 days.')">
+          <?= csrf_field() ?><input type="hidden" name="action" value="delete"><input type="hidden" name="id" value="<?= $id ?>">
+          <button class="btn-link" style="color:var(--danger)">Delete lead</button></form>
+        <?php elseif ($pendingDel): ?>
+          <p class="text-muted mt10" style="font-size:12.5px">You asked a manager to delete this lead — waiting for their answer.</p>
+        <?php else: ?>
+        <details class="mt10"><summary class="btn-link" style="color:var(--danger)">Ask to delete</summary>
+          <form method="post" class="mt10"><?= csrf_field() ?><input type="hidden" name="action" value="delete_request"><input type="hidden" name="id" value="<?= $id ?>">
+            <div class="field"><span class="lbl">Why should it go?</span><input name="reason" maxlength="255" required placeholder="Duplicate of another lead / test / wrong number"></div>
+            <button class="btn btn-ghost btn-sm">Send to a manager</button></form></details>
+        <?php endif; ?>
       <?php endif; ?>
     </details>
 
@@ -648,8 +694,8 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
         <?= $isAdmin ? 'Merging moves their messages, notes and answers onto this lead and removes the other one.' : 'An Admin can merge them.' ?></p>
       <?php foreach ($dups as $d): ?>
         <div class="dup-row">
-          <div><a href="crm_lead.php?id=<?= (int) $d['id'] ?>"><strong><?= e((string) ($d['name'] ?: '+' . $d['phone_e164'])) ?></strong></a>
-            <span class="text-muted" style="display:block;font-size:12px">+<?= e((string) $d['phone_e164']) ?><?= $d['email'] ? ' · ' . e((string) $d['email']) : '' ?>
+          <div><a href="crm_lead.php?id=<?= (int) $d['id'] ?>"><strong><?= e((string) ($d['name'] ?: crm_phone_show((string) $d['phone_e164']))) ?></strong></a>
+            <span class="text-muted" style="display:block;font-size:12px"><?= e(crm_phone_show((string) $d['phone_e164'])) ?><?= $d['email'] ? ' · ' . e((string) $d['email']) : '' ?>
               · <?= e($d['stage_name'] ?: 'Not in the pipeline') ?> · <?= e(crm_user_name($d['owner_user_id'] !== null ? (int) $d['owner_user_id'] : null)) ?></span></div>
           <?php if ($isAdmin): ?>
           <form method="post" onsubmit="return confirm('Merge this contact into the lead you are looking at? The other one will be removed.')">
@@ -756,6 +802,13 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
   if (vp) vp.addEventListener('change', () => { const a = vp.selectedOptions[0].dataset.addr || '';
     if (!vpl.dataset.typed) vpl.value = a; });
   if (vpl) vpl.addEventListener('input', () => { vpl.dataset.typed = '1'; });
+  /* A hidden number: pressing Call or WhatsApp opens it — and the opening is recorded. */
+  document.querySelectorAll('[data-reveal]').forEach(b => b.addEventListener('click', async () => {
+    const fd = new FormData(); fd.append('csrf_token', <?= json_encode(csrf_token()) ?>); fd.append('action', 'reveal'); fd.append('how', b.dataset.reveal); fd.append('id', '<?= $id ?>');
+    const d = await fetch('crm_lead.php?id=<?= $id ?>', {method:'POST', body:fd}).then(r => r.json()).catch(() => ({}));
+    if (!d.phone) { alert(d.error || 'Could not open the number.'); return; }
+    if (b.dataset.reveal === 'whatsapp') window.open('https://wa.me/' + d.phone, '_blank', 'noopener'); else location.href = 'tel:+' + d.phone;
+  }));
   /* Lost needs a reason: the stage bar opens the question, and the activity form shows it. */
   const LOST = <?= json_encode($askLost ? $lostIds : []) ?>;
   const dlg = document.getElementById('lost-dlg');
