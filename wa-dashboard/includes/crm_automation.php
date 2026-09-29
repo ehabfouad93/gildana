@@ -113,6 +113,12 @@ function crm_tokens_from_post(string $prefix, array $post): array
 
 /* ───────────────────────── the queue ───────────────────────── */
 
+/** Automatic messages go from the Business API number only. Is it connected? */
+function crm_auto_api_ready(array $client): bool
+{
+    return wa_phone_id($client) !== '' && wa_token($client) !== '';
+}
+
 function crm_queue(array $client, int $contactId, int $templateId, array $tokens, string $headerMedia, string $reason,
                    ?string $dueAt = null, array $context = []): int
 {
@@ -177,7 +183,11 @@ function crm_queue_tick(int $limit = 50): int
         $hvals = [];
         for ($i = 0; $i < $shape['header_vars']; $i++) $hvals[] = crm_tpl_value((string) ($tokens[$shape['body'] + $i] ?? 'name'), $c, $ctx);
 
-        $r = inbox_send_template($client, (int) $c['id'], (int) $tpl['id'], $vals, $hvals, (string) ($q['header_media'] ?? ''),
+        /* Always from the WhatsApp Business API number — a managerial message on the company's
+           official number, never from a salesperson's phone or the linked company phone, whatever
+           the account's usual channel is. */
+        if (!crm_auto_api_ready($client)) { $done('failed', 'The WhatsApp Business API number is not connected (Settings → WhatsApp API Credentials).'); continue; }
+        $r = inbox_send_template(array_merge($client, ['channel' => 'cloud']), (int) $c['id'], (int) $tpl['id'], $vals, $hvals, (string) ($q['header_media'] ?? ''),
                                  ['source' => 'crm_auto', 'takeover' => false]);
         $done(!empty($r['ok']) ? 'sent' : 'failed', !empty($r['ok']) ? '' : (string) ($r['error'] ?? 'Not sent.'), isset($r['id']) ? (int) $r['id'] : null);
         if (!empty($r['ok'])) $sent++;

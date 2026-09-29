@@ -144,11 +144,16 @@ $trigWords = function (array $q) use ($stageMap): string {
 client_header('Automatic messages', 'crm', $CLIENT);
 page_head('Automatic messages');
 if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
+<?php if (!crm_auto_api_ready($CLIENT)): ?>
+  <div class="alert error" style="font-size:13px" id="no-api">Automatic messages are sent from your <strong>WhatsApp Business API number</strong>,
+    which is not connected yet — nothing set up here will go out until it is. <a href="settings.php">Connect it in Settings</a>.</div>
+<?php endif; ?>
 <?php if (!$tpls): ?>
   <div class="alert warn" style="font-size:13px">You have no approved WhatsApp templates yet. Automatic messages use templates, because
     WhatsApp allows a business to start a conversation only with one. <a href="templates.php">Create or sync templates</a>.</div>
 <?php endif; ?>
-<p class="text-muted" style="font-size:12.5px;margin-top:-6px">Sent from the company's number. Messages wait for working hours if you set them
+<p class="text-muted" style="font-size:12.5px;margin-top:-6px">Set by managers only, and sent from the company's
+  <strong>WhatsApp Business API number</strong> — never from a salesperson's phone. Messages wait for working hours if you set them
   (Assignment rules → Timers), and never go to anyone who opted out.</p>
 
 <div class="card card-flush" id="stage-msgs">

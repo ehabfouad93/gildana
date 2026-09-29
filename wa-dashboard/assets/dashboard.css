@@ -1133,3 +1133,8 @@ input[type="file"] { max-width: 100%; min-width: 0; }
 .ai-reading { animation: ai-pulse 1.4s ease-in-out infinite; }
 @keyframes ai-pulse { 50% { opacity: .45; } }
 @media (prefers-reduced-motion: reduce) { .ai-reading { animation: none; } }
+
+.settings-links { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.settings-links a { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); }
+.settings-links a:hover { border-color: var(--brand); background: var(--brand-tint); }
+.settings-links span { font-size: 12.5px; color: var(--slate); }

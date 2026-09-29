@@ -148,7 +148,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $err = $r['error'];
         }
     }
-    if ($a === 'seq_stop' && can_write()) {
+    if ($a === 'seq_stop' && $isAdmin) {
         crm_seq_stop((int) ($_POST['seq'] ?? 0), $id, 'Stopped by ' . crm_user_name($me) . '.');
         flash('Stopped. No more messages from that sequence.');
         $back();
@@ -554,8 +554,8 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
       <?php endif; ?>
     </details>
 
-    <?php if ($runs): ?>
-    <!-- Automatic follow-ups this lead is in -->
+    <?php if ($runs && $isAdmin): ?>
+    <!-- Automatic follow-ups this lead is in — a manager's view; salespeople do not see or stop them -->
     <div class="card" id="seq-runs">
       <h2>Automatic follow-up</h2>
       <?php foreach ($runs as $r): ?>
@@ -565,7 +565,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
               <?php if ($r['status'] === 'active'): ?>Sent <?= (int) $r['step_idx'] ?> of <?= (int) $r['steps'] ?> · next <?= e(date('D j M, H:i', strtotime((string) $r['next_at']))) ?>
               <?php elseif ($r['status'] === 'done'): ?>All <?= (int) $r['steps'] ?> sent
               <?php else: ?>Stopped — <?= e((string) $r['stop_reason']) ?><?php endif; ?></span></div>
-          <?php if ($r['status'] === 'active' && $canW): ?>
+          <?php if ($r['status'] === 'active'): ?>
           <form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="seq_stop"><input type="hidden" name="id" value="<?= $id ?>"><input type="hidden" name="seq" value="<?= (int) $r['sequence_id'] ?>">
             <button class="btn btn-ghost btn-sm">Stop</button></form>
           <?php endif; ?>

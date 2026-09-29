@@ -471,6 +471,20 @@ $isPersonal = channel_is_personal($CLIENT); ?>
   </script>
 <?php endif; ?>
 
+<?php if (function_exists('can_use') && can_use('crm') && is_client_admin()): ?>
+<div class="card" id="crm-settings">
+  <h2>Sales team &amp; CRM</h2>
+  <p class="text-muted" style="font-size:12.5px;margin:-6px 0 12px">Manager settings — salespeople cannot see or change these.</p>
+  <div class="settings-links">
+    <a href="team.php"><strong>Team</strong><span>Who is on the team, their role, and which number each person sends from — their own phone, the company phone or the Business API.</span></a>
+    <a href="crm_messages.php"><strong>Automatic messages</strong><span>Templates sent by stage, follow-up sequences (e.g. after 3 "No answer" calls), and visit confirmations — always from the Business API number.</span></a>
+    <a href="crm_rules.php"><strong>Assignment rules &amp; timers</strong><span>Who gets which leads, response-time alerts, taking leads back, reminders and WhatsApp alerts to salespeople.</span></a>
+    <a href="crm_setup.php"><strong>Projects &amp; lists</strong><span>Projects and their addresses, unit types, lost reasons.</span></a>
+    <a href="meta_leads.php"><strong>Lead forms</strong><span>Facebook &amp; Instagram lead forms, and sending results back to Meta.</span></a>
+  </div>
+</div>
+<?php endif; ?>
+
 <div class="card" id="ai">
   <h2>AI Engine (for AI-powered automations)</h2>
   <p class="text-muted" style="font-size:12.5px;margin:-6px 0 16px">
