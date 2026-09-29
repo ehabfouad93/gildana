@@ -34,6 +34,18 @@ function team_modules_from_post(array $clientHas): ?string
     return implode(',', $picked);        // explicit list, even if empty: "custom, nothing ticked"
 }
 
+/**
+ * The CRM pages ticked under CRM, or NULL for all of them (also when the role's usual set is
+ * chosen, or CRM is not ticked at all). The Pipeline always comes with the CRM.
+ */
+function team_crm_pages_from_post(): ?string
+{
+    if (($_POST['mod_mode'] ?? 'role') !== 'custom' || !in_array('crm', (array) ($_POST['modules'] ?? []), true)) return null;
+    $all = array_keys(perm_crm_pages());
+    $picked = array_values(array_unique(array_merge(['pipeline'], array_intersect($all, array_map('strval', (array) ($_POST['crm_pages'] ?? []))))));
+    return count($picked) === count($all) ? null : implode(',', $picked);
+}
+
 /** How many active Admins the account has — so the last one cannot remove themselves. */
 function team_admin_count(int $cid): int
 {
@@ -79,6 +91,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (db_has_column('users', 'phone')) {
                 db_run("UPDATE users SET phone=?, wa_alerts=? WHERE email=?", [team_phone_from_post($CLIENT), !empty($_POST['wa_alerts']) ? 1 : 0, $email]);
             }
+            if (db_has_column('users', 'crm_pages')) db_run("UPDATE users SET crm_pages=? WHERE email=?", [team_crm_pages_from_post(), $email]);
             flash(($name ?: $email) . ' added as ' . $roles[$role]['label'] . '.');
             redirect('team.php');
         }
@@ -104,6 +117,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 db_run("UPDATE users SET client_role=?, modules=?, send_via=?, status=?, name=? WHERE id=? AND client_id=?",
                     [$role, team_modules_from_post($clientHas), team_send_via_from_post(), $status,
                      trim((string) ($_POST['name'] ?? '')), $uid, $cid]);      // NOT NULL column
+                if (db_has_column('users', 'crm_pages')) db_run("UPDATE users SET crm_pages=? WHERE id=?", [team_crm_pages_from_post(), $uid]);
                 if (db_has_column('users', 'phone')) {
                     if (trim((string) ($_POST['phone'] ?? '')) !== '' && team_phone_from_post($CLIENT) === null) $err = 'That WhatsApp number does not look right.';
                     else db_run("UPDATE users SET phone=?, wa_alerts=? WHERE id=?", [team_phone_from_post($CLIENT), !empty($_POST['wa_alerts']) ? 1 : 0, $uid]);
@@ -145,7 +159,9 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
             <?php if (($p['status'] ?? '') !== 'active'): ?><span class="pill gray">disabled</span><?php endif; ?></td>
           <td><span class="pill <?= user_client_role($p) === 'admin' ? 'gold' : 'gray' ?>"><?= e($roles[user_client_role($p)]['label']) ?></span></td>
           <td class="text-muted" style="font-size:12.5px">
-            <?= e(implode(', ', array_map(fn($k) => perm_modules()[$k]['label'], $mods))) ?: '—' ?>
+            <?php $cp = in_array('crm', $mods, true) ? user_crm_pages($p + ['role' => 'client']) : null; ?>
+            <?= e(implode(', ', array_map(fn($k) => perm_modules()[$k]['label']
+                . ($k === 'crm' && $cp !== null ? ' (' . implode(', ', array_map(fn($x) => perm_crm_pages()[$x]['label'], $cp)) . ')' : ''), $mods))) ?: '—' ?>
             <?= $custom ? '<span class="pill blue" style="margin-left:4px">custom</span>' : '' ?></td>
           <td style="font-size:12.5px"><?php
             $sv = (string) ($p['send_via'] ?? '');
@@ -162,7 +178,8 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
                 'id' => (int) $p['id'], 'email' => $p['email'], 'name' => $p['name'],
                 'role' => user_client_role($p), 'status' => $p['status'], 'send_via' => (string) ($p['send_via'] ?? ''),
                 'phone' => (string) ($p['phone'] ?? ''), 'wa_alerts' => (int) ($p['wa_alerts'] ?? 1),
-                'modules' => perm_parse($p['modules'] ?? null)], JSON_HEX_APOS | JSON_HEX_QUOT) ?>)'>Edit</button>
+                'modules' => perm_parse($p['modules'] ?? null),
+                'crm_pages' => ($cp = user_crm_pages($p + ['role' => 'client'])) === null ? null : $cp], JSON_HEX_APOS | JSON_HEX_QUOT) ?>)'>Edit</button>
           </td>
         </tr>
       <?php endforeach; ?>
@@ -199,6 +216,17 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
             <?= e(perm_modules()[$k]['label']) ?></label>
         <?php endforeach; ?>
       </div>
+      <?php if (in_array('crm', $clientHas, true)): ?>
+      <div class="crm-sub" id="t-crm-sub">
+        <span class="lbl">Inside the CRM</span>
+        <div class="mod-grid">
+          <?php foreach (perm_crm_pages() as $k => $d): ?>
+            <label class="mod-opt" <?= !empty($d['admin']) ? 'data-admin-only="1"' : '' ?>><input type="checkbox" class="t-crm" name="crm_pages[]" value="<?= e($k) ?>" <?= !empty($d['always']) ? 'checked data-always="1"' : '' ?>>
+              <?= e($d['label']) ?><?= !empty($d['admin']) ? ' <span class="text-muted" style="font-size:11px">Admins only</span>' : '' ?></label>
+          <?php endforeach; ?>
+        </div>
+      </div>
+      <?php endif; ?>
       <span class="text-muted" style="font-size:11.5px">Only modules your account has are listed.</span>
     </div>
 
@@ -240,12 +268,25 @@ function teamDefaults(){
   if ($t('t-mode-custom').checked) return;
   const d = ROLE_DEFAULTS[$t('t-role').value] || CLIENT_HAS;
   document.querySelectorAll('.t-mod').forEach(c => c.checked = d.includes(c.value));
+  teamCrmSub();
 }
 function teamMode(){
   const custom = $t('t-mode-custom').checked;
   document.querySelectorAll('.t-mod').forEach(c => c.disabled = !custom);
+  // CRM pages: all of them with the role's usual set; chosen one by one otherwise. The Pipeline always.
+  document.querySelectorAll('.t-crm').forEach(c => { c.disabled = !custom || c.dataset.always === '1'; if (!custom || c.dataset.always === '1') c.checked = true; });
   teamDefaults();
+  teamCrmSub();
 }
+/* The CRM's own pages show only while CRM is ticked. */
+function teamCrmSub(){
+  const box = $t('t-crm-sub'), crm = document.querySelector('.t-mod[value="crm"]');
+  if (box && crm) box.hidden = !crm.checked;
+  // Manager pages only mean something for an Admin; for anyone else they would never open anyway.
+  const admin = $t('t-role').value === 'admin';
+  document.querySelectorAll('#t-crm-sub [data-admin-only]').forEach(l => l.hidden = !admin);
+}
+document.querySelector('.t-mod[value="crm"]')?.addEventListener('change', teamCrmSub);
 function teamOpen(p){
   const edit = !!p;
   $t('t-title').textContent  = edit ? 'Edit ' + (p.name || p.email) : 'Add a person';
@@ -268,6 +309,7 @@ function teamOpen(p){
   $t('t-mode-custom').checked = custom; $t('t-mode-role').checked = !custom;
   if (custom) document.querySelectorAll('.t-mod').forEach(c => c.checked = p.modules.includes(c.value));
   teamMode();
+  if (custom) document.querySelectorAll('.t-crm').forEach(c => c.checked = c.dataset.always === '1' || !p.crm_pages || p.crm_pages.includes(c.value));
   $t('m-team').classList.add('open');
 }
 </script>

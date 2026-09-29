@@ -124,7 +124,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($a === 'stage') {
         if ((int) ($_POST['stage_id'] ?? 0) && $stageMove((int) $_POST['stage_id'])) $back();
     }
-    if ($a === 'visit_book' && can_write()) {
+    if ($a === 'visit_book' && can_write() && can_crm('visits')) {
         $d = trim((string) ($_POST['visit_date'] ?? '')); $t = trim((string) ($_POST['visit_time'] ?? ''));
         $r = crm_visit_book($CLIENT, $id, ['starts_at' => $d . ' ' . $t, 'place' => (string) ($_POST['place'] ?? ''),
                  'project_id' => (int) ($_POST['project_id'] ?? 0) ?: null, 'notes' => (string) ($_POST['notes'] ?? ''),
@@ -384,6 +384,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
     </div>
 
     <!-- Site visits -->
+    <?php if (can_crm('visits')): ?>
     <div class="card" id="visits">
       <div class="row-between" style="flex-wrap:wrap;gap:8px"><h2 style="margin:0;border:0;padding:0">Site visits</h2>
         <?php if ($canW): ?><button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('visit-form').hidden=false;this.hidden=true">+ Book a visit</button><?php endif; ?></div>
@@ -439,6 +440,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
       </form>
       <?php endif; ?>
     </div>
+    <?php endif; ?>
 
     <!-- Log what happened -->
     <?php if ($canW): ?>

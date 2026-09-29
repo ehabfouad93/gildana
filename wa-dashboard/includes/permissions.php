@@ -146,6 +146,53 @@ function user_modules(array $user, array $client): array
     return array_values(array_intersect($clientHas, $mine));
 }
 
+/**
+ * The CRM's own pages, a level below the CRM module. An Admin ticks which of these each person
+ * may open, under the CRM tick on the Team page. The Pipeline (and a lead's page) is the CRM
+ * itself, so it comes with the module; manager pages stay Admin-only whatever is ticked.
+ */
+function perm_crm_pages(): array
+{
+    return [
+        'pipeline'  => ['label' => 'Pipeline & leads',   'pages' => ['crm.php', 'crm_lead.php'], 'always' => true],
+        'dashboard' => ['label' => 'Dashboard',          'pages' => ['crm_dashboard.php']],
+        'visits'    => ['label' => 'Site visits',        'pages' => ['crm_calendar.php']],
+        'reports'   => ['label' => 'Reports',            'pages' => ['crm_reports.php']],
+        'import'    => ['label' => 'Import leads',       'pages' => ['crm_import.php']],
+        'team'      => ['label' => 'Team & transfer',    'pages' => ['crm_team.php'],     'admin' => true],
+        'rules'     => ['label' => 'Assignment rules',   'pages' => ['crm_rules.php'],    'admin' => true],
+        'messages'  => ['label' => 'Automatic messages', 'pages' => ['crm_messages.php'], 'admin' => true],
+        'forms'     => ['label' => 'Lead forms',         'pages' => ['meta_leads.php'],   'admin' => true],
+        'setup'     => ['label' => 'Projects & lists',   'pages' => ['crm_setup.php'],    'admin' => true],
+    ];
+}
+
+/** The CRM pages this person may open, or NULL for all of them. */
+function user_crm_pages(array $user): ?array
+{
+    if (($user['role'] ?? '') === 'admin') return null;                // the platform operator sees everything
+    $raw = $user['crm_pages'] ?? null;
+    if ($raw === null) return null;
+    $keys = array_values(array_intersect(array_keys(perm_crm_pages()), array_map('trim', explode(',', (string) $raw))));
+    return array_values(array_unique(array_merge($keys, ['pipeline'])));
+}
+
+/** May the signed-in person open this CRM page? Needs the CRM itself, and — unless all — the tick. */
+function can_crm(string $key): bool
+{
+    if (!can_use('crm')) return false;
+    [$u] = perm_context();
+    $mine = user_crm_pages($u);
+    return $mine === null || in_array($key, $mine, true);
+}
+
+/** Which CRM page a file is, if any. */
+function crm_page_key(string $page): ?string
+{
+    foreach (perm_crm_pages() as $k => $d) if (in_array($page, $d['pages'], true)) return $k;
+    return null;
+}
+
 /** Current request's user row and client, as set up by client/_init.php. */
 function perm_context(): array
 {
@@ -199,7 +246,12 @@ function page_denied(string $page, array $user, array $client): ?string
     // lock users out of something new — but that is a bug to fix by adding it above.
     if (!$needs) return null;
 
-    if (array_intersect($needs, user_modules($user, $client))) return null;
+    if (array_intersect($needs, user_modules($user, $client))) {
+        // Inside the CRM, a page the Admin did not tick for this person stays closed.
+        $k = crm_page_key($page);
+        if ($k !== null && ($mine = user_crm_pages($user)) !== null && !in_array($k, $mine, true)) return 'role';
+        return null;
+    }
     if (!array_intersect($needs, client_modules($client))) return 'plan';
     return 'role';
 }

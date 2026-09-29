@@ -152,12 +152,19 @@ function nav_children(string $group): array
         $items[] = ['Projects & lists', 'crm_setup.php', 'crm_setup.php'];
         $items[] = ['Stages',           'crm.php?stages=1', 'crm.php?stages'];
     }
+    // Only the CRM pages this person was given (Team → under the CRM tick).
+    if (function_exists('can_crm')) {
+        $items = array_values(array_filter($items, function ($it) {
+            $key = crm_page_key(explode('?', $it[1])[0]);
+            return $key === null || can_crm($key);
+        }));
+    }
     // How many follow-ups are due today or late, for this person (or the team, for a manager).
     if (function_exists('crm_alert_counts') && isset($GLOBALS['CLIENT']['id'])) {
         try {
             $a = crm_alert_counts($GLOBALS['CLIENT'], $admin ? null : (function_exists('crm_actor_id') ? crm_actor_id() : null));
-            $items[1][3] = $a['due'];   // shown as a badge
-            $items[1][4] = $a['overdue'] > 0;
+            foreach ($items as &$it) if ($it[0] === 'Follow-ups') { $it[3] = $a['due']; $it[4] = $a['overdue'] > 0; }   // shown as a badge
+            unset($it);
         } catch (Throwable $e) {}
     }
     return $items;
