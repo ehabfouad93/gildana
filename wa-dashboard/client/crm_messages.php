@@ -42,6 +42,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirect('crm_messages.php');
         }
     }
+    if ($a === 'visit_msgs') {
+        $ct = (int) ($_POST['confirm_tpl'] ?? 0); $rt = (int) ($_POST['remind_tpl'] ?? 0);
+        $bs = (int) ($_POST['booked_stage'] ?? 0); $ds = (int) ($_POST['done_stage'] ?? 0);
+        crm_settings_set($cid, [
+            'visit_confirm_tpl' => isset($tpls[$ct]) ? $ct : null, 'visit_confirm_vars' => json_encode(crm_tokens_from_post('cvars', $_POST), JSON_UNESCAPED_UNICODE),
+            'visit_remind_tpl'  => isset($tpls[$rt]) ? $rt : null, 'visit_remind_vars'  => json_encode(crm_tokens_from_post('rvars', $_POST), JSON_UNESCAPED_UNICODE),
+            'visit_remind_hour' => max(0, min(23, (int) ($_POST['remind_hour'] ?? 18))),
+            'visit_staff_minutes' => max(10, min(1440, (int) ($_POST['staff_minutes'] ?? 60))),
+            'visit_booked_stage' => isset($stageMap[$bs]) ? $bs : null, 'visit_done_stage' => isset($stageMap[$ds]) ? $ds : null,
+        ]);
+        flash('Visit messages saved.');
+        redirect('crm_messages.php#visit-msgs');
+    }
     if ($a === 'stage_msg_toggle') {
         db_run("UPDATE crm_stage_msgs SET active=1-active WHERE id=? AND client_id=?", [(int) $_POST['id'], $cid]);
         redirect('crm_messages.php');
@@ -187,6 +200,45 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
   </form>
 </div>
 
+<?php $vs = crm_settings($cid); ?>
+<div class="card" id="visit-msgs">
+  <h2>Site visits</h2>
+  <p class="text-muted" style="font-size:12.5px;margin-top:-4px">When a visit is booked on a lead, and the day before it. Useful fields:
+    Visit date, Visit time, Visit place, Project, Salesperson's name and phone.</p>
+  <form method="post" id="visit-f">
+    <?= csrf_field() ?><input type="hidden" name="action" value="visit_msgs">
+    <div class="grid2">
+      <div>
+        <div class="field"><span class="lbl">Confirmation, when a visit is booked</span>
+          <select name="confirm_tpl" id="vc-tpl"><option value="0">Don't send</option>
+            <?php foreach ($tpls as $t): ?><option value="<?= $t['id'] ?>" <?= (int) $vs['visit_confirm_tpl'] === $t['id'] ? 'selected' : '' ?>><?= e($t['name'] . ' (' . $t['lang'] . ')') ?></option><?php endforeach; ?></select>
+          <div class="tpl-preview text-muted" id="vc-prev"></div></div>
+        <div class="tpl-vars" id="vc-vars"></div>
+      </div>
+      <div>
+        <div class="field"><span class="lbl">Reminder, the day before</span>
+          <select name="remind_tpl" id="vr-tpl"><option value="0">Don't send</option>
+            <?php foreach ($tpls as $t): ?><option value="<?= $t['id'] ?>" <?= (int) $vs['visit_remind_tpl'] === $t['id'] ? 'selected' : '' ?>><?= e($t['name'] . ' (' . $t['lang'] . ')') ?></option><?php endforeach; ?></select>
+          <div class="tpl-preview text-muted" id="vr-prev"></div></div>
+        <div class="tpl-vars" id="vr-vars"></div>
+        <div class="field"><span class="lbl">Send the reminder at</span><select name="remind_hour">
+          <?php for ($h = 8; $h <= 22; $h++): ?><option value="<?= $h ?>" <?= (int) $vs['visit_remind_hour'] === $h ? 'selected' : '' ?>><?= sprintf('%02d:00', $h) ?> the day before</option><?php endfor; ?></select></div>
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="field"><span class="lbl">Remind the salesperson</span><select name="staff_minutes">
+        <?php foreach ([30 => '30 minutes before', 60 => '1 hour before', 120 => '2 hours before', 1440 => 'The day before'] as $m => $l): ?>
+          <option value="<?= $m ?>" <?= (int) $vs['visit_staff_minutes'] === $m ? 'selected' : '' ?>><?= $l ?></option><?php endforeach; ?></select></div>
+      <div></div>
+      <div class="field"><span class="lbl">When a visit is booked, move the lead to</span><select name="booked_stage"><option value="0">Leave the stage as it is</option>
+        <?php foreach ($stages as $st): ?><option value="<?= (int) $st['id'] ?>" <?= (int) $vs['visit_booked_stage'] === (int) $st['id'] ? 'selected' : '' ?>><?= e($st['name']) ?></option><?php endforeach; ?></select></div>
+      <div class="field"><span class="lbl">When they came, move the lead to</span><select name="done_stage"><option value="0">Leave the stage as it is</option>
+        <?php foreach ($stages as $st): ?><option value="<?= (int) $st['id'] ?>" <?= (int) $vs['visit_done_stage'] === (int) $st['id'] ? 'selected' : '' ?>><?= e($st['name']) ?></option><?php endforeach; ?></select></div>
+    </div>
+    <button class="btn btn-primary">Save visit messages</button>
+  </form>
+</div>
+
 <div class="card card-flush" id="sequences">
   <div style="padding:14px 18px" class="row-between">
     <div><h2 style="border:0;padding:0;margin:0">Follow-up sequences</h2>
@@ -291,6 +343,15 @@ function smEdit(d){
   $('sm-form').scrollIntoView({behavior: 'smooth'});
 }
 $('sm-tpl').onchange = e => tplPicked(e.target, $('sm-vars'), $('sm-media-wrap'), $('sm-tpl-prev'), [], 'vars');
+/* Visit messages default to the visit's own details. */
+const VISIT_DEFAULT = ['first_name', 'visit_date', 'visit_time', 'visit_place', 'owner_name', 'owner_phone'];
+[['vc', 'cvars', <?= json_encode(json_decode((string) ($vs['visit_confirm_vars'] ?? ''), true) ?: []) ?>],
+ ['vr', 'rvars', <?= json_encode(json_decode((string) ($vs['visit_remind_vars'] ?? ''), true) ?: []) ?>]].forEach(([k, prefix, saved]) => {
+  const sel = $(k + '-tpl');
+  const draw = tok => tplPicked(sel, $(k + '-vars'), null, $(k + '-prev'), tok.length ? tok : VISIT_DEFAULT, prefix);
+  sel.onchange = () => draw([]);
+  if (sel.value !== '0') draw(saved);
+});
 
 /* Sequence steps. */
 let stepN = 0;

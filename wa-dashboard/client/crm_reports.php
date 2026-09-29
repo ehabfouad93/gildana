@@ -29,6 +29,8 @@ $weekly  = crm_report_weekly($cid, $f);
 $byProject = crm_report_projects($cid, $f);
 $lostWhy   = crm_report_lost($cid, $f);
 $projList  = crm_projects($cid);
+$visitsByUser = crm_report_visits($cid, $f['from'], $f['to'], 'user');
+$visitsByProj = $projList ? crm_report_visits($cid, $f['from'], $f['to'], 'project') : [];
 
 /* ── CSV export: the same numbers as the screen, never more ── */
 if (($x = (string) ($_GET['export'] ?? '')) !== '') {
@@ -240,6 +242,23 @@ page_head('CRM reports', '<a class="btn btn-ghost btn-sm" href="crm.php">&larr; 
         <td class="num"><?= (int) $r['won'] ?></td><td class="num"><?= (int) $r['lost'] ?></td>
         <td class="num"><?= number_format((float) $r['won_value']) ?></td><td class="num"><?= $r['rate'] !== null ? $r['rate'] . '%' : '—' ?></td></tr>
     <?php endforeach; ?></tbody></table></div>
+</div>
+<?php endif; ?>
+
+<?php if ($visitsByUser): ?>
+<div class="card card-flush" style="margin-top:16px" id="visits-report">
+  <div style="padding:14px 18px"><h2 style="border:0;padding:0;margin:0">Site visits</h2>
+    <p class="text-muted" style="font-size:12.5px;margin:4px 0 0">Visits in this period. <strong>Came</strong> is out of the visits marked either way;
+      <strong>then bought</strong> is out of the people who came.</p></div>
+  <?php foreach (array_filter(['Salesperson' => $visitsByUser, 'Project' => $visitsByProj]) as $head => $rows): ?>
+  <div class="table-wrap"><table class="data">
+    <thead><tr><th><?= $head ?></th><th class="num">Booked</th><th class="num">Came</th><th class="num">Didn't come</th><th class="num">Show rate</th><th class="num">Then bought</th></tr></thead>
+    <tbody><?php foreach ($rows as $r): ?>
+      <tr><td><?= e($r['label']) ?></td><td class="num"><?= (int) $r['booked'] ?></td><td class="num"><?= (int) $r['came'] ?></td><td class="num"><?= (int) $r['no_show'] ?></td>
+        <td class="num"><?= $r['show_rate'] !== null ? $r['show_rate'] . '%' : '—' ?></td>
+        <td class="num"><?= (int) $r['bought'] ?><?= $r['sale_rate'] !== null ? ' · ' . $r['sale_rate'] . '%' : '' ?></td></tr>
+    <?php endforeach; ?></tbody></table></div>
+  <?php endforeach; ?>
 </div>
 <?php endif; ?>
 

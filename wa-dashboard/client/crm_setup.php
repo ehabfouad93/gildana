@@ -34,6 +34,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($a === 'rename_project' && $pid) {
         $name = mb_substr(trim((string) ($_POST['name'] ?? '')), 0, 120);
         if ($name !== '') db_run("UPDATE crm_projects SET name=? WHERE id=? AND client_id=?", [$name, $pid, $cid]);
+        if (db_has_column('crm_projects', 'address')) {
+            db_run("UPDATE crm_projects SET address=? WHERE id=? AND client_id=?", [mb_substr(trim((string) ($_POST['address'] ?? '')), 0, 255) ?: null, $pid, $cid]);
+        }
         redirect('crm_setup.php');
     }
     if ($a === 'toggle_project' && $pid) {
@@ -66,8 +69,9 @@ page_head('Projects & lists');
     <?php foreach ($projects as $p): ?>
       <tr><td><form method="post" style="display:flex;gap:6px;align-items:center">
             <?= csrf_field() ?><input type="hidden" name="action" value="rename_project"><input type="hidden" name="project" value="<?= (int) $p['id'] ?>">
-            <input name="name" value="<?= e((string) $p['name']) ?>" maxlength="120" aria-label="Project name" style="max-width:280px">
-            <button class="btn btn-ghost btn-sm">Rename</button>
+            <input name="name" value="<?= e((string) $p['name']) ?>" maxlength="120" aria-label="Project name" style="max-width:220px">
+            <input name="address" value="<?= e((string) ($p['address'] ?? '')) ?>" maxlength="255" aria-label="Where it is" placeholder="Where visits happen — address or map link" style="max-width:300px">
+            <button class="btn btn-ghost btn-sm">Save</button>
             <?php if (!(int) $p['active']): ?><span class="pill gray">Hidden</span><?php endif; ?></form></td>
         <td class="num"><a href="crm.php?view=table&project=<?= (int) $p['id'] ?>"><?= $counts[(int) $p['id']] ?? 0 ?></a></td>
         <td style="text-align:right"><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="toggle_project"><input type="hidden" name="project" value="<?= (int) $p['id'] ?>">

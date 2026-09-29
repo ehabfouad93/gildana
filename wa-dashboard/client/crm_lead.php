@@ -113,6 +113,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($a === 'stage') {
         if ((int) ($_POST['stage_id'] ?? 0) && $stageMove((int) $_POST['stage_id'])) $back();
     }
+    if ($a === 'visit_book' && can_write()) {
+        $d = trim((string) ($_POST['visit_date'] ?? '')); $t = trim((string) ($_POST['visit_time'] ?? ''));
+        $r = crm_visit_book($CLIENT, $id, ['starts_at' => $d . ' ' . $t, 'place' => (string) ($_POST['place'] ?? ''),
+                 'project_id' => (int) ($_POST['project_id'] ?? 0) ?: null, 'notes' => (string) ($_POST['notes'] ?? ''),
+                 'user_id' => $isAdmin ? ((int) ($_POST['host'] ?? 0) ?: null) : null, 'confirm' => !empty($_POST['confirm'])], $me);
+        if ($r['ok']) { flash('Visit booked for ' . date('D j M, H:i', strtotime($d . ' ' . $t)) . '.'); $back('#visits'); }
+        $err = $r['error'];
+    }
+    if (in_array($a, ['visit_done', 'visit_no_show', 'visit_cancel'], true) && can_write()) {
+        $vid = (int) ($_POST['visit'] ?? 0);
+        if (db_val("SELECT COUNT(*) FROM crm_visits WHERE id=? AND contact_id=?", [$vid, $id])) {
+            crm_visit_outcome($CLIENT, $vid, ['visit_done' => 'done', 'visit_no_show' => 'no_show', 'visit_cancel' => 'cancelled'][$a], $me);
+            flash(['visit_done' => 'Marked as came.', 'visit_no_show' => 'Marked as didn\'t come.', 'visit_cancel' => 'Visit cancelled. Its reminder will not go out.'][$a]);
+        }
+        $back('#visits');
+    }
+    if ($a === 'visit_move' && can_write()) {
+        $vid = (int) ($_POST['visit'] ?? 0);
+        if (db_val("SELECT COUNT(*) FROM crm_visits WHERE id=? AND contact_id=?", [$vid, $id])) {
+            $r = crm_visit_reschedule($CLIENT, $vid, trim((string) ($_POST['visit_date'] ?? '')) . ' ' . trim((string) ($_POST['visit_time'] ?? '')), $me);
+            if ($r['ok']) { flash('Visit moved.'); $back('#visits'); }
+            $err = $r['error'];
+        }
+    }
     if ($a === 'seq_stop' && can_write()) {
         crm_seq_stop((int) ($_POST['seq'] ?? 0), $id, 'Stopped by ' . crm_user_name($me) . '.');
         flash('Stopped. No more messages from that sequence.');
@@ -149,6 +173,12 @@ foreach (db_all("SELECT id, COALESCE(NULLIF(name,''), email) n FROM users WHERE 
 $who = fn($uid) => $uid ? ($names[(int) $uid] ?? 'Someone') : 'Automatically';
 $hasKinds = db_has_column('crm_notes', 'kind');
 
+$visits = [];
+try { $visits = db_all("SELECT v.*, COALESCE(NULLIF(u.name,''), u.email) host FROM crm_visits v LEFT JOIN users u ON u.id=v.user_id
+                         WHERE v.contact_id=? ORDER BY v.starts_at DESC LIMIT 10", [$id]); } catch (Throwable $e) {}
+$vs = crm_settings($cid);
+$projAddr = [];
+foreach ($projects as $p_) $projAddr[(int) $p_['id']] = (string) ($p_['address'] ?? '');
 $seqNames = [];
 try { $seqNames = array_column(db_all("SELECT id, name FROM crm_sequences WHERE client_id=?", [$cid]), 'name', 'id'); } catch (Throwable $e) {}
 $runs = [];
@@ -183,6 +213,8 @@ foreach (db_all("SELECT * FROM crm_events WHERE contact_id=? ORDER BY id DESC LI
         'sla'      => 'Not contacted within ' . (int) $ev['to_val'] . ' minutes — owner alerted',
         'resubmitted' => 'Came in again (' . crm_source_label($ev['to_val']) . ')',
         'merged'   => 'Merged with the duplicate contact ' . $ev['to_val'],
+        'visit'    => 'Site visit booked for ' . date('D j M, H:i', strtotime((string) $ev['to_val'])),
+        'visit_moved' => 'Site visit moved from ' . date('D j M, H:i', strtotime((string) $ev['from_val'])) . ' to ' . date('D j M, H:i', strtotime((string) $ev['to_val'])),
         'seq_start'=> 'Joined the follow-up sequence "' . ($seqNames[(int) $ev['to_val']] ?? 'a removed sequence') . '"',
         'seq_stop' => 'Left the sequence "' . ($seqNames[(int) $ev['from_val']] ?? 'a removed sequence') . '" — ' . $ev['to_val'],
         default    => $ev['kind'],
@@ -309,6 +341,63 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
           <div class="field"><span class="lbl">What for</span><input type="text" name="next_note" maxlength="255" placeholder="Send the payment plan"></div>
         </div>
         <button class="btn btn-primary btn-sm">Set follow-up</button>
+      </form>
+      <?php endif; ?>
+    </div>
+
+    <!-- Site visits -->
+    <div class="card" id="visits">
+      <div class="row-between" style="flex-wrap:wrap;gap:8px"><h2 style="margin:0;border:0;padding:0">Site visits</h2>
+        <?php if ($canW): ?><button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('visit-form').hidden=false;this.hidden=true">+ Book a visit</button><?php endif; ?></div>
+      <?php if (!$visits): ?><p class="text-muted" style="margin:8px 0 0;font-size:13px">No visits yet.</p><?php endif; ?>
+      <?php foreach ($visits as $v): $past = strtotime((string) $v['starts_at']) < time(); ?>
+        <div class="visit-row <?= e((string) $v['status']) ?>">
+          <div><strong><?= e(date('D j M, H:i', strtotime((string) $v['starts_at']))) ?></strong>
+            <span class="pill <?= ['scheduled' => $past ? 'gold' : 'blue', 'done' => 'green', 'no_show' => 'red', 'cancelled' => 'gray'][$v['status']] ?>">
+              <?= e($v['status'] === 'scheduled' && $past ? 'How did it go?' : crm_visit_statuses()[$v['status']]) ?></span>
+            <span class="text-muted" style="display:block;font-size:12.5px"><?= e(implode(' · ', array_filter([
+                $v['project_id'] ? ($pnames[(int) $v['project_id']] ?? '') : '', (string) ($v['place'] ?? ''), $v['host'] ? 'with ' . $v['host'] : '']))) ?></span>
+            <?php if (!empty($v['notes'])): ?><span style="display:block;font-size:12.5px"><?= e((string) $v['notes']) ?></span><?php endif; ?></div>
+          <?php if ($canW && $v['status'] === 'scheduled'): ?>
+          <div class="visit-acts">
+            <?php foreach (($past ? ['visit_done' => 'Came', 'visit_no_show' => 'Didn\'t come'] : []) + ['visit_cancel' => 'Cancel'] as $act => $lbl): ?>
+              <form method="post" <?= $act === 'visit_cancel' ? 'onsubmit="return confirm(\'Cancel this visit?\')"' : '' ?>><?= csrf_field() ?>
+                <input type="hidden" name="action" value="<?= $act ?>"><input type="hidden" name="id" value="<?= $id ?>"><input type="hidden" name="visit" value="<?= (int) $v['id'] ?>">
+                <button class="<?= $act === 'visit_done' ? 'btn btn-primary btn-sm' : ($act === 'visit_cancel' ? 'btn-link' : 'btn btn-ghost btn-sm') ?>"><?= $lbl ?></button></form>
+            <?php endforeach; ?>
+            <?php if (!$past): ?>
+              <details class="visit-move"><summary class="btn-link">Move</summary>
+                <form method="post" class="visit-move-form"><?= csrf_field() ?><input type="hidden" name="action" value="visit_move"><input type="hidden" name="id" value="<?= $id ?>"><input type="hidden" name="visit" value="<?= (int) $v['id'] ?>">
+                  <input type="date" name="visit_date" value="<?= e(date('Y-m-d', strtotime((string) $v['starts_at']))) ?>" required>
+                  <input type="time" name="visit_time" value="<?= e(date('H:i', strtotime((string) $v['starts_at']))) ?>" step="900" required>
+                  <button class="btn btn-ghost btn-sm">Save</button></form></details>
+            <?php endif; ?>
+          </div>
+          <?php endif; ?>
+        </div>
+      <?php endforeach; ?>
+      <?php if ($canW): ?>
+      <form method="post" id="visit-form" class="mt10" hidden>
+        <?= csrf_field() ?><input type="hidden" name="action" value="visit_book"><input type="hidden" name="id" value="<?= $id ?>">
+        <div class="grid2">
+          <div class="field"><span class="lbl">Date</span><input type="date" name="visit_date" min="<?= date('Y-m-d') ?>" required></div>
+          <div class="field"><span class="lbl">Time</span><input type="time" name="visit_time" step="900" value="11:00" required></div>
+          <div class="field"><span class="lbl">Project</span><select name="project_id" id="visit-project"><option value="0">—</option>
+            <?php foreach ($projects as $p_): if (!(int) $p_['active']) continue; ?><option value="<?= (int) $p_['id'] ?>" data-addr="<?= e((string) ($p_['address'] ?? '')) ?>" <?= (int) $p_['id'] === (int) ($lead['project_id'] ?? 0) ? 'selected' : '' ?>><?= e($p_['name']) ?></option><?php endforeach; ?></select></div>
+          <div class="field"><span class="lbl">Where</span><input type="text" name="place" id="visit-place" maxlength="255"
+               value="<?= e($projAddr[(int) ($lead['project_id'] ?? 0)] ?? '') ?>" placeholder="Sales office, or a map link"></div>
+          <?php if ($isAdmin): ?>
+          <div class="field"><span class="lbl">Who meets them</span><select name="host"><option value="0">The lead's owner</option>
+            <?php foreach ($people as $u): ?><option value="<?= (int) $u['id'] ?>"><?= e($u['name']) ?></option><?php endforeach; ?></select></div>
+          <?php endif; ?>
+          <div class="field"><span class="lbl">Note</span><input type="text" name="notes" maxlength="500" placeholder="Wants to see the 3-bed model"></div>
+        </div>
+        <?php if ((int) $vs['visit_confirm_tpl']): ?>
+          <label class="mod-all"><input type="checkbox" name="confirm" value="1" checked> Send them a WhatsApp confirmation</label>
+        <?php elseif ($isAdmin): ?>
+          <p class="text-muted" style="font-size:12px">To confirm visits on WhatsApp automatically, choose the templates in <a href="crm_messages.php#visit-msgs">Automatic messages</a>.</p>
+        <?php endif; ?>
+        <button class="btn btn-primary btn-sm mt10">Book visit</button>
       </form>
       <?php endif; ?>
     </div>
@@ -518,6 +607,11 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 <?php endif; ?>
 <script>
 (function(){
+  /* A project's address fills "Where", unless something was typed there. */
+  const vp = document.getElementById('visit-project'), vpl = document.getElementById('visit-place');
+  if (vp) vp.addEventListener('change', () => { const a = vp.selectedOptions[0].dataset.addr || '';
+    if (!vpl.dataset.typed) vpl.value = a; });
+  if (vpl) vpl.addEventListener('input', () => { vpl.dataset.typed = '1'; });
   /* Lost needs a reason: the stage bar opens the question, and the activity form shows it. */
   const LOST = <?= json_encode($askLost ? $lostIds : []) ?>;
   const dlg = document.getElementById('lost-dlg');

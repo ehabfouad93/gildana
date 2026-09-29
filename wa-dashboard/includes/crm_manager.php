@@ -335,6 +335,8 @@ function crm_score_compute(array $c): array
         $o = [];
         foreach (db_all("SELECT outcome, COUNT(*) n FROM crm_notes WHERE contact_id=? AND outcome IS NOT NULL GROUP BY outcome", [(int) $c['id']]) as $x)
             $o[$x['outcome']] = (int) $x['n'];
+        if (!empty($o['visited']))        $r[] = ['Came to a site visit', 30];
+        if (!empty($o['no_show']))        $r[] = ['Missed a visit', -10];
         if (!empty($o['booked']))         $r[] = ['Booked a visit or meeting', 40];
         if (!empty($o['interested']))     $r[] = ['Said they are interested', 20];
         if (!empty($o['answered']))       $r[] = ['Answered a call', 5];

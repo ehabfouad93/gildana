@@ -219,7 +219,8 @@ function crm_activity_outcomes(): array
 {
     return ['answered' => 'Answered', 'no_answer' => 'No answer', 'busy' => 'Busy / call later',
             'interested' => 'Interested', 'not_interested' => 'Not interested', 'booked' => 'Booked a visit / meeting',
-            'sent_info' => 'Sent details', 'wrong_number' => 'Wrong number'];
+            'sent_info' => 'Sent details', 'wrong_number' => 'Wrong number',
+            'visited' => 'Came to the visit', 'no_show' => 'Did not come'];
 }
 
 /**
@@ -402,3 +403,4 @@ function crm_source_label(?string $source): string
 
 // Messages the CRM sends by itself. Loaded last: it needs the inbox, which loads this file.
 require_once __DIR__ . '/crm_automation.php';
+require_once __DIR__ . '/crm_visits.php';

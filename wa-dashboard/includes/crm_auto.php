@@ -36,6 +36,7 @@ function crm_auto_tick(): array
     }
     $sum['rescored'] = crm_auto_rescore();
     // Sequences decide what is due, then the queue sends it (stage messages, sequence steps, visits).
+    $sum['visits']     = crm_visits_tick();
     $sum['seq_queued'] = crm_seq_tick();
     $sum['auto_sent']  = crm_queue_tick();
     // Last, so this pass's alerts go out in this pass.
