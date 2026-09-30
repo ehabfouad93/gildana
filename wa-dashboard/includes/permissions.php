@@ -35,7 +35,8 @@ function perm_modules(): array
                                                                    'crm_reports.php', 'meta_leads.php',
                                                                    'crm_team.php', 'crm_rules.php', 'crm_setup.php',
                                                                    'crm_messages.php', 'crm_calendar.php', 'crm_dashboard.php', 'media.php',
-                                                                   'crm_manage.php', 'lead_search.php', 'crm_events.php']],
+                                                                   'crm_manage.php', 'lead_search.php', 'crm_events.php',
+                                                                   'crm_materials.php', 'material_file.php']],
         'contacts'    => ['label' => 'Contacts',       'pages' => ['contacts.php']],
         'lists'       => ['label' => 'Lists',          'pages' => ['lists.php', 'contact_search.php']],
         'templates'   => ['label' => 'Templates',      'pages' => ['templates.php']],
@@ -155,7 +156,7 @@ function user_modules(array $user, array $client): array
 function perm_crm_pages(): array
 {
     return [
-        'pipeline'  => ['label' => 'Pipeline & leads',   'pages' => ['crm.php', 'crm_lead.php'], 'always' => true],
+        'pipeline'  => ['label' => 'Pipeline & leads',   'pages' => ['crm.php', 'crm_lead.php', 'crm_materials.php', 'material_file.php'], 'always' => true],
         'dashboard' => ['label' => 'Dashboard',          'pages' => ['crm_dashboard.php']],
         'visits'    => ['label' => 'Visits, meetings & events', 'pages' => ['crm_calendar.php', 'crm_events.php']],
         'reports'   => ['label' => 'Reports',            'pages' => ['crm_reports.php']],

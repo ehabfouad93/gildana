@@ -92,6 +92,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['ajax'])) {
         json_out(['ok' => true, 'n' => count($ids)]);
     }
 
+    if ($a === 'transfer') {
+        // The full transfer: several people with numbers, or teams; smart rotation; history options.
+        require_once __DIR__ . '/../includes/crm_transfer.php';
+        $o = json_decode((string) ($_POST['opts'] ?? '{}'), true) ?: [];
+        $r = crm_bulk_transfer($CLIENT, $targets(), $o, $me);
+        if (!$r['ok']) json_out($r);
+        $names = [];
+        foreach ($r['by_user'] as $u => $n) $names[] = crm_user_name((int) $u) . ' ' . $n;
+        json_out(['ok' => true, 'n' => $r['moved'], 'skipped' => $r['skipped'], 'text' => implode(', ', $names)]);
+    }
+
     if ($a === 'set_field') {
         // One field on many leads: project, unit type, qualification, fresh/cold, campaign, or one of the account's own.
         $ids = $targets();
@@ -240,6 +251,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['ajax'])) {
                 $id = db_insert("INSERT INTO crm_stages (client_id,name,sort,kind,created_at) VALUES (?,?,?,?,NOW())", [$cid, mb_substr($name, 0, 80), ($i + 1) * 10, $kind]);
             }
             $keep[] = $id;
+            // The stage's sub-statuses, edited in the same place. A Lost stage's are the lost reasons.
+            if (isset($r['subs']) && is_array($r['subs'])) {
+                if ($kind === 'lost') crm_options_save($cid, 'lost_reason', $r['subs']);
+                else crm_substatuses_save($cid, $id, $r['subs']);
+            }
         }
         if (!array_filter($rows, fn($r) => ($r['kind'] ?? 'open') === 'open' && trim((string) ($r['name'] ?? '')) !== '')) {
             json_out(['ok' => false, 'error' => 'Keep at least one open stage — new leads need somewhere to land.']);
@@ -600,8 +616,8 @@ foreach ($views as $v_) { parse_str((string) $v_['params'], $vq); if ($vq == $ac
     <select id="crm-bulk-stage" aria-label="Move to stage"><option value="">Move to stage…</option>
       <?php foreach ($stages as $s): ?><option value="<?= (int) $s['id'] ?>"><?= e($s['name']) ?></option><?php endforeach; ?></select>
     <?php if ($canMove): ?>
-    <select id="crm-bulk-owner" aria-label="Transfer to"><option value="">Transfer to…</option><?php if ($isAdmin): ?><option value="auto">Share out by the assignment rules</option><option value="none">Nobody</option><?php endif; ?>
-      <?php foreach ($people as $u): ?><option value="<?= (int) $u['id'] ?>"><?= e($u['name']) ?></option><?php endforeach; ?></select>
+    <button type="button" class="btn btn-ghost btn-sm" id="crm-bulk-transfer" data-open="m-transfer">⇄ Bulk transfer</button>
+    <?php if ($isAdmin): ?><select id="crm-bulk-owner" aria-label="Quick assign"><option value="">Quick assign…</option><option value="auto">Share out by the assignment rules</option><option value="none">Unassign</option></select><?php endif; ?>
     <?php endif; ?>
     <button type="button" class="btn btn-ghost btn-sm" data-open="m-edit">Edit field</button>
     <?php if ($isAdmin): ?>
@@ -663,7 +679,7 @@ foreach ($views as $v_) { parse_str((string) $v_['params'], $vq); if ($vq == $ac
         $late = $l['next_followup_at'] && strtotime((string) $l['next_followup_at']) < time() && $l['stage_kind'] === 'open';
         $custom = crm_custom_get($l); ?>
         <tr data-id="<?= (int) $l['id'] ?>" data-stage="<?= (int) $l['stage_id'] ?>">
-          <?php if ($canEdit): ?><td class="crm-cb"><input type="checkbox" class="crm-pick" value="<?= (int) $l['id'] ?>" aria-label="Select <?= e((string) ($l['name'] ?: $l['code'])) ?>"></td><?php endif; ?>
+          <?php if ($canEdit): ?><td class="crm-cb"><input type="checkbox" class="crm-pick" value="<?= (int) $l['id'] ?>" data-name="<?= e((string) ($l['name'] ?: '#' . $l['code'])) ?>" data-phone="<?= e(crm_phone_show((string) $l['phone_e164'])) ?>" aria-label="Select <?= e((string) ($l['name'] ?: $l['code'])) ?>"></td><?php endif; ?>
           <?php foreach ($cols as $k): $lbl = $allCols[$k][0]; ?>
             <td data-label="<?= e($lbl) ?>" class="<?= 'c-' . e($k) ?><?= in_array($k, ['value', 'effort', 'rotations'], true) ? ' num' : '' ?><?= $k === 'followup' && $late ? ' crm-late' : '' ?>">
             <?php switch ($k):
@@ -874,6 +890,54 @@ foreach ($views as $v_) { parse_str((string) $v_['params'], $vq); if ($vq == $ac
   </form>
 </dialog>
 <?php endif; ?>
+<?php if ($canMove):
+  require_once __DIR__ . '/../includes/crm_transfer.php';
+  $trPeople = crm_transfer_targets($cid);
+  $trTeams = $isAdmin ? $teams : array_values(array_filter($teams, fn($t) => in_array((int) $t['id'], crm_led_team_ids((int) $me), true))); ?>
+<dialog id="m-transfer" class="lost-dlg tr-dlg" aria-labelledby="tr-title">
+  <form onsubmit="return bulkTransfer(event)">
+    <h2 id="tr-title" style="margin:0">Bulk transfer</h2>
+    <p class="text-muted" id="tr-snap" style="margin:4px 0 12px;font-size:13px"></p>
+    <div class="lbl-sm">Selected leads (<span class="bulk-n"></span>)</div>
+    <ul class="tr-list" id="tr-list"></ul>
+    <div class="tr-seg" role="tablist">
+      <button type="button" class="on" data-mode="users" role="tab">Transfer to sales</button>
+      <button type="button" data-mode="teams" role="tab" <?= $trTeams ? '' : 'disabled title="No teams yet — add them on Team & transfer"' ?>>Transfer to team</button>
+    </div>
+    <div id="tr-users">
+      <div class="lbl-sm">Transfer to</div>
+      <div class="tr-quota"><span id="tr-quota"></span><button type="button" class="btn btn-ghost btn-sm" id="tr-add">+ Add person</button></div>
+      <div id="tr-rows"></div>
+      <p class="text-muted" style="font-size:12px;margin:4px 0 0">Leave the number empty to share the rest equally.</p>
+    </div>
+    <div id="tr-teams" hidden>
+      <div class="lbl-sm">Teams — their members share the leads equally</div>
+      <?php foreach ($trTeams as $t): ?><label class="mod-all"><input type="checkbox" class="tr-team" value="<?= (int) $t['id'] ?>"> <?= e((string) $t['name']) ?> <span class="text-muted">(<?= (int) $t['members'] ?>)</span></label><?php endforeach; ?>
+    </div>
+    <label class="tr-box"><span><strong>Smart rotation — avoid previous owners</strong>
+      <small class="text-muted">The current owner is always left out. When on, people who have never had the lead are chosen first.</small></span>
+      <span class="switch"><input type="checkbox" id="tr-smart"><span class="slider"></span></span></label>
+    <div class="field"><span class="lbl">Lead type after transfer</span><select id="tr-dtype"><option value="">Keep the current type</option>
+      <?php foreach (crm_data_types() as $k => $l): ?><option value="<?= $k ?>"><?= e($l) ?></option><?php endforeach; ?></select></div>
+    <div class="field"><span class="lbl">Reason <span class="text-muted">(optional)</span></span><input id="tr-reason" maxlength="255" placeholder="Not contacted for a week"></div>
+    <div class="field"><span class="lbl">Notes <span class="text-muted">(optional)</span></span><textarea id="tr-notes" rows="2" maxlength="1000"></textarea></div>
+    <label class="mod-all"><input type="checkbox" id="tr-keepfu"> Keep the follow-up date</label>
+    <div class="field mt10"><span class="lbl">History visibility</span><select id="tr-history">
+      <?php foreach (crm_transfer_policies() as $k => $l): ?><option value="<?= $k ?>"><?= e($l) ?></option><?php endforeach; ?></select>
+      <small class="text-muted" id="tr-history-note">Everyone sees the full history.</small></div>
+    <label class="tr-box" id="tr-fresh-box"><span><strong>Start again as a new lead</strong>
+      <small class="text-muted">Moves it back to the first stage and clears the sub-status. Needs the earlier history hidden.</small></span>
+      <span class="switch"><input type="checkbox" id="tr-fresh" disabled><span class="slider"></span></span></label>
+    <label class="tr-box"><span><strong>Show the last status</strong>
+      <small class="text-muted">The stage and sub-status before the transfer stay visible on the lead even when its history is hidden.</small></span>
+      <input type="checkbox" id="tr-status"></label>
+    <div class="alert error" id="tr-err" hidden></div>
+    <div class="dlg-btns" style="justify-content:flex-end"><button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">Cancel</button>
+      <button class="btn btn-primary" id="tr-go">Confirm transfer</button></div>
+  </form>
+</dialog>
+<script>const TR_PEOPLE = <?= json_encode(array_map(fn($u) => ['id' => (int) $u['id'], 'name' => $u['name']], $trPeople), JSON_UNESCAPED_UNICODE) ?>;</script>
+<?php endif; ?>
 <?php if ($canExport): ?><form method="post" id="export-sel" hidden><?= csrf_field() ?><input type="hidden" name="action" value="export"><input type="hidden" name="format" value="xlsx"></form><?php endif; ?>
 <?php endif; ?>
 
@@ -883,8 +947,8 @@ foreach ($views as $v_) { parse_str((string) $v_['params'], $vq); if ($vq == $ac
     <h2>Stages</h2>
     <p class="text-muted" style="font-size:12.5px;margin-top:-6px">Drag to reorder. <strong>Won</strong> and
       <strong>Lost</strong> close a lead and drive the conversion figures in Reports, whatever you name them.
-      Removing a stage moves its leads to the first open stage. Each stage's sub-statuses are set in
-      <a href="crm_setup.php#substatus">Projects &amp; lists</a>.</p>
+      Removing a stage moves its leads to the first open stage. Under each stage, its sub-statuses:
+      type one and press Enter to add it, × to remove it. For a Lost stage they are the reasons a lead is lost.</p>
     <div id="st-list"></div>
     <button type="button" class="btn btn-ghost btn-sm" onclick="stAdd()">+ Add stage</button>
     <div class="alert error" id="st-err" hidden></div>
@@ -910,7 +974,8 @@ foreach ($views as $v_) { parse_str((string) $v_['params'], $vq); if ($vq == $ac
 <?php endif; ?>
 <script>
 const CSRF = <?= json_encode(csrf_token()) ?>;
-const STAGES = <?= json_encode(array_map(fn($s) => ['id' => (int) $s['id'], 'name' => $s['name'], 'kind' => $s['kind']], $stages)) ?>;
+const STAGES = <?= json_encode(array_map(fn($s) => ['id' => (int) $s['id'], 'name' => $s['name'], 'kind' => $s['kind'],
+    'subs' => $s['kind'] === 'lost' ? crm_options($cid, 'lost_reason') : ($subsAll[(int) $s['id']] ?? [])], $stages), JSON_UNESCAPED_UNICODE) ?>;
 const SUBS = <?= json_encode($subsByStage, JSON_UNESCAPED_UNICODE) ?>;
 const QS = <?= json_encode($qsNow) ?>;
 const TOTAL = <?= (int) $total ?>;
@@ -1126,14 +1191,85 @@ async function crmAddSave(e){
   return false;
 }
 
+
+/* Bulk transfer: the selection as it is now, several people with numbers or whole teams, and the options. */
+(function(){
+  const d = $m('m-transfer'); if (!d) return;
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  let mode = 'users';
+  const rows = $m('tr-rows');
+  const quota = () => {
+    const sum = [...rows.querySelectorAll('.tr-n')].reduce((a, i) => a + (parseInt(i.value, 10) || 0), 0);
+    $m('tr-quota').textContent = 'Numbers requested: ' + sum + ' · Selected: ' + nTarget();
+  };
+  const addRow = () => {
+    const r = document.createElement('div'); r.className = 'tr-row';
+    r.innerHTML = `<select class="tr-u" aria-label="Salesperson"><option value="">Choose a person…</option>${TR_PEOPLE.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>
+      <input class="tr-n" type="number" min="1" placeholder="#" aria-label="How many leads">
+      <button type="button" class="icon-btn" title="Remove" aria-label="Remove">✕</button>`;
+    r.querySelector('button').onclick = () => { r.remove(); quota(); };
+    r.querySelector('.tr-n').addEventListener('input', quota);
+    rows.appendChild(r);
+  };
+  $m('tr-add').onclick = addRow;
+  d.querySelectorAll('.tr-seg button').forEach(b => b.onclick = () => {
+    mode = b.dataset.mode; d.querySelectorAll('.tr-seg button').forEach(x => x.classList.toggle('on', x === b));
+    $m('tr-users').hidden = mode !== 'users'; $m('tr-teams').hidden = mode !== 'teams';
+  });
+  const hist = $m('tr-history'), fresh = $m('tr-fresh');
+  const notes = {'': 'Everyone sees the full history.', sales: 'The new salesperson sees only what happens from now on. Managers see everything.',
+                 leaders: 'The new salesperson and their team leader see only what happens from now on. Admins see everything.'};
+  hist.onchange = () => { fresh.disabled = hist.value === ''; if (fresh.disabled) fresh.checked = false;
+    $m('tr-fresh-box').classList.toggle('off', fresh.disabled); $m('tr-history-note').textContent = notes[hist.value]; };
+  hist.onchange();
+  // Opening it: take a snapshot of what is selected.
+  $m('crm-bulk-transfer')?.addEventListener('click', () => {
+    const list = $m('tr-list'); list.innerHTML = '';
+    const picked = [...document.querySelectorAll('.crm-pick:checked')];
+    picked.slice(0, 200).forEach(c => { const li = document.createElement('li'); li.innerHTML = `<strong>${esc(c.dataset.name)}</strong> <span class="ltr">${esc(c.dataset.phone)}</span>`; list.appendChild(li); });
+    $m('tr-snap').textContent = ALL ? 'All ' + TOTAL.toLocaleString() + ' leads matching the filter.'
+                                    : 'Selection snapshot: ' + picked.length + ' leads. It will not grow to other results.';
+    d.querySelectorAll('.bulk-n').forEach(s => s.textContent = nTarget().toLocaleString());
+    if (!rows.children.length) addRow();
+    $m('tr-err').hidden = true; quota();
+  });
+  window.bulkTransfer = async e => {
+    e.preventDefault();
+    const opts = {mode, smart: $m('tr-smart').checked, data_type: $m('tr-dtype').value, reason: $m('tr-reason').value, notes: $m('tr-notes').value,
+      keep_followup: $m('tr-keepfu').checked, history: hist.value, fresh_start: fresh.checked, show_status: $m('tr-status').checked,
+      users: [...rows.querySelectorAll('.tr-row')].map(r => ({id: r.querySelector('.tr-u').value, count: r.querySelector('.tr-n').value})).filter(u => u.id),
+      teams: [...d.querySelectorAll('.tr-team:checked')].map(x => x.value)};
+    $m('tr-go').disabled = true;
+    const res = await crmPost(Object.assign({action: 'transfer', opts: JSON.stringify(opts)}, target()));
+    $m('tr-go').disabled = false;
+    if (res.ok) { alert(res.n + ' lead' + (res.n === 1 ? '' : 's') + ' transferred' + (res.text ? ': ' + res.text : '') + '.' + (res.skipped ? ' ' + res.skipped + ' left as they were (no one else to give them to).' : '')); location.reload(); }
+    else { $m('tr-err').hidden = false; $m('tr-err').textContent = res.error || 'Could not transfer them.'; }
+    return false;
+  };
+})();
+
 /* Stage editor. */
 function stRow(s){
   const div = document.createElement('div'); div.className = 'st-row'; div.draggable = true; div.dataset.id = s.id || '';
   div.innerHTML = `<span class="st-grip" aria-hidden="true">≡</span>
     <input class="st-name" value="${(s.name||'').replace(/"/g,'&quot;')}" placeholder="Stage name">
     <select class="st-kind"><option value="open">Open</option><option value="won">Won</option><option value="lost">Lost</option></select>
-    <button type="button" class="icon-btn" title="Remove" onclick="this.parentNode.remove()">✕</button>`;
+    <button type="button" class="icon-btn" title="Remove" onclick="this.closest('.st-row').remove()">✕</button>
+    <div class="st-subs"><span class="st-subs-l">Sub-statuses</span><span class="st-chips"></span>
+      <input class="st-sub-new" placeholder="+ Add a sub-status" maxlength="80" aria-label="Add a sub-status"></div>`;
   div.querySelector('.st-kind').value = s.kind || 'open';
+  const chips = div.querySelector('.st-chips');
+  const addChip = t => { t = t.trim(); if (!t || [...chips.children].some(x => x.dataset.v.toLowerCase() === t.toLowerCase())) return;
+    const ch = document.createElement('span'); ch.className = 'st-chip'; ch.dataset.v = t; ch.textContent = t;
+    const x = document.createElement('button'); x.type = 'button'; x.textContent = '×'; x.title = 'Remove'; x.setAttribute('aria-label', 'Remove ' + t);
+    x.onclick = () => ch.remove(); ch.appendChild(x); chips.appendChild(ch); };
+  (s.subs || []).forEach(addChip);
+  const inp = div.querySelector('.st-sub-new');
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addChip(inp.value); inp.value = ''; } });
+  inp.addEventListener('blur', () => { if (inp.value.trim()) { addChip(inp.value); inp.value = ''; } });
+  const lbl = () => div.querySelector('.st-subs-l').textContent = div.querySelector('.st-kind').value === 'lost' ? 'Lost reasons' : 'Sub-statuses';
+  div.querySelector('.st-kind').addEventListener('change', lbl); lbl();
+  div.querySelectorAll('input, select').forEach(el => { el.addEventListener('mousedown', () => div.draggable = false); el.addEventListener('blur', () => div.draggable = true); });
   div.addEventListener('dragstart', () => div.classList.add('dragging'));
   div.addEventListener('dragend', () => div.classList.remove('dragging'));
   return div;
@@ -1146,10 +1282,11 @@ function crmStages(){
     after ? list.insertBefore(drag, after) : list.appendChild(drag); };
   $m('st-err').hidden = true; $m('m-stages').classList.add('open');
 }
-function stAdd(){ $m('st-list').appendChild(stRow({name:'', kind:'open'})); }
+function stAdd(){ $m('st-list').appendChild(stRow({name:'', kind:'open', subs: []})); }
 async function stSave(){
   const stages = [...document.querySelectorAll('#st-list .st-row')].map(r => ({
-    id: r.dataset.id, name: r.querySelector('.st-name').value, kind: r.querySelector('.st-kind').value }));
+    id: r.dataset.id, name: r.querySelector('.st-name').value, kind: r.querySelector('.st-kind').value,
+    subs: [...r.querySelectorAll('.st-chip')].map(x => x.dataset.v) }));
   const d = await crmPost({action:'stages', stages: JSON.stringify(stages)});
   if (d.ok) location.href = 'crm.php'; else { $m('st-err').hidden = false; $m('st-err').textContent = d.error || 'Could not save.'; }
 }

@@ -214,8 +214,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $to = (string) ($_POST['to'] ?? '');
         $vis = crm_visible_owner_ids() ?? [];
         if (!$isAdmin && !($leader && ctype_digit($to) && in_array((int) $to, $vis, true))) { $err = 'Only an Admin or a team leader can transfer a lead.'; }
-        else {
-            crm_assign($CLIENT, $id, $to === 'none' ? null : ($to === 'auto' ? crm_assign_next($CLIENT, $lead) : (int) $to), $me);
+        elseif (ctype_digit($to)) {
+            require_once __DIR__ . '/../includes/crm_transfer.php';
+            $r = crm_bulk_transfer($CLIENT, [$id], ['users' => [['id' => (int) $to]], 'data_type' => (string) ($_POST['data_type'] ?? ''),
+                    'reason' => (string) ($_POST['reason'] ?? ''), 'notes' => (string) ($_POST['notes'] ?? ''), 'keep_followup' => !empty($_POST['keep_followup']),
+                    'history' => (string) ($_POST['history'] ?? ''), 'fresh_start' => !empty($_POST['fresh_start']), 'show_status' => !empty($_POST['show_status'])], $me);
+            if ($r['ok'] && $r['moved']) { flash('Transferred to ' . crm_user_name((int) $to) . '.'); $back(); }
+            $err = $r['error'] ?? 'It already belongs to that person.';
+        } else {
+            crm_assign($CLIENT, $id, $to === 'none' ? null : crm_assign_next($CLIENT, $lead), $me);
             flash('Transferred.'); $back();
         }
     }
@@ -304,6 +311,7 @@ foreach (db_all("SELECT * FROM crm_events WHERE contact_id=? ORDER BY id DESC LI
         'visit'    => 'Site visit booked for ' . date('D j M, H:i', strtotime((string) $ev['to_val'])),
         'meeting'  => 'Online meeting booked for ' . date('D j M, H:i', strtotime((string) $ev['to_val'])),
         'event'    => (string) $ev['to_val'],
+        'transfer_note' => 'Transfer note: ' . $ev['to_val'],
         'visit_moved' => 'Site visit moved from ' . date('D j M, H:i', strtotime((string) $ev['from_val'])) . ' to ' . date('D j M, H:i', strtotime((string) $ev['to_val'])),
         'seq_start'=> 'Joined the follow-up sequence "' . ($seqNames[(int) $ev['to_val']] ?? 'a removed sequence') . '"',
         'seq_stop' => 'Left the sequence "' . ($seqNames[(int) $ev['from_val']] ?? 'a removed sequence') . '" — ' . $ev['to_val'],
@@ -312,6 +320,13 @@ foreach (db_all("SELECT * FROM crm_events WHERE contact_id=? ORDER BY id DESC LI
     $feed[] = ['t' => $ev['created_at'], 'group' => 'history', 'kind' => 'event', 'body' => $text, 'by' => $who($ev['user_id'])];
 }
 usort($feed, fn($a, $b) => strcmp((string) $b['t'], (string) $a['t']));
+// After a transfer that hid the earlier history, this viewer sees only what happened since.
+require_once __DIR__ . '/../includes/crm_transfer.php';
+$hideBefore = crm_history_hidden_for($lead);
+if ($hideBefore !== null) {
+    $feed = array_values(array_filter($feed, fn($it) => (string) $it['t'] >= $hideBefore));
+    $visits = array_values(array_filter($visits, fn($v) => (string) $v['created_at'] >= $hideBefore));
+}
 $counts = array_count_values(array_column($feed, 'group'));
 
 /* What the send box can do for this person, worked out before drawing it. */
@@ -346,6 +361,7 @@ $custom = crm_custom_get($lead);
 $aiOn = ai_configured($CLIENT);
 $aiFacts = json_decode((string) ($lead['ai_facts'] ?? ''), true) ?: [];
 $aiStale = $aiOn && $canW && crm_ai_stale($lead);
+if ($hideBefore !== null) { $aiOn = false; $aiStale = false; $lead['ai_summary'] = null; $aiFacts = []; }   // the summary would tell the hidden story
 
 /* The numbers down the side: what has been done with this lead, and how it went. */
 $good = ['answered', 'interested', 'booked', 'sent_info', 'visited'];
@@ -444,6 +460,10 @@ $ownerName = crm_user_name($lead['owner_user_id'] !== null ? (int) $lead['owner_
       </div>
     </div>
 
+    <?php if ($hideBefore !== null): ?>
+      <p class="lead-hidden-note">Passed to you <?= e(date('j M Y', strtotime($hideBefore))) ?>. What happened before is not shown.
+        <?php if (!empty($lead['prev_status'])): ?> Last status before: <strong><?= e((string) $lead['prev_status']) ?></strong>.<?php endif; ?></p>
+    <?php endif; ?>
     <?php if (!empty($lead['lost_reason']) && in_array((int) $lead['stage_id'], $lostIds, true)): ?>
       <p class="lead-lost"><?= e(t('Lost')) ?>: <strong><?= e((string) $lead['lost_reason']) ?></strong><?= !empty($lead['lost_note']) ? ' — ' . e((string) $lead['lost_note']) : '' ?></p>
     <?php endif; ?>
@@ -735,6 +755,7 @@ $ownerName = crm_user_name($lead['owner_user_id'] !== null ? (int) $lead['owner_
     </dl>
   </div>
 
+  <?php if ($hideBefore === null): ?>
   <details class="card lead-fold">
     <summary><h2 class="lead-card-h">Stage history</h2></summary>
     <?php if (!$stageMoves): ?><p class="text-muted" style="font-size:13px">No moves yet.</p><?php endif; ?>
@@ -754,6 +775,7 @@ $ownerName = crm_user_name($lead['owner_user_id'] !== null ? (int) $lead['owner_
         <span class="text-muted"><?= e($who($m_['user_id'])) ?> · <?= e(date('j M, H:i', strtotime((string) $m_['created_at']))) ?></span></div>
     <?php endforeach; ?>
   </details>
+  <?php endif; ?>
 
   <?php if ($myEvents): ?>
   <details class="card lead-fold" open>
@@ -964,6 +986,18 @@ $ownerName = crm_user_name($lead['owner_user_id'] !== null ? (int) $lead['owner_
       <?php if ($isAdmin): ?><option value="auto">Next in rotation (assignment rules)</option><option value="none">Nobody (unassigned)</option><?php endif; ?>
       <?php foreach ($transferTo as $u): if ((int) $u['id'] === (int) $lead['owner_user_id']) continue; ?><option value="<?= (int) $u['id'] ?>"><?= e($u['name']) ?></option><?php endforeach; ?>
     </select></div>
+    <div class="grid2">
+      <div class="field"><span class="lbl">Lead type after transfer</span><select name="data_type"><option value="">Keep the current type</option>
+        <?php foreach (crm_data_types() as $k => $l): ?><option value="<?= $k ?>"><?= e($l) ?></option><?php endforeach; ?></select></div>
+      <div class="field"><span class="lbl">History visibility</span><select name="history" id="trl-history">
+        <?php require_once __DIR__ . '/../includes/crm_transfer.php'; foreach (crm_transfer_policies() as $k => $l): ?><option value="<?= $k ?>"><?= e($l) ?></option><?php endforeach; ?></select></div>
+    </div>
+    <div class="field"><span class="lbl">Reason <span class="text-muted">(optional)</span></span><input name="reason" maxlength="255"></div>
+    <div class="field"><span class="lbl">Notes <span class="text-muted">(optional)</span></span><textarea name="notes" rows="2" maxlength="1000"></textarea></div>
+    <label class="mod-all"><input type="checkbox" name="keep_followup" value="1"> Keep the follow-up date</label>
+    <label class="mod-all"><input type="checkbox" name="fresh_start" value="1" id="trl-fresh" disabled> Start again as a new lead (needs the history hidden)</label>
+    <label class="mod-all"><input type="checkbox" name="show_status" value="1"> Show the last status when the history is hidden</label>
+    <script>document.getElementById('trl-history').addEventListener('change', e => { const f = document.getElementById('trl-fresh'); f.disabled = !e.target.value; if (f.disabled) f.checked = false; });</script>
     <div class="dlg-btns"><button class="btn btn-primary">Transfer</button><button type="button" class="btn btn-ghost" data-close>Cancel</button></div>
   </form>
 </dialog>

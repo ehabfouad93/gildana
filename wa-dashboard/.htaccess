@@ -25,3 +25,4 @@
 
 # Files people sent on WhatsApp are private: served only through client/media.php, signed in.
 RedirectMatch 404 (^|/)uploads/inbound/
+RedirectMatch 404 (^|/)uploads/materials/
