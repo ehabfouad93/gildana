@@ -208,6 +208,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($r['ok']) { flash('Sent.'); $back('#timeline'); }
         $err = $r['error'] ?: 'The message could not be sent.';
     }
+    // Transfer: an Admin to anyone, a team leader within their team — the same rule as the leads list.
+    if ($a === 'transfer') {
+        $leader = !$isAdmin && crm_is_team_leader();
+        $to = (string) ($_POST['to'] ?? '');
+        $vis = crm_visible_owner_ids() ?? [];
+        if (!$isAdmin && !($leader && ctype_digit($to) && in_array((int) $to, $vis, true))) { $err = 'Only an Admin or a team leader can transfer a lead.'; }
+        else {
+            crm_assign($CLIENT, $id, $to === 'none' ? null : ($to === 'auto' ? crm_assign_next($CLIENT, $lead) : (int) $to), $me);
+            flash('Transferred.'); $back();
+        }
+    }
+    // The deal is done: straight to the first "won" stage.
+    if ($a === 'won' && can_write()) {
+        $wonId = 0; foreach ($stages as $s_) if ($s_['kind'] === 'won') { $wonId = (int) $s_['id']; break; }
+        if ($wonId && $stageMove($wonId)) { flash('Marked as won.'); $back(); }
+    }
+    if ($a === 'event_add' && can_write() && can_crm('visits')) {
+        require_once __DIR__ . '/../includes/crm_sales_events.php';
+        $n = sev_ready() ? sev_add_guests($CLIENT, (int) ($_POST['event_id'] ?? 0), [$id], $me) : 0;
+        flash($n ? 'Added to the event\'s guest list.' : 'Already on that event\'s list, or the event is closed.', $n ? 'success' : 'error');
+        $back();
+    }
     if ($a === 'add_to_crm') {
         crm_add_lead($CLIENT, $id, '', is_sales() ? $me : 'auto', null, $me);
         flash('Added to the pipeline.');
@@ -325,10 +347,60 @@ $aiOn = ai_configured($CLIENT);
 $aiFacts = json_decode((string) ($lead['ai_facts'] ?? ''), true) ?: [];
 $aiStale = $aiOn && $canW && crm_ai_stale($lead);
 
+/* The numbers down the side: what has been done with this lead, and how it went. */
+$good = ['answered', 'interested', 'booked', 'sent_info', 'visited'];
+$bad  = ['no_answer', 'busy', 'not_interested', 'wrong_number', 'no_show'];
+$st = ['acts' => 0, 'good' => 0, 'bad' => 0, 'visits' => 0, 'msg_in' => 0, 'msg_out' => 0, 'last' => null];
+foreach ($feed as $it) {
+    if ($it['kind'] === 'act' && $it['act'] !== 'note') {
+        $st['acts']++;
+        if (in_array($it['outcome'], $good, true)) $st['good']++;
+        if (in_array($it['outcome'], $bad, true)) $st['bad']++;
+        $st['last'] = max((string) $st['last'], (string) $it['t']);
+    }
+    if ($it['kind'] === 'msg') { $st[$it['dir'] === 'out' ? 'msg_out' : 'msg_in']++; if ($it['dir'] === 'out') $st['last'] = max((string) $st['last'], (string) $it['t']); }
+}
+$st['visits'] = count(array_filter($visits, fn($v) => $v['status'] === 'done'));
+$age = !empty($lead['crm_added_at']) ? max(0, (int) floor((time() - strtotime((string) $lead['crm_added_at'])) / 86400)) : null;
+$contacted = !empty($lead['first_response_at']) || $st['acts'] > 0 || $st['msg_out'] > 0;
+
+// Who had it, and every move between people and stages.
+$moves = db_all("SELECT * FROM crm_events WHERE contact_id=? AND kind IN ('assigned','reclaimed') ORDER BY id DESC LIMIT 50", [$id]);
+$rotations = count(array_filter($moves, fn($m_) => $m_['kind'] === 'reclaimed' || $m_['from_val'] !== null));
+$stageMoves = db_all("SELECT * FROM crm_events WHERE contact_id=? AND kind IN ('stage','added') ORDER BY id DESC LIMIT 50", [$id]);
+$createdBy = db_row("SELECT user_id, created_at FROM crm_events WHERE contact_id=? AND kind='added' ORDER BY id LIMIT 1", [$id]);
+$myEvents = []; $openEvents = [];
+if (can_crm('visits')) {
+    require_once __DIR__ . '/../includes/crm_sales_events.php';
+    try {
+        $myEvents = db_all("SELECT e.id, e.name, e.starts_at, g.status FROM sales_event_guests g JOIN sales_events e ON e.id=g.event_id WHERE g.contact_id=? ORDER BY e.starts_at DESC", [$id]);
+        $openEvents = db_all("SELECT id, name, starts_at FROM sales_events WHERE client_id=? AND status='active' AND starts_at > NOW() ORDER BY starts_at LIMIT 30", [$cid]);
+    } catch (Throwable $e) {}
+}
+$canTransfer = $isAdmin || crm_is_team_leader();
+$transferTo = $isAdmin ? $people : array_values(array_filter($people, fn($u) => in_array((int) $u['id'], crm_visible_owner_ids() ?? [], true)));
+$wonStage = null; foreach ($stages as $s_) if ($s_['kind'] === 'won') { $wonStage = $s_; break; }
+$lostStage = null; foreach ($stages as $s_) if ($s_['kind'] === 'lost') { $lostStage = $s_; break; }
+$initials = function (string $n): string {
+    $w = preg_split('/\s+/u', trim($n)) ?: [];
+    $i = mb_strtoupper(mb_substr($w[0] ?? '', 0, 1) . mb_substr($w[1] ?? '', 0, 1));
+    return $i !== '' ? $i : '#';
+};
+$attrs = json_decode((string) ($lead['attributes'] ?? ''), true) ?: [];
+$ago = function (?string $t): string {
+    if (!$t) return 'Never';
+    $d = time() - strtotime($t);
+    if ($d < 3600) return max(1, (int) ($d / 60)) . ' min ago';
+    if ($d < 86400) return (int) ($d / 3600) . ' h ago';
+    return (int) ($d / 86400) . ' days ago';
+};
+
 $title = (string) ($lead['name'] ?: '+' . $phone);
 client_header($title, 'crm', $CLIENT);
-page_head($title, '<a class="btn btn-ghost btn-sm" href="crm.php">&larr; CRM</a>');
-if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
+$ownerName = crm_user_name($lead['owner_user_id'] !== null ? (int) $lead['owner_user_id'] : null);
+?>
+<a class="lead-back" href="crm.php">&larr; Back to leads</a>
+<?php if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 
 <?php if ($lead['stage_id'] === null && !empty($lead['deleted_at'])): ?>
   <div class="alert warn">This lead was deleted <?= e(date('j M', strtotime((string) $lead['deleted_at']))) ?> and is in the recycle bin.
@@ -344,406 +416,136 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
     <?php endif; ?></div>
 <?php endif; ?>
 
-<!-- Who, how to reach them, where they stand -->
-<div class="card lead-hero">
-  <div class="lead-hero-top">
-    <div>
-      <div class="lead-contact">
-        <?php if (!empty($lead['code'])): ?><button type="button" class="lead-code" title="Copy the lead's code" onclick="navigator.clipboard&&navigator.clipboard.writeText('#<?= e((string) $lead['code']) ?>');this.classList.add('copied')">#<?= e((string) $lead['code']) ?></button><?php endif; ?>
-        <?php if ($hidePh): ?><button type="button" class="lead-phone btn-link" data-reveal="call" title="Call — opening the number is recorded"><?= e(crm_phone_mask($phone)) ?></button>
-        <?php else: ?><a href="tel:+<?= e($phone) ?>" class="lead-phone">+<?= e($phone) ?></a><?php endif; ?>
-        <?php if ($heatCls): ?>
-          <details class="lead-heat"><summary><span class="heat <?= $heatCls ?>" id="lead-score"><?= e($heatWord) ?> · <?= (int) $score ?></span></summary>
-            <div class="lead-heat-why"><strong>Why <?= (int) $score ?></strong>
-              <?php foreach ($why as [$label, $pts]): ?><div><span><?= e($label) ?></span><span class="num"><?= $pts > 0 && $label !== 'Starting point' ? '+' : '' ?><?= (int) $pts ?></span></div><?php endforeach; ?>
-            </div></details>
-        <?php endif; ?>
-        <?php if ($subs > 1): ?><span class="crm-flag" title="Filled in a form or came in again">Came in <?= $subs ?>×</span><?php endif; ?>
-        <?php if (!empty($lead['email'])): ?><a href="mailto:<?= e((string) $lead['email']) ?>" class="text-muted"><?= e((string) $lead['email']) ?></a><?php endif; ?>
-      </div>
-      <div class="lead-meta">
-        <span><span class="text-muted">Owner</span> <?= e(crm_user_name($lead['owner_user_id'] !== null ? (int) $lead['owner_user_id'] : null)) ?></span>
-        <span><span class="text-muted">Came from</span> <?= e(crm_source_label($lead['source'])) ?><?= !empty($lead['platform']) && crm_platform_label($lead['platform']) !== crm_source_label($lead['source']) ? ' · ' . e(crm_platform_label($lead['platform'])) : '' ?></span>
-        <?php if (!empty($lead['campaign'])): ?><span><span class="text-muted">Campaign</span> <?= e((string) $lead['campaign']) ?></span><?php endif; ?>
-        <?php if (!empty($lead['data_type'])): ?><span class="pill <?= $lead['data_type'] === 'fresh' ? 'green' : 'gray' ?>"><?= e(crm_data_types()[$lead['data_type']] ?? '') ?></span><?php endif; ?>
-        <?php if (!empty($lead['qualification'])): ?><span class="pill <?= $lead['qualification'] === 'qualified' ? 'blue' : 'red' ?>"><?= e(crm_qualifications()[$lead['qualification']] ?? '') ?></span><?php endif; ?>
-        <?php if (!empty($lead['project_id'])): ?><span><span class="text-muted">Project</span> <?= e((string) ($pnames[(int) $lead['project_id']] ?? '—')) ?></span><?php endif; ?>
-        <?php if (!empty($lead['unit_type'])): ?><span><span class="text-muted">Wants</span> <?= e((string) $lead['unit_type']) ?></span><?php endif; ?>
-        <?php if (!empty($lead['budget'])): ?><span><span class="text-muted">Budget</span> <?= e((string) $lead['budget']) ?></span><?php endif; ?>
-        <?php if (!empty($lead['payment_pref'])): ?><span><span class="text-muted">Pays</span> <?= $lead['payment_pref'] === 'cash' ? 'Cash' : 'Instalments' ?></span><?php endif; ?>
-        <?php if ($lead['deal_value'] !== null): ?><span><span class="text-muted">Value</span> <?= e(crm_money_fmt($lead['deal_value'], $cid)) ?></span><?php endif; ?>
-        <?php foreach ($cfields as $f_): $v_ = $custom[$f_['fkey']] ?? ''; if ($v_ === '' || !(int) $f_['active']) continue; ?><span><span class="text-muted"><?= e((string) $f_['label']) ?></span> <?= e(crm_custom_show($f_, $v_)) ?></span><?php endforeach; ?>
-        <span><span class="text-muted">Added</span> <?= e(date('j M Y', strtotime((string) $lead['created_at']))) ?></span>
+<div class="lead-layout">
+<div class="lead-main">
+
+  <!-- ═══ The lead: who, how to reach them, the details ═══ -->
+  <div class="card lead-hero">
+    <div class="lead-id">
+      <span class="lead-avatar" aria-hidden="true"><?= e($initials($title)) ?></span>
+      <div class="lead-id-text">
+        <?php page_head($title); ?>
+        <div class="lead-id-line">
+          <?php if (!empty($lead['code'])): ?><span class="text-muted">ID:</span><button type="button" class="lead-code" title="Copy the lead's code" onclick="navigator.clipboard&&navigator.clipboard.writeText('#<?= e((string) $lead['code']) ?>');this.classList.add('copied')">#<?= e((string) $lead['code']) ?></button><?php endif; ?>
+          <span class="lead-chip" title="How many times the lead passed from one person to another">⇄ <?= e(t('Transfers / rotations')) ?>: <?= (int) $rotations ?></span>
+          <?php if ($subs > 1): ?><span class="lead-chip" title="Filled in a form or came in again">Came in <?= $subs ?>×</span><?php endif; ?>
+          <?php if ($heatCls): ?>
+            <details class="lead-heat"><summary><span class="heat <?= $heatCls ?>" id="lead-score"><?= e($heatWord) ?> · <?= (int) $score ?></span></summary>
+              <div class="lead-heat-why"><strong>Why <?= (int) $score ?></strong>
+                <?php foreach ($why as [$label, $pts]): ?><div><span><?= e($label) ?></span><span class="num"><?= $pts > 0 && $label !== 'Starting point' ? '+' : '' ?><?= (int) $pts ?></span></div><?php endforeach; ?>
+              </div></details>
+          <?php endif; ?>
+        </div>
+        <div class="lead-id-line">
+          <span class="pill <?= ($lead['qualification'] ?? '') === 'qualified' ? 'blue' : (($lead['qualification'] ?? '') === 'not_qualified' ? 'red' : 'gray') ?>"><?= e(crm_qualifications()[$lead['qualification'] ?? ''] ?? 'Not set') ?></span>
+          <?php if (!empty($lead['data_type'])): ?><span class="pill <?= $lead['data_type'] === 'fresh' ? 'green' : 'gray' ?>"><?= e(crm_data_types()[$lead['data_type']] ?? '') ?></span><?php endif; ?>
+          <?php if ($curStage): ?><span class="pill <?= ['won' => 'blue', 'lost' => 'red'][$curStage['kind']] ?? 'gold' ?>"><?= e((string) $curStage['name']) ?><?= !empty($lead['substatus']) ? ' · ' . e((string) $lead['substatus']) : '' ?></span><?php endif; ?>
+        </div>
       </div>
     </div>
-    <div class="lead-actions">
-      <?php if ($hidePh): ?><button type="button" class="btn btn-ghost btn-sm" data-reveal="call">Call</button>
-      <?php else: ?><a class="btn btn-ghost btn-sm" href="tel:+<?= e($phone) ?>">Call</a><?php endif; ?>
-      <?php if (can_use('inbox')): ?><a class="btn btn-ghost btn-sm" href="inbox.php?contact=<?= $id ?>">Conversation</a><?php endif; ?>
-      <?php if ($hidePh): ?><button type="button" class="btn btn-ghost btn-sm" data-reveal="whatsapp">WhatsApp app</button>
-      <?php else: ?><a class="btn btn-ghost btn-sm" href="https://wa.me/<?= e($phone) ?>" target="_blank" rel="noopener">WhatsApp app</a><?php endif; ?>
+
+    <?php if (!empty($lead['lost_reason']) && in_array((int) $lead['stage_id'], $lostIds, true)): ?>
+      <p class="lead-lost"><?= e(t('Lost')) ?>: <strong><?= e((string) $lead['lost_reason']) ?></strong><?= !empty($lead['lost_note']) ? ' — ' . e((string) $lead['lost_note']) : '' ?></p>
+    <?php endif; ?>
+    <?php if ($lead['stage_id'] !== null): ?>
+    <form method="post" class="lead-stages" aria-label="Stage">
+      <?= csrf_field() ?><input type="hidden" name="action" value="stage"><input type="hidden" name="id" value="<?= $id ?>">
+      <?php $passed = true; foreach ($stages as $s):
+        $isCur = (int) $s['id'] === (int) $lead['stage_id'];
+        $cls = $isCur ? 'cur ' . $s['kind'] : ($passed && $s['kind'] === 'open' ? 'done' : '');
+        if ($isCur) $passed = false; ?>
+        <button name="stage_id" value="<?= (int) $s['id'] ?>" class="lead-stage <?= $cls ?>" <?= $canW ? '' : 'disabled' ?>
+                <?= $askLost && !$isCur && $s['kind'] === 'lost' ? 'type="button" data-lost="' . (int) $s['id'] . '"' : '' ?>
+                title="<?= $isCur ? 'Current stage' : 'Move to ' . e($s['name']) ?>"><?= e($s['name']) ?></button>
+      <?php endforeach; ?>
+    </form>
+    <?php if ($subList && !($curStage && $curStage['kind'] === 'lost')): ?>
+    <form method="post" class="lead-subs" aria-label="Sub-status">
+      <?= csrf_field() ?><input type="hidden" name="action" value="substatus"><input type="hidden" name="id" value="<?= $id ?>">
+      <span class="text-muted">Sub-status</span>
+      <?php foreach ($subList as $sl): $on = (string) ($lead['substatus'] ?? '') === $sl; ?>
+        <button name="substatus" value="<?= $on ? '' : e($sl) ?>" class="lead-sub <?= $on ? 'on' : '' ?>" <?= $canW ? '' : 'disabled' ?>
+                title="<?= $on ? 'Clear' : 'Set' ?>"><?= e($sl) ?></button>
+      <?php endforeach; ?>
+    </form>
+    <?php endif; ?>
+    <?php endif; ?>
+
+    <div class="lead-info">
+      <section>
+        <h3 class="lead-sec">Contact information</h3>
+        <dl class="lead-dl">
+          <dt>Phone</dt><dd><?php if ($hidePh): ?><button type="button" class="btn-link ltr lead-phone" data-reveal="call" title="Call — opening the number is recorded"><?= e(crm_phone_mask($phone)) ?></button>
+            <?php else: ?><a class="ltr lead-phone" href="tel:+<?= e($phone) ?>">+<?= e($phone) ?></a><?php endif; ?></dd>
+          <dt>Email</dt><dd><?= !empty($lead['email']) ? '<a href="mailto:' . e((string) $lead['email']) . '">' . e((string) $lead['email']) . '</a>' : '<span class="text-muted">—</span>' ?></dd>
+          <dt>Contact status</dt><dd><span class="pill <?= $contacted ? 'green' : 'gold' ?>"><?= $contacted ? 'Contacted' : 'Not contacted' ?></span></dd>
+          <dt>Last contact</dt><dd><?= e($ago($st['last'])) ?></dd>
+          <dt>Next follow-up</dt><dd><?= $due ? '<span class="' . ($dueState === 'late' ? 'text-danger' : '') . '">' . e(date('D j M, H:i', $due)) . '</span>' : '<span class="text-muted">Nothing planned</span>' ?></dd>
+          <dt>Notes</dt><dd><?= !empty($lead['followup_note']) ? e((string) $lead['followup_note']) : '<em class="text-muted">No notes</em>' ?></dd>
+        </dl>
+      </section>
+      <section>
+        <h3 class="lead-sec">Lead details</h3>
+        <dl class="lead-dl lead-meta">
+          <dt>Assigned to</dt><dd><span class="lead-tag"><?= e($ownerName) ?></span></dd>
+          <dt>Lead source</dt><dd><span class="lead-tag"><?= e(crm_source_label($lead['source'])) ?></span></dd>
+          <dt>Data</dt><dd><?= e(crm_data_types()[$lead['data_type'] ?? ''] ?? '—') ?></dd>
+          <dt>Qualification</dt><dd><?= e(crm_qualifications()[$lead['qualification'] ?? ''] ?? 'Not set') ?></dd>
+          <?php if (!empty($lead['platform'])): ?><dt>Platform</dt><dd><?= e(crm_platform_label($lead['platform'])) ?></dd><?php endif; ?>
+          <?php if (!empty($lead['campaign'])): ?><dt>Campaign</dt><dd><span class="lead-box"><?= e((string) $lead['campaign']) ?></span></dd><?php endif; ?>
+          <?php if (!empty($lead['ad_name'])): ?><dt>Ad</dt><dd><?= e((string) $lead['ad_name']) ?></dd><?php endif; ?>
+          <dt>Preferred project</dt><dd><?= !empty($lead['project_id']) ? e((string) ($pnames[(int) $lead['project_id']] ?? '—')) : '<span class="text-muted">—</span>' ?></dd>
+          <dt>Preferred type</dt><dd><?= !empty($lead['unit_type']) ? e((string) $lead['unit_type']) : '<span class="text-muted">—</span>' ?></dd>
+          <dt>Budget</dt><dd><?= !empty($lead['budget']) ? e((string) $lead['budget']) : '<span class="text-muted">—</span>' ?></dd>
+          <?php if (!empty($lead['payment_pref'])): ?><dt>Pays</dt><dd><?= $lead['payment_pref'] === 'cash' ? 'Cash' : 'Instalments' ?></dd><?php endif; ?>
+          <?php if ($lead['deal_value'] !== null): ?><dt>Deal value</dt><dd><?= e(crm_money_fmt($lead['deal_value'], $cid)) ?></dd><?php endif; ?>
+          <?php foreach ($cfields as $f_): $v_ = $custom[$f_['fkey']] ?? ''; if ($v_ === '' || !(int) $f_['active']) continue; ?>
+            <dt><?= e((string) $f_['label']) ?></dt><dd><?= e(crm_custom_show($f_, $v_)) ?></dd><?php endforeach; ?>
+        </dl>
+      </section>
     </div>
+
+    <h3 class="lead-sec">Timeline</h3>
+    <dl class="lead-dl lead-dl-inline">
+      <dt>Created</dt><dd><?= e(date('M j, Y, g:i A', strtotime((string) ($lead['crm_added_at'] ?: $lead['created_at'])))) ?></dd>
+      <dt>Created by</dt><dd><?= e($createdBy && $createdBy['user_id'] ? $who($createdBy['user_id']) : crm_source_label($lead['source'])) ?></dd>
+      <?php if (!empty($lead['assigned_at'])): ?><dt>Assigned</dt><dd><?= e(date('M j, Y, g:i A', strtotime((string) $lead['assigned_at']))) ?></dd><?php endif; ?>
+    </dl>
   </div>
 
-  <?php if (!empty($lead['lost_reason']) && in_array((int) $lead['stage_id'], $lostIds, true)): ?>
-    <p class="lead-lost">Lost: <strong><?= e((string) $lead['lost_reason']) ?></strong><?= !empty($lead['lost_note']) ? ' — ' . e((string) $lead['lost_note']) : '' ?></p>
-  <?php endif; ?>
-  <?php if ($lead['stage_id'] !== null): ?>
-  <form method="post" class="lead-stages" aria-label="Stage">
-    <?= csrf_field() ?><input type="hidden" name="action" value="stage"><input type="hidden" name="id" value="<?= $id ?>">
-    <?php $passed = true; foreach ($stages as $s):
-      $isCur = (int) $s['id'] === (int) $lead['stage_id'];
-      $cls = $isCur ? 'cur ' . $s['kind'] : ($passed && $s['kind'] === 'open' ? 'done' : '');
-      if ($isCur) $passed = false; ?>
-      <button name="stage_id" value="<?= (int) $s['id'] ?>" class="lead-stage <?= $cls ?>" <?= $canW ? '' : 'disabled' ?>
-              <?= $askLost && !$isCur && $s['kind'] === 'lost' ? 'type="button" data-lost="' . (int) $s['id'] . '"' : '' ?>
-              title="<?= $isCur ? 'Current stage' : 'Move to ' . e($s['name']) ?>"><?= e($s['name']) ?></button>
-    <?php endforeach; ?>
-  </form>
-  <?php if ($subList): ?>
-  <form method="post" class="lead-subs" aria-label="Sub-status">
-    <?= csrf_field() ?><input type="hidden" name="action" value="substatus"><input type="hidden" name="id" value="<?= $id ?>">
-    <span class="text-muted">Sub-status</span>
-    <?php if ($curStage && $curStage['kind'] === 'lost'): ?>
-      <span class="pill red"><?= e((string) ($lead['substatus'] ?: ($lead['lost_reason'] ?? '—'))) ?></span>
-    <?php else: foreach ($subList as $sl): $on = (string) ($lead['substatus'] ?? '') === $sl; ?>
-      <button name="substatus" value="<?= $on ? '' : e($sl) ?>" class="lead-sub <?= $on ? 'on' : '' ?>" <?= $canW ? '' : 'disabled' ?>
-              title="<?= $on ? 'Clear' : 'Set' ?>"><?= e($sl) ?></button>
-    <?php endforeach; endif; ?>
-  </form>
-  <?php endif; ?>
-  <?php endif; ?>
-</div>
-
-<div class="lead-grid">
-  <div class="lead-col">
-
-    <!-- The conversation in a few lines -->
-    <?php if ($aiOn || !empty($lead['ai_summary'])): ?>
-    <div class="card ai-card" id="ai">
-      <div class="row-between" style="flex-wrap:wrap;gap:8px"><h2 style="margin:0;border:0;padding:0">Summary</h2>
-        <?php if ($aiOn && $canW): ?><button type="button" class="btn-link" id="ai-refresh">Read the chat again</button><?php endif; ?></div>
-      <div id="ai-body">
-        <?php if (!empty($lead['ai_summary'])): ?>
-          <p class="ai-summary" id="ai-summary"><?= nl2br(e((string) $lead['ai_summary'])) ?></p>
-        <?php elseif (!$aiStale): ?>
-          <p class="text-muted" style="font-size:13px;margin:8px 0 0">A summary appears once the lead has written to you.</p>
-        <?php endif; ?>
-      </div>
-      <div class="ai-facts" id="ai-facts">
-        <?php foreach (['interest' => 'Interest', 'next_step' => 'Next step', 'budget' => 'Budget', 'unit_type' => 'Wants', 'payment' => 'Pays'] as $k => $l):
-          if (empty($aiFacts[$k])) continue; ?>
-          <span class="ai-fact <?= $k === 'next_step' ? 'wide' : '' ?>"><span class="text-muted"><?= $l ?></span> <?= e($k === 'payment' ? ($aiFacts[$k] === 'cash' ? 'Cash' : 'Instalments') : ucfirst((string) $aiFacts[$k])) ?></span>
-        <?php endforeach; ?>
-      </div>
-      <p class="text-muted ai-when" id="ai-when"><?= !empty($lead['ai_summary_at']) ? 'Read by AI ' . e(date('j M, H:i', strtotime((string) $lead['ai_summary_at']))) . ' — check anything important in the chat.' : '' ?></p>
-    </div>
-    <?php endif; ?>
-
-    <!-- What happens next -->
-    <div class="card lead-next <?= $dueState ?>" id="next">
-      <h2>Next follow-up</h2>
-      <?php if ($due): ?>
-        <div class="lead-next-when">
-          <strong><?= e(date('D j M, H:i', $due)) ?></strong>
-          <span class="pill <?= $dueState === 'late' ? 'red' : ($dueState === 'today' ? 'gold' : 'gray') ?>">
-            <?= $dueState === 'late' ? 'Overdue' : ($dueState === 'today' ? 'Today' : 'Upcoming') ?></span>
-        </div>
-        <?php if (!empty($lead['followup_note'])): ?><p class="lead-next-note"><?= e((string) $lead['followup_note']) ?></p><?php endif; ?>
-        <?php if ($canW): ?>
-        <div style="display:flex;gap:8px;flex-wrap:wrap" class="mt10">
-          <form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="followup_done"><input type="hidden" name="id" value="<?= $id ?>">
-            <button class="btn btn-primary btn-sm">Mark done</button></form>
-          <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('fu-edit').hidden=false;this.hidden=true">Change</button>
-        </div>
-        <?php endif; ?>
-      <?php else: ?>
-        <p class="text-muted" style="margin:0 0 8px">Nothing planned. Leads with a next step get followed up; leads without one get forgotten.</p>
-      <?php endif; ?>
-      <?php if ($canW): ?>
-      <form method="post" id="fu-edit" class="mt10" <?= $due ? 'hidden' : '' ?>>
-        <?= csrf_field() ?><input type="hidden" name="action" value="followup"><input type="hidden" name="id" value="<?= $id ?>">
-        <div class="lead-quick" data-for="fu-at"></div>
-        <div class="grid2">
-          <div class="field"><span class="lbl">Date and time</span><input type="datetime-local" name="next_at" id="fu-at" required></div>
-          <div class="field"><span class="lbl">What for</span><input type="text" name="next_note" maxlength="255" placeholder="Send the payment plan"></div>
-        </div>
-        <button class="btn btn-primary btn-sm">Set follow-up</button>
-      </form>
+  <!-- ═══ The conversation in a few lines ═══ -->
+  <?php if ($aiOn || !empty($lead['ai_summary'])): ?>
+  <div class="card ai-card" id="ai">
+    <div class="row-between" style="flex-wrap:wrap;gap:8px"><h2 style="margin:0;border:0;padding:0">AI summary</h2>
+      <?php if ($aiOn && $canW): ?><button type="button" class="btn-link" id="ai-refresh">Read the chat again</button><?php endif; ?></div>
+    <div id="ai-body">
+      <?php if (!empty($lead['ai_summary'])): ?>
+        <p class="ai-summary" id="ai-summary"><?= nl2br(e((string) $lead['ai_summary'])) ?></p>
+      <?php elseif (!$aiStale): ?>
+        <p class="text-muted" style="font-size:13px;margin:8px 0 0">A summary appears once the lead has written to you.</p>
       <?php endif; ?>
     </div>
-
-    <!-- Site visits -->
-    <?php if (can_crm('visits')): ?>
-    <div class="card" id="visits">
-      <div class="row-between" style="flex-wrap:wrap;gap:8px"><h2 style="margin:0;border:0;padding:0">Visits and meetings</h2>
-        <?php if ($canW): ?><button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('visit-form').hidden=false;this.hidden=true">+ Book a visit or meeting</button><?php endif; ?></div>
-      <?php if (!$visits): ?><p class="text-muted" style="margin:8px 0 0;font-size:13px">No visits yet.</p><?php endif; ?>
-      <?php foreach ($visits as $v): $past = strtotime((string) $v['starts_at']) < time(); ?>
-        <div class="visit-row <?= e((string) $v['status']) ?>">
-          <div><strong><?= e(date('D j M, H:i', strtotime((string) $v['starts_at']))) ?></strong>
-            <?php $isOnline = ($v['kind'] ?? 'site') === 'online'; if ($isOnline): ?><span class="pill blue">Online</span><?php endif; ?>
-            <span class="pill <?= ['scheduled' => $past ? 'gold' : 'blue', 'done' => 'green', 'no_show' => 'red', 'cancelled' => 'gray'][$v['status']] ?>">
-              <?= e($v['status'] === 'scheduled' && $past ? 'How did it go?' : crm_visit_statuses()[$v['status']]) ?></span>
-            <span class="text-muted" style="display:block;font-size:12.5px"><?= e(implode(' · ', array_filter([
-                $v['project_id'] ? ($pnames[(int) $v['project_id']] ?? '') : '', $isOnline ? '' : (string) ($v['place'] ?? ''), $v['host'] ? 'with ' . $v['host'] : '']))) ?></span>
-            <?php if ($isOnline && !empty($v['meet_url'])): ?><a class="meet-link" href="<?= e((string) $v['meet_url']) ?>" target="_blank" rel="noopener noreferrer"><?= e((string) $v['meet_url']) ?></a><?php endif; ?>
-            <?php if (!empty($v['notes'])): ?><span style="display:block;font-size:12.5px"><?= e((string) $v['notes']) ?></span><?php endif; ?></div>
-          <?php if ($canW && $v['status'] === 'scheduled'): ?>
-          <div class="visit-acts">
-            <?php foreach (($past ? ['visit_done' => 'Came', 'visit_no_show' => 'Didn\'t come'] : []) + ['visit_cancel' => 'Cancel'] as $act => $lbl): ?>
-              <form method="post" <?= $act === 'visit_cancel' ? 'onsubmit="return confirm(\'Cancel this visit?\')"' : '' ?>><?= csrf_field() ?>
-                <input type="hidden" name="action" value="<?= $act ?>"><input type="hidden" name="id" value="<?= $id ?>"><input type="hidden" name="visit" value="<?= (int) $v['id'] ?>">
-                <button class="<?= $act === 'visit_done' ? 'btn btn-primary btn-sm' : ($act === 'visit_cancel' ? 'btn-link' : 'btn btn-ghost btn-sm') ?>"><?= $lbl ?></button></form>
-            <?php endforeach; ?>
-            <?php if (!$past): ?>
-              <details class="visit-move"><summary class="btn-link">Move</summary>
-                <form method="post" class="visit-move-form"><?= csrf_field() ?><input type="hidden" name="action" value="visit_move"><input type="hidden" name="id" value="<?= $id ?>"><input type="hidden" name="visit" value="<?= (int) $v['id'] ?>">
-                  <input type="date" name="visit_date" value="<?= e(date('Y-m-d', strtotime((string) $v['starts_at']))) ?>" required>
-                  <input type="time" name="visit_time" value="<?= e(date('H:i', strtotime((string) $v['starts_at']))) ?>" step="900" required>
-                  <button class="btn btn-ghost btn-sm">Save</button></form></details>
-            <?php endif; ?>
-          </div>
-          <?php endif; ?>
-        </div>
-      <?php endforeach; ?>
-      <?php if ($canW): ?>
-      <form method="post" id="visit-form" class="mt10" hidden>
-        <?= csrf_field() ?><input type="hidden" name="action" value="visit_book"><input type="hidden" name="id" value="<?= $id ?>">
-        <div class="lead-quick" style="margin-bottom:8px">
-          <label class="act-kind"><input type="radio" name="kind" value="site" checked onchange="visitKind()"><span>Site visit</span></label>
-          <label class="act-kind"><input type="radio" name="kind" value="online" onchange="visitKind()"><span>Online meeting</span></label>
-        </div>
-        <div class="grid2">
-          <div class="field"><span class="lbl">Date</span><input type="date" name="visit_date" min="<?= date('Y-m-d') ?>" required></div>
-          <div class="field"><span class="lbl">Time</span><input type="time" name="visit_time" step="900" value="11:00" required></div>
-          <div class="field"><span class="lbl">Project</span><select name="project_id" id="visit-project"><option value="0">—</option>
-            <?php foreach ($projects as $p_): if (!(int) $p_['active']) continue; ?><option value="<?= (int) $p_['id'] ?>" data-addr="<?= e((string) ($p_['address'] ?? '')) ?>" <?= (int) $p_['id'] === (int) ($lead['project_id'] ?? 0) ? 'selected' : '' ?>><?= e($p_['name']) ?></option><?php endforeach; ?></select></div>
-          <div class="field" id="visit-where"><span class="lbl">Where</span><input type="text" name="place" id="visit-place" maxlength="255"
-               value="<?= e($projAddr[(int) ($lead['project_id'] ?? 0)] ?? '') ?>" placeholder="Sales office, or a map link"></div>
-          <div class="field" id="visit-meet" hidden><span class="lbl">Meeting link</span><input type="url" name="meet_url" maxlength="500"
-               placeholder="Leave empty to create one"></div>
-          <?php if ($isAdmin): ?>
-          <div class="field"><span class="lbl">Who meets them</span><select name="host"><option value="0">The lead's owner</option>
-            <?php foreach ($people as $u): ?><option value="<?= (int) $u['id'] ?>"><?= e($u['name']) ?></option><?php endforeach; ?></select></div>
-          <?php endif; ?>
-          <div class="field"><span class="lbl">Note</span><input type="text" name="notes" maxlength="500" placeholder="Wants to see the 3-bed model"></div>
-        </div>
-        <?php if ((int) $vs['visit_confirm_tpl']): ?>
-          <label class="mod-all"><input type="checkbox" name="confirm" value="1" checked> Send them a WhatsApp confirmation</label>
-        <?php elseif ($isAdmin): ?>
-          <p class="text-muted" style="font-size:12px">To confirm visits on WhatsApp automatically, choose the templates in <a href="crm_messages.php#visit-msgs">Automatic messages</a>.</p>
-        <?php endif; ?>
-        <button class="btn btn-primary btn-sm mt10" id="visit-go">Book visit</button>
-      </form>
-      <script>
-      function visitKind(){
-        const on = document.querySelector('#visit-form input[name=kind][value=online]').checked;
-        document.getElementById('visit-where').hidden = on; document.getElementById('visit-meet').hidden = !on;
-        document.getElementById('visit-go').textContent = on ? 'Book meeting' : 'Book visit';
-      }
-      </script>
-      <?php endif; ?>
-    </div>
-    <?php endif; ?>
-
-    <!-- Log what happened -->
-    <?php if ($canW): ?>
-    <div class="card" id="log">
-      <h2>Log activity</h2>
-      <form method="post" id="act-form">
-        <?= csrf_field() ?><input type="hidden" name="action" value="activity"><input type="hidden" name="id" value="<?= $id ?>">
-        <div class="act-kinds" role="radiogroup" aria-label="What did you do">
-          <?php foreach ($kinds as $k => $label): ?>
-            <label class="act-kind"><input type="radio" name="kind" value="<?= $k ?>" <?= $k === 'call' ? 'checked' : '' ?>>
-              <span><?= e($label) ?></span></label>
-          <?php endforeach; ?>
-        </div>
-        <div class="field" id="act-outcome-wrap"><span class="lbl">How did it go</span>
-          <select name="outcome"><option value="">—</option>
-            <?php foreach ($outcomes as $k => $label): ?><option value="<?= $k ?>"><?= e($label) ?></option><?php endforeach; ?></select></div>
-        <?php if ($subList && !($curStage && $curStage['kind'] === 'lost')): ?>
-        <div class="field"><span class="lbl">Sub-status</span><select name="substatus" id="act-sub">
-          <?php foreach (array_merge([''], $subList) as $sl): ?><option value="<?= e($sl) ?>" <?= (string) ($lead['substatus'] ?? '') === $sl ? 'selected' : '' ?>><?= $sl === '' ? '—' : e($sl) ?></option><?php endforeach; ?></select></div>
-        <?php endif; ?>
-        <div class="field"><span class="lbl" id="act-body-lbl">Comment</span>
-          <textarea name="body" rows="3" placeholder="What was said, what they want, objections…"></textarea></div>
-        <details class="act-more" <?= $due ? '' : 'open' ?>>
-          <summary>Next follow-up and stage</summary>
-          <div class="lead-quick" data-for="act-next"></div>
-          <div class="grid2">
-            <div class="field"><span class="lbl">Next follow-up</span><input type="datetime-local" name="next_at" id="act-next"></div>
-            <div class="field"><span class="lbl">What for</span><input type="text" name="next_note" maxlength="255" placeholder="Call back with prices"></div>
-          </div>
-          <?php if ($due): ?><label class="mod-all" style="font-size:13px"><input type="checkbox" name="clear_followup" value="1"> The current follow-up is done — clear it</label><?php endif; ?>
-          <?php if ($lead['stage_id'] !== null): ?>
-          <div class="field"><span class="lbl">Move to stage</span><select name="stage_id">
-            <?php foreach ($stages as $s): ?><option value="<?= (int) $s['id'] ?>" <?= (int) $s['id'] === (int) $lead['stage_id'] ? 'selected' : '' ?>><?= e($s['name']) ?><?= (int) $s['id'] === (int) $lead['stage_id'] ? ' (current)' : '' ?></option><?php endforeach; ?>
-          </select></div>
-          <div class="field" id="act-sub-new" hidden><span class="lbl">Sub-status in the new stage</span><select name="substatus_new"></select></div>
-          <div class="grid2" id="act-lost" hidden>
-            <div class="field"><span class="lbl">Why was it lost?</span><select name="lost_reason"><option value="">Choose a reason…</option>
-              <?php foreach ($reasons as $r): ?><option><?= e($r) ?></option><?php endforeach; ?></select></div>
-            <div class="field"><span class="lbl">Anything to add</span><input name="lost_note" maxlength="255" placeholder="Bought in another compound"></div>
-          </div>
-          <?php endif; ?>
-        </details>
-        <button class="btn btn-primary mt10">Save activity</button>
-      </form>
-    </div>
-    <?php endif; ?>
-
-    <!-- Send on WhatsApp -->
-    <?php if ($canW && can_use('inbox')): ?>
-    <div class="card lead-send">
-      <h2>Send on WhatsApp</h2>
-      <?php if (!$snd['ok']): ?>
-        <div class="note warn" id="lead-nosend"><?= e($snd['error']) ?>
-          <?php if ($snd['via'] === 'own'): ?> <a href="my_whatsapp.php">Open My WhatsApp</a><?php endif; ?></div>
-      <?php elseif (!$sendOpen): ?>
-        <div class="note warn" id="lead-nosend">It has been more than 24 hours since this lead last wrote, so WhatsApp only
-          allows an approved template from <?= e($viaText) ?>.
-          <a href="inbox.php?contact=<?= $id ?>">Send a template from the conversation</a></div>
-      <?php else: ?>
-        <form method="post" id="lead-send">
-          <?= csrf_field() ?><input type="hidden" name="action" value="send"><input type="hidden" name="id" value="<?= $id ?>">
-          <textarea name="message" id="send-text" rows="3" placeholder="Message on WhatsApp…" required></textarea>
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap" class="mt10">
-            <button class="btn btn-primary btn-sm">Send on WhatsApp</button>
-            <?php if ($aiOn): ?><button type="button" class="btn btn-ghost btn-sm" id="ai-suggest" title="Write a reply from the conversation — check it before sending">Suggest a reply</button><?php endif; ?>
-            <span class="text-muted" style="font-size:12px">Goes out from <?= e($viaText) ?></span>
-          </div>
-        </form>
-      <?php endif; ?>
-    </div>
-    <?php endif; ?>
-
-    <!-- The lead's details -->
-    <details class="card lead-details" <?= $err && ($_POST['action'] ?? '') === 'save' ? 'open' : '' ?>>
-      <summary><h2 style="display:inline;border:0;margin:0;padding:0">Details</h2></summary>
-      <form method="post" class="mt10">
-        <?= csrf_field() ?><input type="hidden" name="action" value="save"><input type="hidden" name="id" value="<?= $id ?>">
-        <fieldset <?= $canW ? '' : 'disabled' ?> style="border:0;padding:0;margin:0">
-        <div class="grid2">
-          <div class="field"><span class="lbl">Name</span><input name="name" value="<?= e((string) $lead['name']) ?>"></div>
-          <div class="field"><span class="lbl">Email</span><input name="email" type="email" value="<?= e((string) ($lead['email'] ?? '')) ?>"></div>
-          <div class="field"><span class="lbl">Deal value</span><input name="deal_value" inputmode="decimal" autocomplete="off"
-               value="<?= $lead['deal_value'] !== null ? e(number_format((float) $lead['deal_value'], 0, '.', '')) : '' ?>"></div>
-          <div class="field"><span class="lbl">Project</span><select name="project_id"><option value="0">—</option>
-            <?php foreach ($projects as $p): if (!(int) $p['active'] && (int) $p['id'] !== (int) ($lead['project_id'] ?? 0)) continue; ?>
-              <option value="<?= (int) $p['id'] ?>" <?= (int) $p['id'] === (int) ($lead['project_id'] ?? 0) ? 'selected' : '' ?>><?= e($p['name']) ?></option><?php endforeach; ?></select>
-            <?php if (!$projects && $isAdmin): ?><span class="text-muted" style="font-size:12px"><a href="crm_setup.php">Add your projects</a></span><?php endif; ?></div>
-          <div class="field"><span class="lbl">Unit type</span><select name="unit_type"><option value="">—</option>
-            <?php $ut = (string) ($lead['unit_type'] ?? ''); foreach (array_unique(array_merge($units, $ut !== '' ? [$ut] : [])) as $u): ?>
-              <option <?= $u === $ut ? 'selected' : '' ?>><?= e($u) ?></option><?php endforeach; ?></select></div>
-          <div class="field"><span class="lbl">Budget</span><input name="budget" maxlength="80" value="<?= e((string) ($lead['budget'] ?? '')) ?>" placeholder="5–7M"></div>
-          <div class="field"><span class="lbl">Paying</span><select name="payment_pref"><option value="">—</option>
-            <option value="cash" <?= ($lead['payment_pref'] ?? '') === 'cash' ? 'selected' : '' ?>>Cash</option>
-            <option value="installments" <?= ($lead['payment_pref'] ?? '') === 'installments' ? 'selected' : '' ?>>Instalments</option></select></div>
-          <div class="field"><span class="lbl">Qualification</span><select name="qualification"><option value="">Not decided</option>
-            <?php foreach (crm_qualifications() as $k => $l): ?><option value="<?= $k ?>" <?= ($lead['qualification'] ?? '') === $k ? 'selected' : '' ?>><?= e($l) ?></option><?php endforeach; ?></select></div>
-          <?php if ($isAdmin): ?>
-          <div class="field"><span class="lbl">Data</span><select name="data_type">
-            <?php foreach (crm_data_types() as $k => $l): ?><option value="<?= $k ?>" <?= ($lead['data_type'] ?? 'fresh') === $k ? 'selected' : '' ?>><?= e($l) ?></option><?php endforeach; ?></select></div>
-          <?php endif; ?>
-          <?php foreach ($cfields as $f_): if (!(int) $f_['active']) continue; $v_ = (string) ($custom[$f_['fkey']] ?? ''); $nm = 'cf[' . e((string) $f_['fkey']) . ']'; ?>
-          <div class="field"><span class="lbl"><?= e((string) $f_['label']) ?></span>
-            <?php if ($f_['type'] === 'list'): ?><select name="<?= $nm ?>"><option value="">—</option>
-              <?php foreach (array_unique(array_merge($f_['choices'], $v_ !== '' ? [$v_] : [])) as $ch): ?><option <?= $ch === $v_ ? 'selected' : '' ?>><?= e($ch) ?></option><?php endforeach; ?></select>
-            <?php elseif ($f_['type'] === 'date'): ?><input type="date" name="<?= $nm ?>" value="<?= e($v_) ?>">
-            <?php elseif ($f_['type'] === 'number'): ?><input name="<?= $nm ?>" inputmode="decimal" autocomplete="off" value="<?= e($v_) ?>">
-            <?php else: ?><input name="<?= $nm ?>" maxlength="255" value="<?= e($v_) ?>"><?php endif; ?></div>
-          <?php endforeach; ?>
-          <div class="field"><span class="lbl">Owner</span>
-            <?php if ($isAdmin): ?>
-              <select name="owner"><option value="none" <?= $lead['owner_user_id'] === null ? 'selected' : '' ?>>Unassigned</option>
-                <option value="auto">Next in rotation</option>
-                <?php foreach ($people as $u): ?><option value="<?= (int) $u['id'] ?>" <?= (int) $u['id'] === (int) $lead['owner_user_id'] ? 'selected' : '' ?>><?= e($u['name']) ?></option><?php endforeach; ?>
-              </select>
-            <?php else: ?>
-              <input value="<?= e(crm_user_name($lead['owner_user_id'] !== null ? (int) $lead['owner_user_id'] : null)) ?>" disabled>
-            <?php endif; ?></div>
-        </div>
-        <?php if ($canW): ?><button class="btn btn-primary btn-sm">Save details</button><?php endif; ?>
-        </fieldset>
-      </form>
-      <?php $attrs = json_decode((string) ($lead['attributes'] ?? ''), true) ?: []; if ($attrs): ?>
-        <h3 style="margin:16px 0 6px;font-size:13px">Answers and extra details</h3>
-        <table class="data"><tbody>
-          <?php foreach ($attrs as $k => $v): ?><tr><td class="text-muted" style="width:40%"><?= e((string) $k) ?></td><td><?= e(is_scalar($v) ? (string) $v : json_encode($v)) ?></td></tr><?php endforeach; ?>
-        </tbody></table>
-      <?php endif; ?>
-      <?php if ($lead['stage_id'] !== null && $canW): ?>
-        <?php if ($canDel): ?>
-        <form method="post" class="mt10" onsubmit="return confirm('Delete this lead? It goes to the recycle bin and can be brought back for 30 days.')">
-          <?= csrf_field() ?><input type="hidden" name="action" value="delete"><input type="hidden" name="id" value="<?= $id ?>">
-          <button class="btn-link" style="color:var(--danger)">Delete lead</button></form>
-        <?php elseif ($pendingDel): ?>
-          <p class="text-muted mt10" style="font-size:12.5px">You asked a manager to delete this lead — waiting for their answer.</p>
-        <?php else: ?>
-        <details class="mt10"><summary class="btn-link" style="color:var(--danger)">Ask to delete</summary>
-          <form method="post" class="mt10"><?= csrf_field() ?><input type="hidden" name="action" value="delete_request"><input type="hidden" name="id" value="<?= $id ?>">
-            <div class="field"><span class="lbl">Why should it go?</span><input name="reason" maxlength="255" required placeholder="Duplicate of another lead / test / wrong number"></div>
-            <button class="btn btn-ghost btn-sm">Send to a manager</button></form></details>
-        <?php endif; ?>
-      <?php endif; ?>
-    </details>
-
-    <?php if ($runs && $isAdmin): ?>
-    <!-- Automatic follow-ups this lead is in — a manager's view; salespeople do not see or stop them -->
-    <div class="card" id="seq-runs">
-      <h2>Automatic follow-up</h2>
-      <?php foreach ($runs as $r): ?>
-        <div class="dup-row">
-          <div><strong><?= e((string) $r['name']) ?></strong>
-            <span class="text-muted" style="display:block;font-size:12px">
-              <?php if ($r['status'] === 'active'): ?>Sent <?= (int) $r['step_idx'] ?> of <?= (int) $r['steps'] ?> · next <?= e(date('D j M, H:i', strtotime((string) $r['next_at']))) ?>
-              <?php elseif ($r['status'] === 'done'): ?>All <?= (int) $r['steps'] ?> sent
-              <?php else: ?>Stopped — <?= e((string) $r['stop_reason']) ?><?php endif; ?></span></div>
-          <?php if ($r['status'] === 'active'): ?>
-          <form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="seq_stop"><input type="hidden" name="id" value="<?= $id ?>"><input type="hidden" name="seq" value="<?= (int) $r['sequence_id'] ?>">
-            <button class="btn btn-ghost btn-sm">Stop</button></form>
-          <?php endif; ?>
-        </div>
+    <div class="ai-facts" id="ai-facts">
+      <?php foreach (['interest' => 'Interest', 'next_step' => 'Next step', 'budget' => 'Budget', 'unit_type' => 'Wants', 'payment' => 'Pays'] as $k => $l):
+        if (empty($aiFacts[$k])) continue; ?>
+        <span class="ai-fact <?= $k === 'next_step' ? 'wide' : '' ?>"><span class="text-muted"><?= $l ?></span> <?= e($k === 'payment' ? ($aiFacts[$k] === 'cash' ? 'Cash' : 'Instalments') : ucfirst((string) $aiFacts[$k])) ?></span>
       <?php endforeach; ?>
     </div>
-    <?php endif; ?>
-
-    <?php if ($dups): ?>
-    <!-- Probably the same person -->
-    <div class="card" id="dups">
-      <h2>Possible duplicates</h2>
-      <p class="text-muted" style="font-size:12.5px;margin-top:-4px">Same name, email, or the same number written another way.
-        <?= $isAdmin ? 'Merging moves their messages, notes and answers onto this lead and removes the other one.' : 'An Admin can merge them.' ?></p>
-      <?php foreach ($dups as $d): ?>
-        <div class="dup-row">
-          <div><a href="crm_lead.php?id=<?= (int) $d['id'] ?>"><strong><?= e((string) ($d['name'] ?: crm_phone_show((string) $d['phone_e164']))) ?></strong></a>
-            <span class="text-muted" style="display:block;font-size:12px"><?= e(crm_phone_show((string) $d['phone_e164'])) ?><?= $d['email'] ? ' · ' . e((string) $d['email']) : '' ?>
-              · <?= e($d['stage_name'] ?: 'Not in the pipeline') ?> · <?= e(crm_user_name($d['owner_user_id'] !== null ? (int) $d['owner_user_id'] : null)) ?></span></div>
-          <?php if ($isAdmin): ?>
-          <form method="post" onsubmit="return confirm('Merge this contact into the lead you are looking at? The other one will be removed.')">
-            <?= csrf_field() ?><input type="hidden" name="action" value="merge"><input type="hidden" name="id" value="<?= $id ?>"><input type="hidden" name="other" value="<?= (int) $d['id'] ?>">
-            <button class="btn btn-ghost btn-sm">Merge into this lead</button></form>
-          <?php endif; ?>
-        </div>
-      <?php endforeach; ?>
-    </div>
-    <?php endif; ?>
+    <p class="text-muted ai-when" id="ai-when"><?= !empty($lead['ai_summary_at']) ? 'Read by AI ' . e(date('j M, H:i', strtotime((string) $lead['ai_summary_at']))) . ' — check anything important in the chat.' : '' ?></p>
   </div>
+  <?php endif; ?>
 
-  <!-- Everything that happened -->
+  <!-- ═══ Activity & chat history ═══ -->
   <div class="card" id="timeline">
-    <div class="row-between" style="flex-wrap:wrap;gap:8px">
-      <h2 style="margin:0;border:0;padding:0">Timeline</h2>
-      <div class="lead-filter" role="tablist">
-        <button type="button" class="on" data-f="all">All</button>
-        <button type="button" data-f="activity">Activities <?= !empty($counts['activity']) ? '(' . $counts['activity'] . ')' : '' ?></button>
-        <button type="button" data-f="messages">Messages <?= !empty($counts['messages']) ? '(' . $counts['messages'] . ')' : '' ?></button>
-        <button type="button" data-f="history">History</button>
-      </div>
+    <h2 class="lead-card-h"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 10h3.5l2.5-6 4 12 2.5-6H18"/></svg> Activity &amp; chat history</h2>
+    <div class="lead-tabs lead-filter" role="tablist">
+      <button type="button" class="on" data-f="all"><?= e(t('All')) ?> (<?= count($feed) ?>)</button>
+      <button type="button" data-f="activity"><?= e(t('Activities')) ?> (<?= (int) ($counts['activity'] ?? 0) ?>)</button>
+      <button type="button" data-f="messages"><?= e(t('Messages')) ?> (<?= (int) ($counts['messages'] ?? 0) ?>)</button>
+      <button type="button" data-f="history"><?= e(t('Changes')) ?> (<?= (int) ($counts['history'] ?? 0) ?>)</button>
     </div>
     <div class="lead-feed mt10">
-      <?php if (!$feed): ?><p class="text-muted">Nothing yet.</p><?php endif; ?>
+      <p class="lead-empty" <?= $feed ? 'hidden' : '' ?>><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><br>No activities recorded for this lead</p>
       <?php foreach ($feed as $it): $when = date('j M, H:i', strtotime((string) $it['t'])); ?>
         <?php if ($it['kind'] === 'msg'): ?>
           <div class="lead-item lead-msg <?= $it['dir'] === 'out' ? 'out' : 'in' ?>" data-g="messages">
@@ -770,7 +572,415 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
       <?php endforeach; ?>
     </div>
   </div>
+
+  <!-- ═══ Online meetings and site visits ═══ -->
+  <?php if (can_crm('visits')): ?>
+  <div class="card" id="visits">
+    <div class="row-between" style="flex-wrap:wrap;gap:8px">
+      <h2 class="lead-card-h"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="11" height="10" rx="2"/><path d="M13 9l5-3v8l-5-3z"/></svg> Meetings &amp; visits</h2>
+      <?php if ($canW): ?><div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button type="button" class="btn btn-dark btn-sm" data-book="online">+ Online meeting</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-book="site">+ Book a visit</button></div><?php endif; ?>
+    </div>
+    <?php if (!$visits): ?><p class="lead-empty"><svg width="34" height="34" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="11" height="10" rx="2"/><path d="M13 9l5-3v8l-5-3z"/></svg><br>No meetings or visits yet</p><?php endif; ?>
+    <?php foreach ($visits as $v): $past = strtotime((string) $v['starts_at']) < time(); ?>
+      <div class="visit-row <?= e((string) $v['status']) ?>">
+        <div><strong><?= e(date('D j M, H:i', strtotime((string) $v['starts_at']))) ?></strong>
+          <?php $isOnline = ($v['kind'] ?? 'site') === 'online'; ?><span class="pill <?= $isOnline ? 'blue' : 'gray' ?>"><?= $isOnline ? 'Online' : 'Site visit' ?></span>
+          <span class="pill <?= ['scheduled' => $past ? 'gold' : 'blue', 'done' => 'green', 'no_show' => 'red', 'cancelled' => 'gray'][$v['status']] ?>">
+            <?= e($v['status'] === 'scheduled' && $past ? 'How did it go?' : crm_visit_statuses()[$v['status']]) ?></span>
+          <span class="text-muted" style="display:block;font-size:12.5px"><?= e(implode(' · ', array_filter([
+              $v['project_id'] ? ($pnames[(int) $v['project_id']] ?? '') : '', $isOnline ? '' : (string) ($v['place'] ?? ''), $v['host'] ? 'with ' . $v['host'] : '']))) ?></span>
+          <?php if ($isOnline && !empty($v['meet_url'])): ?><a class="meet-link" href="<?= e((string) $v['meet_url']) ?>" target="_blank" rel="noopener noreferrer"><?= e((string) $v['meet_url']) ?></a><?php endif; ?>
+          <?php if (!empty($v['notes'])): ?><span style="display:block;font-size:12.5px"><?= e((string) $v['notes']) ?></span><?php endif; ?></div>
+        <?php if ($canW && $v['status'] === 'scheduled'): ?>
+        <div class="visit-acts">
+          <?php foreach (($past ? ['visit_done' => 'Came', 'visit_no_show' => 'Didn\'t come'] : []) + ['visit_cancel' => 'Cancel'] as $act => $lbl): ?>
+            <form method="post" <?= $act === 'visit_cancel' ? 'onsubmit="return confirm(\'Cancel this visit?\')"' : '' ?>><?= csrf_field() ?>
+              <input type="hidden" name="action" value="<?= $act ?>"><input type="hidden" name="id" value="<?= $id ?>"><input type="hidden" name="visit" value="<?= (int) $v['id'] ?>">
+              <button class="<?= $act === 'visit_done' ? 'btn btn-primary btn-sm' : ($act === 'visit_cancel' ? 'btn-link' : 'btn btn-ghost btn-sm') ?>"><?= $lbl ?></button></form>
+          <?php endforeach; ?>
+          <?php if (!$past): ?>
+            <details class="visit-move"><summary class="btn-link">Move</summary>
+              <form method="post" class="visit-move-form"><?= csrf_field() ?><input type="hidden" name="action" value="visit_move"><input type="hidden" name="id" value="<?= $id ?>"><input type="hidden" name="visit" value="<?= (int) $v['id'] ?>">
+                <input type="date" name="visit_date" value="<?= e(date('Y-m-d', strtotime((string) $v['starts_at']))) ?>" required>
+                <input type="time" name="visit_time" value="<?= e(date('H:i', strtotime((string) $v['starts_at']))) ?>" step="900" required>
+                <button class="btn btn-ghost btn-sm">Save</button></form></details>
+          <?php endif; ?>
+        </div>
+        <?php endif; ?>
+      </div>
+    <?php endforeach; ?>
+    <?php if ($canW): ?>
+    <form method="post" id="visit-form" class="mt10" hidden>
+      <?= csrf_field() ?><input type="hidden" name="action" value="visit_book"><input type="hidden" name="id" value="<?= $id ?>">
+      <div class="lead-quick" style="margin-bottom:8px">
+        <label class="act-kind"><input type="radio" name="kind" value="site" checked onchange="visitKind()"><span>Site visit</span></label>
+        <label class="act-kind"><input type="radio" name="kind" value="online" onchange="visitKind()"><span>Online meeting</span></label>
+      </div>
+      <div class="grid2">
+        <div class="field"><span class="lbl">Date</span><input type="date" name="visit_date" min="<?= date('Y-m-d') ?>" required></div>
+        <div class="field"><span class="lbl">Time</span><input type="time" name="visit_time" step="900" value="11:00" required></div>
+        <div class="field"><span class="lbl">Project</span><select name="project_id" id="visit-project"><option value="0">—</option>
+          <?php foreach ($projects as $p_): if (!(int) $p_['active']) continue; ?><option value="<?= (int) $p_['id'] ?>" data-addr="<?= e((string) ($p_['address'] ?? '')) ?>" <?= (int) $p_['id'] === (int) ($lead['project_id'] ?? 0) ? 'selected' : '' ?>><?= e($p_['name']) ?></option><?php endforeach; ?></select></div>
+        <div class="field" id="visit-where"><span class="lbl">Where</span><input type="text" name="place" id="visit-place" maxlength="255"
+             value="<?= e($projAddr[(int) ($lead['project_id'] ?? 0)] ?? '') ?>" placeholder="Sales office, or a map link"></div>
+        <div class="field" id="visit-meet" hidden><span class="lbl">Meeting link</span><input type="url" name="meet_url" maxlength="500"
+             placeholder="Leave empty to create one"></div>
+        <?php if ($isAdmin): ?>
+        <div class="field"><span class="lbl">Who meets them</span><select name="host"><option value="0">The lead's owner</option>
+          <?php foreach ($people as $u): ?><option value="<?= (int) $u['id'] ?>"><?= e($u['name']) ?></option><?php endforeach; ?></select></div>
+        <?php endif; ?>
+        <div class="field"><span class="lbl">Note</span><input type="text" name="notes" maxlength="500" placeholder="Wants to see the 3-bed model"></div>
+      </div>
+      <?php if ((int) $vs['visit_confirm_tpl']): ?>
+        <label class="mod-all"><input type="checkbox" name="confirm" value="1" checked> Send them a WhatsApp confirmation</label>
+      <?php elseif ($isAdmin): ?>
+        <p class="text-muted" style="font-size:12px">To confirm visits on WhatsApp automatically, choose the templates in <a href="crm_messages.php#visit-msgs">Automatic messages</a>.</p>
+      <?php endif; ?>
+      <button class="btn btn-primary btn-sm mt10" id="visit-go">Book visit</button>
+    </form>
+    <?php endif; ?>
+  </div>
+  <?php endif; ?>
 </div>
+
+<!-- ═══════════ The side: what you can do, and the numbers ═══════════ -->
+<aside class="lead-aside">
+  <div class="card lead-actions-card">
+    <h2 class="lead-card-h">Actions</h2>
+    <div class="lead-actions">
+      <?php if ($canW): ?>
+        <button type="button" class="la la-orange" data-dlg="act-dlg" data-kind="call"><span aria-hidden="true">＋</span> New activity</button>
+        <button type="button" class="la la-outline" data-dlg="act-dlg" data-kind="note">Add note</button>
+      <?php endif; ?>
+      <?php if ($hidePh): ?><button type="button" class="la la-outline" data-reveal="call">Call</button>
+      <?php else: ?><a class="la la-outline" href="tel:+<?= e($phone) ?>">Call</a><?php endif; ?>
+      <?php if ($hidePh): ?><button type="button" class="la la-green" data-reveal="whatsapp">WhatsApp app</button>
+      <?php else: ?><a class="la la-green" href="https://wa.me/<?= e($phone) ?>" target="_blank" rel="noopener">WhatsApp app</a><?php endif; ?>
+      <?php if ($canW && can_use('inbox')): ?><button type="button" class="la la-teal" data-dlg="send-dlg">Send message</button><?php endif; ?>
+      <?php if (can_use('inbox')): ?><a class="la la-outline" href="inbox.php?contact=<?= $id ?>">Conversation</a><?php endif; ?>
+      <?php if ($canW): ?><button type="button" class="la la-cyan" data-dlg="fu-dlg">Follow-up</button><?php endif; ?>
+      <?php if ($canW && can_crm('visits')): ?>
+        <button type="button" class="la la-purple" data-book="site">Insert visit</button>
+        <button type="button" class="la la-blue" data-book="online">Online meeting</button>
+        <?php if ($openEvents): ?><button type="button" class="la la-indigo" data-dlg="ev-dlg">Add to event</button><?php endif; ?>
+      <?php endif; ?>
+      <?php if ($canTransfer && $lead['stage_id'] !== null): ?><button type="button" class="la la-violet" data-dlg="tr-dlg">⇄ Transfer lead</button><?php endif; ?>
+      <?php if ($canW && $lead['stage_id'] !== null && $isOpen): ?>
+        <?php if ($lostStage): ?>
+          <?php if ($askLost): ?><button type="button" class="la la-yellow" data-lost="<?= (int) $lostStage['id'] ?>">Close lead</button>
+          <?php else: ?><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="stage"><input type="hidden" name="id" value="<?= $id ?>">
+            <button class="la la-yellow" name="stage_id" value="<?= (int) $lostStage['id'] ?>" onclick="return confirm('Close this lead as lost?')">Close lead</button></form><?php endif; ?>
+        <?php endif; ?>
+        <?php if ($wonStage): ?><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="won"><input type="hidden" name="id" value="<?= $id ?>">
+          <button class="la la-emerald" onclick="return confirm('Mark this deal as done (won)?')">Done deal</button></form><?php endif; ?>
+      <?php endif; ?>
+      <button type="button" class="la la-plain" data-dlg="edit-dlg">Edit lead</button>
+    </div>
+    <?php if ($lead['stage_id'] !== null && $canW): ?>
+      <div class="lead-del">
+      <?php if ($canDel): ?>
+        <form method="post" onsubmit="return confirm('Delete this lead? It goes to the recycle bin and can be brought back for 30 days.')">
+          <?= csrf_field() ?><input type="hidden" name="action" value="delete"><input type="hidden" name="id" value="<?= $id ?>">
+          <button class="btn-link" style="color:var(--danger)">Delete lead</button></form>
+      <?php elseif ($pendingDel): ?>
+        <p class="text-muted" style="font-size:12.5px;margin:0">You asked a manager to delete this lead — waiting for their answer.</p>
+      <?php else: ?>
+        <details><summary class="btn-link" style="color:var(--danger)">Ask to delete</summary>
+          <form method="post" class="mt10"><?= csrf_field() ?><input type="hidden" name="action" value="delete_request"><input type="hidden" name="id" value="<?= $id ?>">
+            <div class="field"><span class="lbl">Why should it go?</span><input name="reason" maxlength="255" required placeholder="Duplicate of another lead / test / wrong number"></div>
+            <button class="btn btn-ghost btn-sm">Send to a manager</button></form></details>
+      <?php endif; ?>
+      </div>
+    <?php endif; ?>
+  </div>
+
+  <!-- What happens next -->
+  <div class="card lead-next <?= $dueState ?>" id="next">
+    <h2 class="lead-card-h">Next follow-up</h2>
+    <?php if ($due): ?>
+      <div class="lead-next-when">
+        <strong><?= e(date('D j M, H:i', $due)) ?></strong>
+        <span class="pill <?= $dueState === 'late' ? 'red' : ($dueState === 'today' ? 'gold' : 'gray') ?>">
+          <?= $dueState === 'late' ? 'Overdue' : ($dueState === 'today' ? 'Today' : 'Upcoming') ?></span>
+      </div>
+      <?php if (!empty($lead['followup_note'])): ?><p class="lead-next-note"><?= e((string) $lead['followup_note']) ?></p><?php endif; ?>
+      <?php if ($canW): ?>
+      <div style="display:flex;gap:8px;flex-wrap:wrap" class="mt10">
+        <form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="followup_done"><input type="hidden" name="id" value="<?= $id ?>">
+          <button class="btn btn-primary btn-sm">Mark done</button></form>
+        <button type="button" class="btn btn-ghost btn-sm" data-dlg="fu-dlg">Change</button>
+      </div>
+      <?php endif; ?>
+    <?php else: ?>
+      <p class="text-muted" style="margin:0">Nothing planned. Leads with a next step get followed up; leads without one get forgotten.</p>
+      <?php if ($canW): ?><button type="button" class="btn btn-ghost btn-sm mt10" data-dlg="fu-dlg">Set follow-up</button><?php endif; ?>
+    <?php endif; ?>
+  </div>
+
+  <div class="card" id="stats">
+    <h2 class="lead-card-h"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 17h14M5 14V9M9 14V5M13 14v-3M17 14V7"/></svg> Lead statistics</h2>
+    <div class="lead-stats">
+      <div class="ls"><span>Activities</span><b><?= (int) $st['acts'] ?></b></div>
+      <div class="ls ls-good"><span>Positive</span><b><?= (int) $st['good'] ?></b></div>
+      <div class="ls ls-bad"><span>Negative</span><b><?= (int) $st['bad'] ?></b></div>
+      <div class="ls ls-blue"><span>Visits</span><b><?= (int) $st['visits'] ?></b></div>
+    </div>
+    <dl class="lead-dl lead-dl-stats">
+      <dt>Last contact</dt><dd><?= e($ago($st['last'])) ?></dd>
+      <dt>Lead age</dt><dd><?= $age !== null ? $age . ' day' . ($age === 1 ? '' : 's') : '—' ?></dd>
+      <dt>Messages</dt><dd><?= (int) $st['msg_in'] ?> in · <?= (int) $st['msg_out'] ?> out</dd>
+      <?php if ($score !== null): ?><dt>Heat score</dt><dd><?= (int) $score ?></dd><?php endif; ?>
+    </dl>
+  </div>
+
+  <details class="card lead-fold">
+    <summary><h2 class="lead-card-h">Stage history</h2></summary>
+    <?php if (!$stageMoves): ?><p class="text-muted" style="font-size:13px">No moves yet.</p><?php endif; ?>
+    <?php foreach ($stageMoves as $m_): ?>
+      <div class="fold-row"><span><?= $m_['kind'] === 'added' ? 'Added in ' . e((string) ($stageMap[(int) $m_['to_val']]['name'] ?? '—'))
+            : e((string) ($stageMap[(int) $m_['from_val']]['name'] ?? '—')) . ' → ' . e((string) ($stageMap[(int) $m_['to_val']]['name'] ?? '—')) ?></span>
+        <span class="text-muted"><?= e($who($m_['user_id'])) ?> · <?= e(date('j M, H:i', strtotime((string) $m_['created_at']))) ?></span></div>
+    <?php endforeach; ?>
+  </details>
+
+  <details class="card lead-fold" id="transfers">
+    <summary><h2 class="lead-card-h">⇄ Transfer history</h2></summary>
+    <?php if (!$moves): ?><p class="text-muted" style="font-size:13px">Never assigned.</p><?php endif; ?>
+    <?php foreach ($moves as $m_): $un_ = fn($v_) => $v_ !== null ? ($names[(int) $v_] ?? 'someone') : 'nobody'; ?>
+      <div class="fold-row"><span><?= $m_['kind'] === 'reclaimed' ? 'Not contacted in time: ' . e($un_($m_['from_val'])) . ' → ' . e($un_($m_['to_val']))
+            : ($m_['from_val'] === null ? 'Assigned to ' . e($un_($m_['to_val'])) : e($un_($m_['from_val'])) . ' → ' . e($un_($m_['to_val']))) ?></span>
+        <span class="text-muted"><?= e($who($m_['user_id'])) ?> · <?= e(date('j M, H:i', strtotime((string) $m_['created_at']))) ?></span></div>
+    <?php endforeach; ?>
+  </details>
+
+  <?php if ($myEvents): ?>
+  <details class="card lead-fold" open>
+    <summary><h2 class="lead-card-h">Events</h2></summary>
+    <?php foreach ($myEvents as $ev_): ?>
+      <div class="fold-row"><a href="crm_events.php?id=<?= (int) $ev_['id'] ?>"><?= e((string) $ev_['name']) ?></a>
+        <span class="text-muted"><?= e(date('j M', strtotime((string) $ev_['starts_at']))) ?> · <?= e(sev_statuses()[$ev_['status']] ?? $ev_['status']) ?></span></div>
+    <?php endforeach; ?>
+  </details>
+  <?php endif; ?>
+
+  <?php if ($runs && $isAdmin): ?>
+  <!-- Automatic follow-ups this lead is in — a manager's view; salespeople do not see or stop them -->
+  <details class="card lead-fold" id="seq-runs" open>
+    <summary><h2 class="lead-card-h">Automatic follow-up</h2></summary>
+    <?php foreach ($runs as $r): ?>
+      <div class="dup-row">
+        <div><strong><?= e((string) $r['name']) ?></strong>
+          <span class="text-muted" style="display:block;font-size:12px">
+            <?php if ($r['status'] === 'active'): ?>Sent <?= (int) $r['step_idx'] ?> of <?= (int) $r['steps'] ?> · next <?= e(date('D j M, H:i', strtotime((string) $r['next_at']))) ?>
+            <?php elseif ($r['status'] === 'done'): ?>All <?= (int) $r['steps'] ?> sent
+            <?php else: ?>Stopped — <?= e((string) $r['stop_reason']) ?><?php endif; ?></span></div>
+        <?php if ($r['status'] === 'active'): ?>
+        <form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="seq_stop"><input type="hidden" name="id" value="<?= $id ?>"><input type="hidden" name="seq" value="<?= (int) $r['sequence_id'] ?>">
+          <button class="btn btn-ghost btn-sm">Stop</button></form>
+        <?php endif; ?>
+      </div>
+    <?php endforeach; ?>
+  </details>
+  <?php endif; ?>
+
+  <?php if ($dups): ?>
+  <!-- Probably the same person -->
+  <details class="card lead-fold" id="dups" open>
+    <summary><h2 class="lead-card-h">Possible duplicates</h2></summary>
+    <p class="text-muted" style="font-size:12.5px">Same name, email, or the same number written another way.
+      <?= $isAdmin ? 'Merging moves their messages, notes and answers onto this lead and removes the other one.' : 'An Admin can merge them.' ?></p>
+    <?php foreach ($dups as $d): ?>
+      <div class="dup-row">
+        <div><a href="crm_lead.php?id=<?= (int) $d['id'] ?>"><strong><?= e((string) ($d['name'] ?: crm_phone_show((string) $d['phone_e164']))) ?></strong></a>
+          <span class="text-muted" style="display:block;font-size:12px"><?= e(crm_phone_show((string) $d['phone_e164'])) ?><?= $d['email'] ? ' · ' . e((string) $d['email']) : '' ?>
+            · <?= e($d['stage_name'] ?: 'Not in the pipeline') ?> · <?= e(crm_user_name($d['owner_user_id'] !== null ? (int) $d['owner_user_id'] : null)) ?></span></div>
+        <?php if ($isAdmin): ?>
+        <form method="post" onsubmit="return confirm('Merge this contact into the lead you are looking at? The other one will be removed.')">
+          <?= csrf_field() ?><input type="hidden" name="action" value="merge"><input type="hidden" name="id" value="<?= $id ?>"><input type="hidden" name="other" value="<?= (int) $d['id'] ?>">
+          <button class="btn btn-ghost btn-sm">Merge into this lead</button></form>
+        <?php endif; ?>
+      </div>
+    <?php endforeach; ?>
+  </details>
+  <?php endif; ?>
+
+  <?php if ($attrs): ?>
+  <details class="card lead-fold">
+    <summary><h2 class="lead-card-h">Form answers</h2></summary>
+    <dl class="lead-dl lead-dl-stats">
+      <?php foreach ($attrs as $k => $v): ?><dt><?= e((string) $k) ?></dt><dd><?= e(is_scalar($v) ? (string) $v : json_encode($v)) ?></dd><?php endforeach; ?>
+    </dl>
+  </details>
+  <?php endif; ?>
+</aside>
+</div>
+
+<!-- ═══════════ Dialogs the action buttons open ═══════════ -->
+<?php if ($canW): ?>
+<dialog class="lead-dlg" id="act-dlg" aria-labelledby="act-title">
+  <form method="post" id="act-form">
+    <?= csrf_field() ?><input type="hidden" name="action" value="activity"><input type="hidden" name="id" value="<?= $id ?>">
+    <h2 id="act-title" style="margin-top:0">New activity</h2>
+    <div class="act-kinds" role="radiogroup" aria-label="What did you do">
+      <?php foreach ($kinds as $k => $label): ?>
+        <label class="act-kind"><input type="radio" name="kind" value="<?= $k ?>" <?= $k === 'call' ? 'checked' : '' ?>>
+          <span><?= e($label) ?></span></label>
+      <?php endforeach; ?>
+    </div>
+    <div class="field" id="act-outcome-wrap"><span class="lbl">How did it go</span>
+      <select name="outcome"><option value="">—</option>
+        <?php foreach ($outcomes as $k => $label): ?><option value="<?= $k ?>"><?= e($label) ?></option><?php endforeach; ?></select></div>
+    <?php if ($subList && !($curStage && $curStage['kind'] === 'lost')): ?>
+    <div class="field"><span class="lbl">Sub-status</span><select name="substatus" id="act-sub">
+      <?php foreach (array_merge([''], $subList) as $sl): ?><option value="<?= e($sl) ?>" <?= (string) ($lead['substatus'] ?? '') === $sl ? 'selected' : '' ?>><?= $sl === '' ? '—' : e($sl) ?></option><?php endforeach; ?></select></div>
+    <?php endif; ?>
+    <div class="field"><span class="lbl" id="act-body-lbl">Comment</span>
+      <textarea name="body" rows="3" placeholder="What was said, what they want, objections…"></textarea></div>
+    <details class="act-more" <?= $due ? '' : 'open' ?>>
+      <summary>Next follow-up and stage</summary>
+      <div class="lead-quick" data-for="act-next"></div>
+      <div class="grid2">
+        <div class="field"><span class="lbl">Next follow-up</span><input type="datetime-local" name="next_at" id="act-next"></div>
+        <div class="field"><span class="lbl">What for</span><input type="text" name="next_note" maxlength="255" placeholder="Call back with prices"></div>
+      </div>
+      <?php if ($due): ?><label class="mod-all" style="font-size:13px"><input type="checkbox" name="clear_followup" value="1"> The current follow-up is done — clear it</label><?php endif; ?>
+      <?php if ($lead['stage_id'] !== null): ?>
+      <div class="field"><span class="lbl">Move to stage</span><select name="stage_id">
+        <?php foreach ($stages as $s): ?><option value="<?= (int) $s['id'] ?>" <?= (int) $s['id'] === (int) $lead['stage_id'] ? 'selected' : '' ?>><?= e($s['name']) ?><?= (int) $s['id'] === (int) $lead['stage_id'] ? ' (current)' : '' ?></option><?php endforeach; ?>
+      </select></div>
+      <div class="field" id="act-sub-new" hidden><span class="lbl">Sub-status in the new stage</span><select name="substatus_new"></select></div>
+      <div class="grid2" id="act-lost" hidden>
+        <div class="field"><span class="lbl">Why was it lost?</span><select name="lost_reason"><option value="">Choose a reason…</option>
+          <?php foreach ($reasons as $r): ?><option><?= e($r) ?></option><?php endforeach; ?></select></div>
+        <div class="field"><span class="lbl">Anything to add</span><input name="lost_note" maxlength="255" placeholder="Bought in another compound"></div>
+      </div>
+      <?php endif; ?>
+    </details>
+    <div class="dlg-btns"><button class="btn btn-primary">Save activity</button>
+      <button type="button" class="btn btn-ghost" data-close>Cancel</button></div>
+  </form>
+</dialog>
+
+<dialog class="lead-dlg" id="fu-dlg" aria-labelledby="fu-title">
+  <form method="post" id="fu-edit">
+    <?= csrf_field() ?><input type="hidden" name="action" value="followup"><input type="hidden" name="id" value="<?= $id ?>">
+    <h2 id="fu-title" style="margin-top:0">Next follow-up</h2>
+    <div class="lead-quick" data-for="fu-at"></div>
+    <div class="grid2">
+      <div class="field"><span class="lbl">Date and time</span><input type="datetime-local" name="next_at" id="fu-at" required></div>
+      <div class="field"><span class="lbl">What for</span><input type="text" name="next_note" maxlength="255" placeholder="Send the payment plan"></div>
+    </div>
+    <div class="dlg-btns"><button class="btn btn-primary">Set follow-up</button>
+      <button type="button" class="btn btn-ghost" data-close>Cancel</button></div>
+  </form>
+</dialog>
+<?php endif; ?>
+
+<?php if ($canW && can_use('inbox')): ?>
+<dialog class="lead-dlg lead-send" id="send-dlg" aria-labelledby="send-title">
+  <h2 id="send-title" style="margin-top:0">Send on WhatsApp</h2>
+  <?php if (!$snd['ok']): ?>
+    <div class="note warn" id="lead-nosend"><?= e($snd['error']) ?>
+      <?php if ($snd['via'] === 'own'): ?> <a href="my_whatsapp.php">Open My WhatsApp</a><?php endif; ?></div>
+  <?php elseif (!$sendOpen): ?>
+    <div class="note warn" id="lead-nosend">It has been more than 24 hours since this lead last wrote, so WhatsApp only
+      allows an approved template from <?= e($viaText) ?>.
+      <a href="inbox.php?contact=<?= $id ?>">Send a template from the conversation</a></div>
+  <?php else: ?>
+    <form method="post" id="lead-send">
+      <?= csrf_field() ?><input type="hidden" name="action" value="send"><input type="hidden" name="id" value="<?= $id ?>">
+      <textarea name="message" id="send-text" rows="4" placeholder="Message on WhatsApp…" required></textarea>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap" class="mt10">
+        <button class="btn btn-primary btn-sm">Send on WhatsApp</button>
+        <?php if ($aiOn): ?><button type="button" class="btn btn-ghost btn-sm" id="ai-suggest" title="Write a reply from the conversation — check it before sending">Suggest a reply</button><?php endif; ?>
+        <span class="text-muted" style="font-size:12px">Goes out from <?= e($viaText) ?></span>
+      </div>
+    </form>
+  <?php endif; ?>
+  <div class="dlg-btns"><button type="button" class="btn btn-ghost" data-close>Close</button></div>
+</dialog>
+<?php endif; ?>
+
+<dialog class="lead-dlg lead-details" id="edit-dlg" aria-labelledby="edit-title" <?= $err && ($_POST['action'] ?? '') === 'save' ? 'open' : '' ?>>
+  <h2 id="edit-title" style="margin-top:0">Edit lead</h2>
+  <form method="post">
+    <?= csrf_field() ?><input type="hidden" name="action" value="save"><input type="hidden" name="id" value="<?= $id ?>">
+    <fieldset <?= $canW ? '' : 'disabled' ?> style="border:0;padding:0;margin:0">
+    <div class="grid2">
+      <div class="field"><span class="lbl">Name</span><input name="name" value="<?= e((string) $lead['name']) ?>"></div>
+      <div class="field"><span class="lbl">Email</span><input name="email" type="email" value="<?= e((string) ($lead['email'] ?? '')) ?>"></div>
+      <div class="field"><span class="lbl">Deal value</span><input name="deal_value" inputmode="decimal" autocomplete="off"
+           value="<?= $lead['deal_value'] !== null ? e(number_format((float) $lead['deal_value'], 0, '.', '')) : '' ?>"></div>
+      <div class="field"><span class="lbl">Project</span><select name="project_id"><option value="0">—</option>
+        <?php foreach ($projects as $p): if (!(int) $p['active'] && (int) $p['id'] !== (int) ($lead['project_id'] ?? 0)) continue; ?>
+          <option value="<?= (int) $p['id'] ?>" <?= (int) $p['id'] === (int) ($lead['project_id'] ?? 0) ? 'selected' : '' ?>><?= e($p['name']) ?></option><?php endforeach; ?></select>
+        <?php if (!$projects && $isAdmin): ?><span class="text-muted" style="font-size:12px"><a href="crm_setup.php">Add your projects</a></span><?php endif; ?></div>
+      <div class="field"><span class="lbl">Unit type</span><select name="unit_type"><option value="">—</option>
+        <?php $ut = (string) ($lead['unit_type'] ?? ''); foreach (array_unique(array_merge($units, $ut !== '' ? [$ut] : [])) as $u): ?>
+          <option <?= $u === $ut ? 'selected' : '' ?>><?= e($u) ?></option><?php endforeach; ?></select></div>
+      <div class="field"><span class="lbl">Budget</span><input name="budget" maxlength="80" value="<?= e((string) ($lead['budget'] ?? '')) ?>" placeholder="5–7M"></div>
+      <div class="field"><span class="lbl">Paying</span><select name="payment_pref"><option value="">—</option>
+        <option value="cash" <?= ($lead['payment_pref'] ?? '') === 'cash' ? 'selected' : '' ?>>Cash</option>
+        <option value="installments" <?= ($lead['payment_pref'] ?? '') === 'installments' ? 'selected' : '' ?>>Instalments</option></select></div>
+      <div class="field"><span class="lbl">Qualification</span><select name="qualification"><option value="">Not decided</option>
+        <?php foreach (crm_qualifications() as $k => $l): ?><option value="<?= $k ?>" <?= ($lead['qualification'] ?? '') === $k ? 'selected' : '' ?>><?= e($l) ?></option><?php endforeach; ?></select></div>
+      <?php if ($isAdmin): ?>
+      <div class="field"><span class="lbl">Data</span><select name="data_type">
+        <?php foreach (crm_data_types() as $k => $l): ?><option value="<?= $k ?>" <?= ($lead['data_type'] ?? 'fresh') === $k ? 'selected' : '' ?>><?= e($l) ?></option><?php endforeach; ?></select></div>
+      <?php endif; ?>
+      <?php foreach ($cfields as $f_): if (!(int) $f_['active']) continue; $v_ = (string) ($custom[$f_['fkey']] ?? ''); $nm = 'cf[' . e((string) $f_['fkey']) . ']'; ?>
+      <div class="field"><span class="lbl"><?= e((string) $f_['label']) ?></span>
+        <?php if ($f_['type'] === 'list'): ?><select name="<?= $nm ?>"><option value="">—</option>
+          <?php foreach (array_unique(array_merge($f_['choices'], $v_ !== '' ? [$v_] : [])) as $ch): ?><option <?= $ch === $v_ ? 'selected' : '' ?>><?= e($ch) ?></option><?php endforeach; ?></select>
+        <?php elseif ($f_['type'] === 'date'): ?><input type="date" name="<?= $nm ?>" value="<?= e($v_) ?>">
+        <?php elseif ($f_['type'] === 'number'): ?><input name="<?= $nm ?>" inputmode="decimal" autocomplete="off" value="<?= e($v_) ?>">
+        <?php else: ?><input name="<?= $nm ?>" maxlength="255" value="<?= e($v_) ?>"><?php endif; ?></div>
+      <?php endforeach; ?>
+      <div class="field"><span class="lbl">Owner</span>
+        <?php if ($isAdmin): ?>
+          <select name="owner"><option value="none" <?= $lead['owner_user_id'] === null ? 'selected' : '' ?>>Unassigned</option>
+            <option value="auto">Next in rotation</option>
+            <?php foreach ($people as $u): ?><option value="<?= (int) $u['id'] ?>" <?= (int) $u['id'] === (int) $lead['owner_user_id'] ? 'selected' : '' ?>><?= e($u['name']) ?></option><?php endforeach; ?>
+          </select>
+        <?php else: ?>
+          <input value="<?= e($ownerName) ?>" disabled>
+        <?php endif; ?></div>
+    </div>
+    <div class="dlg-btns"><?php if ($canW): ?><button class="btn btn-primary btn-sm">Save details</button><?php endif; ?>
+      <button type="button" class="btn btn-ghost btn-sm" data-close>Close</button></div>
+    </fieldset>
+  </form>
+</dialog>
+
+<?php if ($canTransfer && $lead['stage_id'] !== null): ?>
+<dialog class="lead-dlg" id="tr-dlg" aria-labelledby="tr-title">
+  <form method="post">
+    <?= csrf_field() ?><input type="hidden" name="action" value="transfer"><input type="hidden" name="id" value="<?= $id ?>">
+    <h2 id="tr-title" style="margin-top:0">Transfer lead</h2>
+    <p class="text-muted" style="font-size:13px">Now with <strong><?= e($ownerName) ?></strong>. The move is recorded in the transfer history.</p>
+    <div class="field"><span class="lbl">Transfer to</span><select name="to" required>
+      <?php if ($isAdmin): ?><option value="auto">Next in rotation (assignment rules)</option><option value="none">Nobody (unassigned)</option><?php endif; ?>
+      <?php foreach ($transferTo as $u): if ((int) $u['id'] === (int) $lead['owner_user_id']) continue; ?><option value="<?= (int) $u['id'] ?>"><?= e($u['name']) ?></option><?php endforeach; ?>
+    </select></div>
+    <div class="dlg-btns"><button class="btn btn-primary">Transfer</button><button type="button" class="btn btn-ghost" data-close>Cancel</button></div>
+  </form>
+</dialog>
+<?php endif; ?>
+
+<?php if ($openEvents && $canW): ?>
+<dialog class="lead-dlg" id="ev-dlg" aria-labelledby="evd-title">
+  <form method="post">
+    <?= csrf_field() ?><input type="hidden" name="action" value="event_add"><input type="hidden" name="id" value="<?= $id ?>">
+    <h2 id="evd-title" style="margin-top:0">Add to an event</h2>
+    <div class="field"><span class="lbl">Event</span><select name="event_id" required>
+      <?php foreach ($openEvents as $oe): ?><option value="<?= (int) $oe['id'] ?>"><?= e($oe['name'] . ' — ' . date('j M', strtotime((string) $oe['starts_at']))) ?></option><?php endforeach; ?></select></div>
+    <p class="text-muted" style="font-size:12.5px">The invitation is sent from the event's page.</p>
+    <div class="dlg-btns"><button class="btn btn-primary">Add</button><button type="button" class="btn btn-ghost" data-close>Cancel</button></div>
+  </form>
+</dialog>
+<?php endif; ?>
 
 <?php if ($canW && $askLost && $lostIds): ?>
 <dialog id="lost-dlg" class="lost-dlg" aria-labelledby="lost-title">
@@ -789,6 +999,35 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
   </form>
 </dialog>
 <?php endif; ?>
+<script>
+/* The action buttons: each opens its dialog; the two booking buttons open the form below the meetings card. */
+(function(){
+  document.querySelectorAll('[data-dlg]').forEach(b => b.addEventListener('click', () => {
+    const d = document.getElementById(b.dataset.dlg); if (!d) return;
+    if (b.dataset.kind) { const r = d.querySelector('input[name=kind][value="' + b.dataset.kind + '"]'); if (r) { r.checked = true; r.dispatchEvent(new Event('change')); } }
+    d.showModal(); const f = d.querySelector('textarea, input:not([type=hidden]):not([type=radio]), select'); if (f && b.dataset.kind === 'note') f.focus();
+  }));
+  // The heat reasons close like any pop-up: Escape, or a click elsewhere.
+  const heat = document.querySelector('.lead-heat');
+  if (heat) {
+    document.addEventListener('click', e => { if (heat.open && !heat.contains(e.target)) heat.open = false; });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') heat.open = false; });
+  }
+  document.querySelectorAll('.lead-dlg [data-close]').forEach(b => b.addEventListener('click', () => b.closest('dialog').close()));
+  document.querySelectorAll('.lead-dlg').forEach(d => d.addEventListener('mousedown', e => { if (e.target === d) d.close(); }));
+  document.querySelectorAll('[data-book]').forEach(b => b.addEventListener('click', () => {
+    const f = document.getElementById('visit-form'); if (!f) return;
+    f.hidden = false;
+    const r = f.querySelector('input[name=kind][value="' + b.dataset.book + '"]'); r.checked = true; visitKind();
+    f.scrollIntoView({behavior: 'smooth', block: 'center'});
+  }));
+})();
+function visitKind(){
+  const on = document.querySelector('#visit-form input[name=kind][value=online]').checked;
+  document.getElementById('visit-where').hidden = on; document.getElementById('visit-meet').hidden = !on;
+  document.getElementById('visit-go').textContent = on ? 'Book meeting' : 'Book visit';
+}
+</script>
 <script>
 (function(){
   /* AI: summary and suggested reply, asked for in the background. */
@@ -872,7 +1111,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
   const picks = [['In 1 hour', () => { const d = new Date(Date.now() + 3600e3); d.setMinutes(Math.ceil(d.getMinutes() / 15) * 15, 0, 0); return d; }],
                  ['Tomorrow 10:00', () => at(1, 10)], ['Tomorrow 17:00', () => at(1, 17)],
                  ['In 3 days', () => at(3, 11)], ['Next week', () => at(7, 11)]];
-  document.querySelectorAll('.lead-quick').forEach(box => {
+  document.querySelectorAll('.lead-quick[data-for]').forEach(box => {
     const input = document.getElementById(box.dataset.for);
     picks.forEach(([label, fn]) => {
       const b = document.createElement('button'); b.type = 'button'; b.textContent = label;
