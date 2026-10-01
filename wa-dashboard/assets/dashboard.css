@@ -1611,3 +1611,30 @@ kbd { display: inline-block; font: 600 10.5px/1 var(--sans); padding: 3px 5px; b
 /* The reset at the top zeroes every margin, which also stops a <dialog> centring itself. */
 dialog { margin: auto; }
 #st-list .st-sub-new { width: 190px; flex: 0 0 auto; padding: 4px 9px; font-size: 12.5px; min-height: 0; height: auto; }
+/* Integrations */
+.int-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 14px; }
+.int-tabs a { padding: 6px 12px; border-radius: 8px; background: var(--surface); border: 1px solid var(--line); font-size: 13px; font-weight: 600; color: var(--slate); }
+.int-tabs a:hover { color: var(--brand); border-color: var(--brand); }
+.int-fresh { border: 2px solid var(--brand); }
+.int-copy { display: flex; gap: 8px; align-items: center; background: var(--chip); border-radius: 9px; padding: 8px 10px; margin-top: 8px; }
+.int-copy code { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 12.5px; direction: ltr; unicode-bidi: isolate; text-align: left; }
+.int-item { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; }
+.int-item-head { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
+.int-url { display: block; font-size: 12.5px; color: var(--slate); overflow-wrap: anywhere; }
+.int-acts { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.int-more { margin-top: 8px; font-size: 13px; }
+.int-more > summary { cursor: pointer; color: var(--brand); font-weight: 600; }
+.int-events { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 2px 14px; }
+.int-events code, .int-fields code { font-size: 11px; color: var(--muted); }
+.int-add { margin-top: 10px; } .int-add > summary { list-style: none; display: inline-flex; cursor: pointer; }
+.int-add > summary::-webkit-details-marker { display: none; }
+.int-map { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px 16px; }
+.int-map label { display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; color: var(--slate); }
+.int-inline { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.int-inline input, .int-inline select { width: auto; flex: 0 1 220px; }
+.int-pre { background: var(--chip); border-radius: 9px; padding: 10px 12px; font-size: 12px; overflow-x: auto; white-space: pre; max-height: 320px; text-align: left; }
+.int-revoked td { opacity: .5; }
+.int-docs h3 { font-size: 14.5px; margin: 18px 0 6px; }
+.int-docs p { font-size: 13.5px; }
+.int-endpoints td:first-child { white-space: nowrap; width: 1%; }
+.int-fields { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12.5px; }

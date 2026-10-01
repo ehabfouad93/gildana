@@ -155,7 +155,12 @@ function crm_field_snapshot(int $clientId, array $lead): array
 function crm_log_changes(int $clientId, int $contactId, array $before, ?int $by): void
 {
     $now = db_row("SELECT * FROM contacts WHERE id=?", [$contactId]);
-    if ($now) crm_log_fields($clientId, $contactId, $before, crm_field_snapshot($clientId, $now), $by, crm_tracked_fields($clientId));
+    if (!$now) return;
+    $after = crm_field_snapshot($clientId, $now);
+    crm_log_fields($clientId, $contactId, $before, $after, $by, crm_tracked_fields($clientId));
+    $changed = [];
+    foreach ($after as $k => $v) if (($before[$k] ?? null) !== $v) $changed[$k] = ['from' => $before[$k] ?? null, 'to' => $v];
+    if ($changed && function_exists('crm_hook')) crm_hook('lead.updated', $clientId, $contactId, ['changes' => $changed]);
 }
 
 /* ───────────────────────── recycle bin ───────────────────────── */
@@ -175,6 +180,7 @@ function crm_delete_lead(array $client, int $contactId, ?int $by): bool
     if (function_exists('crm_seq_stop_all')) crm_seq_stop_all($contactId, 'The lead was deleted.');
     try { db_run("UPDATE crm_msg_queue SET status='skipped', error='The lead was deleted.' WHERE contact_id=? AND status='queued'", [$contactId]); } catch (Throwable $e) {}
     crm_audit($cid, $by, 'delete', $contactId);
+    if (function_exists('crm_hook')) crm_hook('lead.deleted', $cid, $contactId);
     return true;
 }
 

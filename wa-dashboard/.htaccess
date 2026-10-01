@@ -26,3 +26,8 @@
 # Files people sent on WhatsApp are private: served only through client/media.php, signed in.
 RedirectMatch 404 (^|/)uploads/inbound/
 RedirectMatch 404 (^|/)uploads/materials/
+
+# The API reads "Authorization: Bearer …"; some PHP setups drop that header unless it is passed on.
+<IfModule mod_setenvif.c>
+    SetEnvIf Authorization "(.+)" HTTP_AUTHORIZATION=$1
+</IfModule>

@@ -169,6 +169,7 @@ function crm_assign(array $client, int $contactId, ?int $userId, ?int $by = null
     }
     crm_log($cid, $contactId, 'assigned', $from !== null ? (string) $from : null,
             $userId !== null ? (string) $userId : null, $by);
+    crm_hook('lead.assigned', $cid, $contactId, ['from_user_id' => $from, 'to_user_id' => $userId]);
     // The new owner hears about it: the bell in the app, their phone, and WhatsApp if the account sends those.
     if ($userId !== null && $userId !== $by) crm_notice($cid, $userId, 'assigned', $contactId);
 }
@@ -190,6 +191,7 @@ function crm_set_stage(array $client, int $contactId, int $stageId, ?int $by = n
         db_run("UPDATE contacts SET substatus=? WHERE id=?", [$lostLabel, $contactId]);
     }
     crm_log($cid, $contactId, 'stage', $cur['stage_id'] !== null ? (string) $cur['stage_id'] : null, (string) $stageId, $by);
+    $move = ['from_stage' => $cur['stage_id'] !== null ? ($map[(int) $cur['stage_id']]['name'] ?? null) : null, 'to_stage' => $map[$stageId]['name']];
     if ($map[$stageId]['kind'] === 'lost' && db_has_column('contacts', 'lost_reason')) {
         $lostReason = $lostReason !== null ? mb_substr(trim($lostReason), 0, 80) : null;
         db_run("UPDATE contacts SET lost_reason=?, lost_note=? WHERE id=?",
@@ -198,6 +200,8 @@ function crm_set_stage(array $client, int $contactId, int $stageId, ?int $by = n
     }
     if ($by !== null) crm_touch($contactId);
     crm_rescore($contactId);
+    crm_hook('lead.stage_changed', $cid, $contactId, $move);
+    if (in_array($map[$stageId]['kind'], ['won', 'lost'], true)) crm_hook('lead.' . $map[$stageId]['kind'], $cid, $contactId, $move);
     if (function_exists('crm_auto_on_stage')) crm_auto_on_stage($client, $contactId, $stageId);
     return true;
 }
@@ -270,6 +274,8 @@ function crm_log_activity(array $client, int $contactId, string $kind, ?string $
     db_insert("INSERT INTO crm_notes (client_id,contact_id,user_id,kind,outcome,body,created_at) VALUES (?,?,?,?,?,?,NOW())",
               [(int) $client['id'], $contactId, $by, $kind, $outcome, mb_substr($body, 0, 5000)]);
     if ($kind !== 'note') crm_mark_response($contactId, 'crm');
+    crm_hook('activity.logged', (int) $client['id'], $contactId, ['kind' => $kind, 'outcome' => $outcome, 'body' => mb_substr($body, 0, 5000),
+                                                                  'by' => $by !== null ? crm_user_name($by) : null]);
     if ($by !== null) crm_touch($contactId);
     crm_rescore($contactId);
     if (function_exists('crm_auto_on_activity')) crm_auto_on_activity($client, $contactId, $outcome);
@@ -307,6 +313,7 @@ function crm_add_lead(array $client, int $contactId, string $source = '', $owner
     if ($c['stage_id'] !== null) return false;                        // already a lead
 
     $stage = $stageId && isset(crm_stage_map($cid)[$stageId]) ? $stageId : crm_first_stage($cid);
+    $GLOBALS['__crm_adding'][$contactId] = true;          // assigning etc. below are part of "lead.created"
     // Added again after being deleted: it leaves the recycle bin.
     if (db_has_column('contacts', 'deleted_at')) db_run("UPDATE contacts SET deleted_at=NULL, deleted_by=NULL, deleted_stage_id=NULL WHERE id=?", [$contactId]);
     db_run("UPDATE contacts SET stage_id=?, crm_added_at=NOW(),
@@ -324,6 +331,7 @@ function crm_add_lead(array $client, int $contactId, string $source = '', $owner
             : ($owner === 'none' || $owner === null ? null : (int) $owner);
     if ($userId !== null) crm_assign($client, $contactId, $userId, $by);
     crm_rescore($contactId);
+    if (empty($GLOBALS['__crm_defer'][$contactId])) { unset($GLOBALS['__crm_adding'][$contactId]); crm_hook('lead.created', $cid, $contactId); }
     if (function_exists('crm_auto_on_stage')) crm_auto_on_stage($client, $contactId, $stage, true);
     return true;
 }
@@ -418,3 +426,4 @@ function crm_source_label(?string $source): string
 require_once __DIR__ . '/crm_automation.php';
 require_once __DIR__ . '/crm_visits.php';
 require_once __DIR__ . '/crm_capi.php';
+require_once __DIR__ . '/crm_integrations.php';   // webhooks out: crm_hook()

@@ -119,6 +119,8 @@ function crm_visit_book(array $client, int $contactId, array $d, ?int $by): arra
     if ((int) $s['visit_booked_stage'] && $c['stage_id'] !== null) crm_set_stage($client, $contactId, (int) $s['visit_booked_stage'], $by);
     // Booked by someone else for them: the host hears about it now, not only an hour before.
     if ($host && $host !== $by) crm_notice($cid, $host, 'visit', $contactId, ['visit' => $id, 'at' => $v['starts_at']]);
+    if (function_exists('crm_hook')) crm_hook('visit.booked', $cid, $contactId, ['visit_id' => $id, 'type' => $online ? 'online' : 'site', 'starts_at' => $v['starts_at'],
+                                                                              'place' => $v['place'], 'meeting_link' => $meet['url'] ?: null, 'host' => $host ? crm_user_name($host) : null]);
     return ['ok' => true, 'id' => $id, 'meet_url' => $meet['url'], 'meet_via' => $meet['via'] ?? '', 'warning' => $meet['error'] ?? ''];
 }
 

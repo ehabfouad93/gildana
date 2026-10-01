@@ -45,6 +45,7 @@ function crm_auto_tick(): array
     $sum['events']     = sev_tick();
     $sum['seq_queued'] = crm_seq_tick();
     $sum['auto_sent']  = crm_queue_tick();
+    $sum['webhooks']   = crm_hooks_tick();          // integrations: leads sent out to other systems
     $sum['meta_events'] = crm_capi_tick();
     require_once __DIR__ . '/meta_ads.php';
     $sum['ad_spend'] = meta_ads_tick();

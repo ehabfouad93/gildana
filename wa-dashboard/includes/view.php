@@ -154,6 +154,7 @@ function nav_children(string $group): array
                   ['Automatic messages', 'crm_messages.php', 'crm_messages.php'],
                   ['Lead forms',       'meta_leads.php', 'meta_leads.php'],
                   ['Projects & lists', 'crm_setup.php', 'crm_setup.php'],
+                  ['Integrations',     'crm_integrations.php', 'crm_integrations.php'],
                   ['Stages',           'crm.php?stages=1', 'crm.php?stages'],
                   ['Requests & bin',   'crm_manage.php', 'crm_manage.php']] as $it)
             $items[] = [$it[0], $it[1], $it[2], 0, false, 'Administration'];

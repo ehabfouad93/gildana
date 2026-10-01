@@ -36,7 +36,7 @@ function perm_modules(): array
                                                                    'crm_team.php', 'crm_rules.php', 'crm_setup.php',
                                                                    'crm_messages.php', 'crm_calendar.php', 'crm_dashboard.php', 'media.php',
                                                                    'crm_manage.php', 'lead_search.php', 'crm_events.php',
-                                                                   'crm_materials.php', 'material_file.php']],
+                                                                   'crm_materials.php', 'material_file.php', 'crm_integrations.php']],
         'contacts'    => ['label' => 'Contacts',       'pages' => ['contacts.php']],
         'lists'       => ['label' => 'Lists',          'pages' => ['lists.php', 'contact_search.php']],
         'templates'   => ['label' => 'Templates',      'pages' => ['templates.php']],
@@ -165,7 +165,7 @@ function perm_crm_pages(): array
         'rules'     => ['label' => 'Assignment rules',   'pages' => ['crm_rules.php'],    'admin' => true],
         'messages'  => ['label' => 'Automatic messages', 'pages' => ['crm_messages.php'], 'admin' => true],
         'forms'     => ['label' => 'Lead forms',         'pages' => ['meta_leads.php'],   'admin' => true],
-        'setup'     => ['label' => 'Projects & lists',   'pages' => ['crm_setup.php'],    'admin' => true],
+        'setup'     => ['label' => 'Projects & lists, integrations', 'pages' => ['crm_setup.php', 'crm_integrations.php'], 'admin' => true],
         'manage'    => ['label' => 'Requests, bin & imports', 'pages' => ['crm_manage.php'], 'admin' => true],
     ];
 }
