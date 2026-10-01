@@ -32,3 +32,6 @@ listening/cron/.heartbeat
 listening/storage/*
 !listening/storage/.htaccess
 !listening/storage/index.html
+
+# J Vacations
+jvacations/config.php
