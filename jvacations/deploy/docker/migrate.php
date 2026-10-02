@@ -31,5 +31,12 @@ try {
     exit(1);
 }
 
+// Uploaded contract templates are written by Apache (www-data); `git pull` as root
+// creates the folder root-owned, so hand it over on every run (no-op when already right).
+if (!is_dir("$root/storage/templates")) @mkdir("$root/storage/templates", 0775, true);
+foreach (["$root/storage", "$root/storage/templates"] as $dir) {
+    @chown($dir, 'www-data'); @chgrp($dir, 'www-data'); @chmod($dir, 0775);
+}
+
 echo $ran ? '✓ applied ' . count($ran) . " migration(s):\n    " . implode("\n    ", $ran) . "\n" : "✓ already up to date\n";
 echo '✓ tables: ' . count(db_all('SHOW TABLES')) . "\n";

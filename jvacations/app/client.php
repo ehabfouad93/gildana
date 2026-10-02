@@ -4,7 +4,7 @@ require __DIR__ . '/_init.php';
 
 /**
  * The client profile — the one record every department shares. What it shows
- * and which action panel appears depend on the viewer's role and the stage.
+ * and which action panel appears depend on the viewer's permissions and the stage.
  */
 $id = (int) ($_GET['id'] ?? 0);
 $c  = client_or_403($id, $ME);
@@ -22,27 +22,30 @@ $salesReps = [];
 foreach (users_by_role('sales') as $s) $salesReps[$s['id']] = $s['name'];
 $places = setting_list('meeting_places');
 
-$canBook    = has_role('booker') && in_array($c['stage'], ['new', 'booked'], true);
-$canConfirm = has_role('communicator') && in_array($c['stage'], ['booked', 'confirmed'], true);
-$canClose   = has_role('sales') && $c['stage'] === 'confirmed' && ($admin || (int) $c['sales_id'] === $ME['id']);
-$canEditContract = $contract && $showMoney && (float) $totals['paid'] == 0
-    && ($admin || ($role === 'sales' && (int) $c['sales_id'] === $ME['id']));
-$canEdit    = $c['stage'] === 'new' && ($admin || ($role === 'advisor' && (int) $c['created_by'] === $ME['id']));
+$canBook    = can('clients.book') && in_array($c['stage'], ['new', 'booked'], true);
+$canConfirm = can('clients.confirm') && in_array($c['stage'], ['booked', 'confirmed'], true);
+$canArrive  = can('clients.arrive') && in_array($c['stage'], ['booked', 'confirmed', 'arrived'], true);
+$canClose   = can('clients.close') && $c['stage'] === 'arrived' && ($admin || (int) $c['sales_id'] === $ME['id']);
+$canEditContract = $contract && $showMoney && (can('contracts.edit')
+    || ((float) $totals['paid'] == 0 && can('clients.close') && (int) $c['sales_id'] === $ME['id']));
+$canEdit    = can('clients.edit') || ($c['stage'] === 'new' && can('clients.add') && (int) $c['created_by'] === $ME['id']);
+$waAutos    = can('whatsapp.send') ? db_all("SELECT id, template_name, language, trigger_key FROM wa_automations WHERE active = 1 ORDER BY trigger_key, id") : [];
+$waLog      = can('whatsapp.send') ? db_all("SELECT * FROM wa_messages WHERE client_id = ? ORDER BY id DESC LIMIT 10", [$id]) : [];
 
 $actions = '';
 if ($canEdit) $actions .= '<a class="btn" href="client_new.php?id=' . $id . '">' . e(t('ui.edit')) . '</a>';
 if ($contract && $showMoney) {
     $actions .= '<a class="btn" href="contract.php?id=' . (int) $contract['id'] . '">' . e(t('contract.view')) . '</a>';
-    if (has_role('accountant', 'owner_services')) {
+    if (can_any('contracts.view', 'payments.record')) {
         $actions .= '<a class="btn btn-primary" href="reservation.php?id=' . (int) $contract['id'] . '">' . e(t('res.statement')) . '</a>';
     }
 }
 
 layout_header($c['full_name'], 'clients');
-page_head($c['full_name'], t('client.profile_sub', ['id' => (string) $id]), $actions);
+page_head($c['full_name'], t('client.profile_sub', ['id' => client_code($id)]), $actions);
 
 /* ── pipeline stepper ── */
-$steps   = ['new', 'booked', 'confirmed', 'contracted'];
+$steps   = ['new', 'booked', 'confirmed', 'arrived', 'contracted'];
 $reached = array_search($c['stage'], $steps, true);
 $closed  = in_array($c['stage'], ['lost', 'cancelled'], true);
 ?>
@@ -81,6 +84,7 @@ $closed  = in_array($c['stage'], ['lost', 'cancelled'], true);
       <?= dl_row(t('meeting.place'), $c['meeting_place']) ?>
       <?= dl_row(t('role.booker'), $c['booker_name'] ? $c['booker_name'] . ' · ' . fmt_dt($c['booked_at']) : null) ?>
       <?= dl_row(t('role.communicator'), $c['communicator_name'] ? $c['communicator_name'] . ($c['confirmed_at'] ? ' · ' . fmt_dt($c['confirmed_at']) : '') : null) ?>
+      <?= dl_row(t('meeting.arrived'), $c['arrived_at'] ? fmt_dt($c['arrived_at']) . ($c['manager_name'] ? ' · ' . $c['manager_name'] : '') : null) ?>
       <?= dl_row(t('role.sales'), $c['sales_name']) ?>
       <?php if ($closed || $c['lost_reason']): ?><?= dl_row(t('client.reason'), $c['lost_reason']) ?><?php endif; ?>
     </dl>
@@ -116,7 +120,8 @@ $closed  = in_array($c['stage'], ['lost', 'cancelled'], true);
     <div class="field"><span class="lbl"><?= e(t('meeting.place')) ?></span>
       <input type="text" name="meeting_place" list="places" value="<?= e($c['meeting_place'] ?? '') ?>"></div>
     <div class="field"><span class="lbl"><?= e(t('meeting.sales')) ?></span>
-      <select name="sales_id"><?= options($salesReps, $c['sales_id']) ?></select></div>
+      <select name="sales_id"><?= options($salesReps, $c['sales_id']) ?></select>
+      <span class="hint"><?= e(t('meeting.sales_optional')) ?></span></div>
     <div class="field"><span class="lbl"><?= e(t('ui.note')) ?></span><textarea name="note" rows="2"></textarea></div>
     <button class="btn btn-primary" type="submit"><?= e(t('act.book_save')) ?></button>
   </form>
@@ -133,14 +138,34 @@ $closed  = in_array($c['stage'], ['lost', 'cancelled'], true);
     </div>
     <div class="field"><span class="lbl"><?= e(t('meeting.place')) ?></span>
       <input type="text" name="meeting_place" list="places" value="<?= e($c['meeting_place'] ?? '') ?>"></div>
-    <div class="field"><span class="lbl"><?= e(t('meeting.sales')) ?> *</span>
-      <select name="sales_id"><?= options($salesReps, $c['sales_id']) ?></select></div>
+    <div class="field"><span class="lbl"><?= e(t('meeting.sales')) ?></span>
+      <select name="sales_id"><?= options($salesReps, $c['sales_id']) ?></select>
+      <span class="hint"><?= e(t('meeting.sales_optional')) ?></span></div>
     <div class="field"><span class="lbl"><?= e(t('ui.note')) ?></span><textarea name="note" rows="2"></textarea></div>
     <div class="btn-row">
       <button class="btn btn-primary" name="action" value="confirm"><?= e(t('act.confirm_btn')) ?></button>
       <button class="btn" name="action" value="no_answer" formnovalidate><?= e(t('act.no_answer')) ?></button>
       <button class="btn" name="action" value="rebook" formnovalidate data-confirm="<?= e(t('act.rebook_q')) ?>"><?= e(t('act.send_back')) ?></button>
       <button class="btn btn-danger-ghost" name="action" value="cancel" formnovalidate data-confirm="<?= e(t('act.cancel_q')) ?>"><?= e(t('act.cancel')) ?></button>
+    </div>
+  </form>
+  <?php endif; ?>
+
+  <?php if ($canArrive): ?>
+  <form method="post" action="client_action.php" class="card action-card">
+    <?= csrf_field() ?><input type="hidden" name="id" value="<?= $id ?>"><input type="hidden" name="as" value="manager">
+    <h2><?= e($c['stage'] === 'arrived' ? t('act.reassign') : t('act.arrive')) ?></h2>
+    <p class="hint-line"><?= e($c['stage'] === 'arrived' ? t('act.reassign_hint') : t('act.arrive_hint')) ?></p>
+    <div class="field"><span class="lbl"><?= e(t('meeting.sales')) ?> *</span>
+      <select name="sales_id" required><?= options($salesReps, $c['sales_id']) ?></select></div>
+    <div class="field"><span class="lbl"><?= e(t('ui.note')) ?></span><textarea name="note" rows="2"></textarea></div>
+    <div class="btn-row">
+      <?php if ($c['stage'] === 'arrived'): ?>
+        <button class="btn btn-primary" name="action" value="assign"><?= e(t('act.reassign_btn')) ?></button>
+      <?php else: ?>
+        <button class="btn btn-primary" name="action" value="arrive">✓ <?= e(t('act.arrive_btn')) ?></button>
+        <button class="btn" name="action" value="rebook" formnovalidate data-confirm="<?= e(t('act.rebook_q')) ?>"><?= e(t('act.no_show')) ?></button>
+      <?php endif; ?>
     </div>
   </form>
   <?php endif; ?>
@@ -164,7 +189,7 @@ $closed  = in_array($c['stage'], ['lost', 'cancelled'], true);
   </div>
   <?php endif; ?>
 
-  <?php if ($contract && has_role('owner_services')): ?>
+  <?php if ($contract && can('stays.manage')): ?>
   <div class="card action-card">
     <h2><?= e(t('nav.stays')) ?></h2>
     <a class="btn btn-block" href="stays.php?contract=<?= (int) $contract['id'] ?>"><?= e(t('stay.manage')) ?></a>
@@ -175,6 +200,31 @@ $closed  = in_array($c['stage'], ['lost', 'cancelled'], true);
   <form method="post" action="client_action.php" class="card action-card">
     <?= csrf_field() ?><input type="hidden" name="id" value="<?= $id ?>"><input type="hidden" name="action" value="reopen">
     <button class="btn btn-block" type="submit"><?= e(t('act.reopen')) ?></button>
+  </form>
+  <?php endif; ?>
+
+  <?php if ($waAutos): ?>
+  <form method="post" action="client_action.php" class="card">
+    <?= csrf_field() ?><input type="hidden" name="id" value="<?= $id ?>"><input type="hidden" name="action" value="wa_send">
+    <h2><?= e(t('wa.send_title')) ?></h2>
+    <div class="note-form">
+      <select name="automation_id" required>
+        <option value="">—</option>
+        <?php foreach ($waAutos as $a): ?>
+          <option value="<?= (int) $a['id'] ?>"><?= e($a['template_name'] . ' (' . $a['language'] . ') · ' . t(wa_triggers()[$a['trigger_key']] ?? 'wa.trg.manual')) ?></option>
+        <?php endforeach; ?>
+      </select>
+      <button class="btn btn-sm" type="submit" data-confirm="<?= e(t('wa.send_q')) ?>"><?= e(t('wa.send_btn')) ?></button>
+    </div>
+    <?php if ($waLog): ?>
+      <ul class="wa-log">
+        <?php foreach ($waLog as $m): ?>
+          <li><?= wa_status_pill($m['status']) ?> <span class="mono"><?= e($m['template_name']) ?></span>
+            <span class="text-muted small"><?= e(fmt_dt($m['created_at'])) ?></span>
+            <?php if ($m['error']): ?><div class="small danger-text" dir="auto"><?= e($m['error']) ?></div><?php endif; ?></li>
+        <?php endforeach; ?>
+      </ul>
+    <?php endif; ?>
   </form>
   <?php endif; ?>
 

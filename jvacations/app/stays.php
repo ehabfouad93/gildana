@@ -7,7 +7,7 @@ require __DIR__ . '/_init.php';
  * of weeks per year for its term; a stay books one or more of those weeks at a
  * project on a date and time. A year can never be booked beyond its allowance.
  */
-require_role('owner_services');
+require_cap('stays.manage');
 
 $cid = (int) ($_GET['contract'] ?? 0);
 $ct  = $cid ? db_row("SELECT ct.*, c.full_name, c.phone AS client_phone, p.name AS project_name
@@ -66,6 +66,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $ct) {
          $guests ?: null, mb_substr(post_str('notes'), 0, 255) ?: null, $ME['id']]);
     log_event((int) $ct['client_id'], 'stay_booked', $projects[$proj] . ' · ' . fmt_date($checkIn) . ' ' . fmt_time($time) . ' · ' . t('stay.weeks_n', ['n' => (string) $weeks]));
     flash(t('stay.booked'));
+    wa_fire('stay_booked', (int) $ct['client_id'], ['check_in' => fmt_date($checkIn) . ' ' . fmt_time($time), 'check_out' => fmt_date($checkOut),
+                                                   'stay_project' => $projects[$proj], 'weeks' => (string) $weeks]);
     redirect($back);
 }
 

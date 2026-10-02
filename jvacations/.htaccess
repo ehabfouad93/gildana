@@ -15,10 +15,21 @@
 # NOTE: the leading (.*/)? matters — this app's folder IS the document root, so
 # requests arrive as /includes/db.php with no parent segment. A pattern of the
 # form ^/.*/(includes)/ would never match and would protect nothing.
-RedirectMatch 403 ^/(.*/)?(includes|migrations|lang|tests|deploy)/
+RedirectMatch 403 ^/(.*/)?(includes|migrations|lang|tests|deploy|storage)/
 
 # Default document.
 DirectoryIndex index.php
 
 # Never serve dotfiles (.env, .git, .htaccess).
 RedirectMatch 403 /\.
+
+# Contract templates can be a few MB (logos, signatures). PHP's default upload
+# limit is 2 MB; raise it here so no container rebuild is needed.
+<IfModule mod_php.c>
+    php_value upload_max_filesize 12M
+    php_value post_max_size 14M
+</IfModule>
+<IfModule mod_php7.c>
+    php_value upload_max_filesize 12M
+    php_value post_max_size 14M
+</IfModule>

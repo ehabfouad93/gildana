@@ -46,4 +46,5 @@ if (file_exists("$root/config.php")) {
 @chmod("$root/config.php", 0640);
 echo "✓ config.php owned by www-data (0640)\n";
 
+
 require __DIR__ . '/migrate.php';

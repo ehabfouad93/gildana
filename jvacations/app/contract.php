@@ -39,6 +39,7 @@ ob_start();
     <div class="cd-meta">
       <div><?= e($L('contract.no')) ?>: <strong><?= e($ct['contract_no']) ?></strong></div>
       <div><?= e($L('contract.date')) ?>: <strong><?= e(fmt_date($ct['contract_date'])) ?></strong></div>
+      <div><?= e($L('search.client_no')) ?>: <strong><?= e(client_code((int) $ct['client_id'])) ?></strong></div>
     </div>
   </div>
 
@@ -139,7 +140,12 @@ if (($_GET['print'] ?? '') === '1') {
 }
 
 $q = fn(array $extra) => '?' . http_build_query(array_merge(['id' => $id, 'lang' => $lang], $extra));
-$actions = '<a class="btn btn-primary" href="' . e($q(['print' => '1'])) . '" target="_blank">' . e(t('doc.print')) . '</a>'
+$tpls = db_all("SELECT id, name FROM contract_templates WHERE active = 1 AND (project_id IS NULL OR project_id = ?) ORDER BY name", [$ct['project_id']]);
+$actions = '';
+foreach ($tpls as $tp) {
+    $actions .= '<a class="btn btn-dark" href="contract_docx.php?id=' . $id . '&amp;tpl=' . (int) $tp['id'] . '">⬇ ' . e($tp['name']) . '</a>';
+}
+$actions .= '<a class="btn btn-primary" href="' . e($q(['print' => '1'])) . '" target="_blank">' . e(t('doc.print')) . '</a>'
          . '<a class="btn" href="' . e($q(['download' => 'doc'])) . '">' . e(t('doc.download')) . '</a>'
          . '<a class="btn btn-ghost" href="' . e($q(['lang' => $lang === 'ar' ? 'en' : 'ar'])) . '">' . e($lang === 'ar' ? 'English' : 'العربية') . '</a>'
          . '<a class="btn btn-ghost" href="client.php?id=' . (int) $c['id'] . '">' . e(t('ui.back')) . '</a>';

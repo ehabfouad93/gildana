@@ -13,24 +13,28 @@ $tile  = function (string $label, $value, string $cls = '', string $href = '', s
 };
 $count = fn(string $sql, array $p = []) => (int) db_val($sql, $p);
 
-if ($role === 'advisor') {
+if (can('clients.add') && !$all) {
     $tile(t('dash.my_clients'), $count("SELECT COUNT(*) FROM clients WHERE created_by = ?", [$me]), '', 'clients.php');
     $tile(t('dash.added_month'), $count("SELECT COUNT(*) FROM clients WHERE created_by = ? AND created_at >= DATE_FORMAT(CURDATE(), '%Y-%m-01')", [$me]), 'accent');
     $tile(t('tab.waiting_book'), $count("SELECT COUNT(*) FROM clients WHERE created_by = ? AND stage = 'new'", [$me]), '', 'clients.php?tab=waiting');
     $tile(t('tab.won'), $count("SELECT COUNT(*) FROM clients WHERE created_by = ? AND stage = 'contracted'", [$me]), 'good', 'clients.php?tab=won');
 }
-if ($all || $role === 'booker') {
+if (can('clients.book')) {
     $tile(t('tab.to_book'), $count("SELECT COUNT(*) FROM clients WHERE stage = 'new'"), 'accent', 'clients.php?tab=' . ($all ? 'new' : 'to_book'));
 }
-if ($role === 'booker') {
+if (can('clients.book') && !$all) {
     $tile(t('dash.booked_week'), $count("SELECT COUNT(*) FROM clients WHERE booker_id = ? AND booked_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)", [$me]));
 }
-if ($all || $role === 'communicator') {
+if (can('clients.confirm')) {
     $tile(t('tab.to_confirm'), $count("SELECT COUNT(*) FROM clients WHERE stage = 'booked'"), 'accent', 'clients.php?tab=' . ($all ? 'booked' : 'to_confirm'));
     $tile(t('dash.meetings_today'), $count("SELECT COUNT(*) FROM clients WHERE stage IN ('booked','confirmed') AND meeting_date = CURDATE()"));
 }
-if ($role === 'sales') {
-    $tile(t('tab.my_meetings'), $count("SELECT COUNT(*) FROM clients WHERE sales_id = ? AND stage = 'confirmed'", [$me]), 'accent', 'clients.php?tab=meetings');
+if (can('clients.arrive')) {
+    $tile(t('tab.expected_today'), $count("SELECT COUNT(*) FROM clients WHERE stage IN ('booked','confirmed') AND meeting_date = CURDATE()"), 'accent', 'clients.php?tab=' . ($all ? 'confirmed' : 'today'));
+    $tile(t('tab.at_office'), $count("SELECT COUNT(*) FROM clients WHERE stage = 'arrived'"), 'purple', 'clients.php?tab=' . ($all ? 'arrived' : 'at_office'));
+}
+if (can('clients.close') && !$all) {
+    $tile(t('tab.my_meetings'), $count("SELECT COUNT(*) FROM clients WHERE sales_id = ? AND stage = 'arrived'", [$me]), 'accent', 'clients.php?tab=meetings');
     $tile(t('dash.won_month'), $count("SELECT COUNT(*) FROM clients WHERE sales_id = ? AND stage = 'contracted' AND closed_at >= DATE_FORMAT(CURDATE(), '%Y-%m-01')", [$me]), 'good', 'clients.php?tab=won');
     $won  = $count("SELECT COUNT(*) FROM clients WHERE sales_id = ? AND stage = 'contracted'", [$me]);
     $lost = $count("SELECT COUNT(*) FROM clients WHERE sales_id = ? AND stage = 'lost'", [$me]);
@@ -38,7 +42,7 @@ if ($role === 'sales') {
     $sold = (float) db_val("SELECT COALESCE(SUM(ct.total_amount),0) FROM contracts ct JOIN clients c ON c.id = ct.client_id WHERE c.sales_id = ? AND ct.contract_date >= DATE_FORMAT(CURDATE(), '%Y-%m-01')", [$me]);
     $tile(t('dash.sold_month'), money($sold));
 }
-if ($all || in_array($role, ['accountant', 'owner_services'], true)) {
+if (can_any('contracts.view', 'payments.record')) {
     $fin = db_row("SELECT COALESCE(SUM(amount),0) AS total, COALESCE(SUM(paid_amount),0) AS paid,
                           COALESCE(SUM(CASE WHEN status <> 'paid' AND due_date < CURDATE() THEN amount - paid_amount ELSE 0 END),0) AS overdue,
                           COALESCE(SUM(CASE WHEN status <> 'paid' AND due_date BETWEEN CURDATE() AND LAST_DAY(CURDATE()) THEN amount - paid_amount ELSE 0 END),0) AS month_due,
@@ -50,7 +54,7 @@ if ($all || in_array($role, ['accountant', 'owner_services'], true)) {
     $tile(t('res.overdue'), money($fin['overdue']), 'danger', 'instalments.php?tab=overdue');
     $tile(t('res.remaining'), money((float) $fin['total'] - (float) $fin['paid']));
 }
-if ($all || $role === 'owner_services') {
+if (can('stays.manage')) {
     $tile(t('dash.stays_30'), $count("SELECT COUNT(*) FROM stays WHERE status = 'confirmed' AND check_in BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)"), '', 'stays.php?tab=upcoming');
 }
 
@@ -63,9 +67,9 @@ if ($all) {
 /* Meetings list relevant to this role. */
 $meetings = [];
 $mWhere = null; $mParams = [];
-if ($all || $role === 'communicator') { $mWhere = "c.stage IN ('booked','confirmed')"; }
-elseif ($role === 'booker')           { $mWhere = "c.stage IN ('booked','confirmed') AND c.booker_id = ?"; $mParams = [$me]; }
-elseif ($role === 'sales')            { $mWhere = "c.stage IN ('booked','confirmed') AND c.sales_id = ?"; $mParams = [$me]; }
+if ($all || can_any('clients.confirm', 'clients.arrive')) { $mWhere = "c.stage IN ('booked','confirmed')"; }
+elseif (can('clients.book'))  { $mWhere = "c.stage IN ('booked','confirmed') AND c.booker_id = ?"; $mParams = [$me]; }
+elseif (can('clients.close')) { $mWhere = "c.stage IN ('booked','confirmed','arrived') AND c.sales_id = ?"; $mParams = [$me]; }
 if ($mWhere) {
     $meetings = db_all("SELECT c.id, c.full_name, c.phone, c.stage, c.meeting_date, c.meeting_time, c.meeting_place, s.name AS sales_name
                           FROM clients c LEFT JOIN users s ON s.id = c.sales_id
@@ -105,7 +109,7 @@ page_head(t('dash.hello', ['name' => $ME['name']]), t('dash.sub.' . $role));
 </div>
 <?php endif; ?>
 
-<?php if ($role === 'advisor'): ?>
+<?php if (can('clients.add') && !$all): ?>
   <div class="card cta-card"><div><h2><?= e(t('dash.advisor_cta')) ?></h2><p class="text-muted"><?= e(t('client.new_sub')) ?></p></div>
     <a class="btn btn-primary" href="client_new.php">+ <?= e(t('nav.client_new')) ?></a></div>
 <?php endif; ?>

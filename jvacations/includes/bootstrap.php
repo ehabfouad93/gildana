@@ -11,6 +11,8 @@ require __DIR__ . '/db.php';
 require __DIR__ . '/auth.php';
 require __DIR__ . '/i18n.php';
 require __DIR__ . '/domain.php';
+require __DIR__ . '/caps.php';
+require __DIR__ . '/whatsapp.php';
 
 date_default_timezone_set((string) config('timezone', 'Africa/Cairo'));
 

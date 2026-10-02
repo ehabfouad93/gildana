@@ -8,18 +8,24 @@ declare(strict_types=1);
 
 function nav_items(string $role): array
 {
+    $admin = $role === 'admin';
     $all = [
-        'dashboard'    => ['label' => t('nav.dashboard'),    'url' => 'dashboard.php',    'icon' => 'grid',  'roles' => ROLES],
-        'client_new'   => ['label' => t('nav.client_new'),   'url' => 'client_new.php',   'icon' => 'plus',  'roles' => ['admin', 'advisor']],
-        'clients'      => ['label' => t('nav.clients.' . $role), 'url' => 'clients.php',  'icon' => 'users', 'roles' => ['admin', 'advisor', 'booker', 'communicator', 'sales', 'owner_services']],
-        'reservations' => ['label' => t('nav.reservations'), 'url' => 'reservations.php', 'icon' => 'doc',   'roles' => ['admin', 'accountant', 'owner_services']],
-        'instalments'  => ['label' => t('nav.instalments'),  'url' => 'instalments.php',  'icon' => 'cash',  'roles' => ['admin', 'accountant', 'owner_services']],
-        'stays'        => ['label' => t('nav.stays'),        'url' => 'stays.php',        'icon' => 'cal',   'roles' => ['admin', 'owner_services']],
-        'projects'     => ['label' => t('nav.projects'),     'url' => 'projects.php',     'icon' => 'pin',   'roles' => ['admin', 'owner_services']],
-        'users'        => ['label' => t('nav.users'),        'url' => 'users.php',        'icon' => 'team',  'roles' => ['admin']],
-        'settings'     => ['label' => t('nav.settings'),     'url' => 'settings.php',     'icon' => 'gear',  'roles' => ['admin']],
+        'dashboard'    => ['label' => t('nav.dashboard'),    'url' => 'dashboard.php',    'icon' => 'grid',   'show' => true],
+        'search'       => ['label' => t('nav.search'),       'url' => 'search.php',       'icon' => 'search', 'show' => true],
+        'client_new'   => ['label' => t('nav.client_new'),   'url' => 'client_new.php',   'icon' => 'plus',   'show' => can('clients.add')],
+        'clients'      => ['label' => t('nav.clients.' . $role), 'url' => 'clients.php',  'icon' => 'users',
+                           'show' => can_any('clients.add', 'clients.book', 'clients.confirm', 'clients.arrive', 'clients.close', 'clients.view_all')],
+        'reservations' => ['label' => t('nav.reservations'), 'url' => 'reservations.php', 'icon' => 'doc',    'show' => can_any('contracts.view', 'payments.record')],
+        'instalments'  => ['label' => t('nav.instalments'),  'url' => 'instalments.php',  'icon' => 'cash',   'show' => can_any('contracts.view', 'payments.record')],
+        'stays'        => ['label' => t('nav.stays'),        'url' => 'stays.php',        'icon' => 'cal',    'show' => can('stays.manage')],
+        'projects'     => ['label' => t('nav.projects'),     'url' => 'projects.php',     'icon' => 'pin',    'show' => can('projects.manage')],
+        'whatsapp'     => ['label' => t('nav.whatsapp'),     'url' => 'whatsapp.php',     'icon' => 'chat',   'show' => $admin],
+        'templates'    => ['label' => t('nav.templates'),    'url' => 'contract_templates.php', 'icon' => 'doc', 'show' => $admin],
+        'users'        => ['label' => t('nav.users'),        'url' => 'users.php',        'icon' => 'team',   'show' => $admin],
+        'roles'        => ['label' => t('nav.roles'),        'url' => 'roles.php',        'icon' => 'key',    'show' => $admin],
+        'settings'     => ['label' => t('nav.settings'),     'url' => 'settings.php',     'icon' => 'gear',   'show' => $admin],
     ];
-    return array_filter($all, fn($i) => in_array($role, $i['roles'], true));
+    return array_filter($all, fn($i) => $i['show']);
 }
 
 function nav_icon(string $key): string
@@ -34,6 +40,9 @@ function nav_icon(string $key): string
         'cal'   => '<rect x="2" y="3" width="12" height="11" rx="1"/><path d="M2 6.5h12M5 1.5v3M11 1.5v3"/>',
         'pin'   => '<path d="M8 14.5s-4.5-4.2-4.5-7.5a4.5 4.5 0 019 0c0 3.3-4.5 7.5-4.5 7.5z"/><circle cx="8" cy="7" r="1.6"/>',
         'team'  => '<circle cx="5.5" cy="6" r="2"/><circle cx="11" cy="6" r="2"/><path d="M1.5 13c0-2 1.8-3.2 4-3.2s4 1.2 4 3.2M10 10c2 0 4.5 1 4.5 3"/>',
+        'search'=> '<circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5l3.5 3.5"/>',
+        'chat'  => '<path d="M2.5 3.5h11a1 1 0 011 1v6a1 1 0 01-1 1H6l-3 2.5V11.5H2.5a1 1 0 01-1-1v-6a1 1 0 011-1z"/>',
+        'key'   => '<circle cx="5" cy="8" r="3"/><path d="M8 8h6.5M12 8v2.5M14 8v2"/>',
         'gear'  => '<circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4"/>',
     ];
     return "<svg $s>" . ($icons[$key] ?? $icons['grid']) . '</svg>';
@@ -76,6 +85,9 @@ function layout_header(string $title, string $active): void
     <span class="brand-mark"><?= e(setting('company_name')) ?></span>
     <span class="topbar-sub"><?= e(t('role.' . $u['role'])) ?></span>
   </div>
+  <form class="top-search" method="get" action="search.php" role="search">
+    <input type="search" name="q" placeholder="<?= e(t('search.top')) ?>" aria-label="<?= e(t('nav.search')) ?>">
+  </form>
   <nav class="topbar-nav">
     <?= locale_toggle() ?>
     <span class="topbar-email"><?= e($u['name']) ?></span>

@@ -3,7 +3,7 @@ declare(strict_types=1);
 require __DIR__ . '/_init.php';
 
 /** Collections board across all reservations: what is overdue, due soon, or just paid. */
-require_role('accountant', 'owner_services');
+require_cap('contracts.view', 'payments.record');
 
 $views = [
     'overdue'  => [t('inst.overdue'),  "i.status <> 'paid' AND i.due_date < CURDATE()", 'i.due_date ASC'],

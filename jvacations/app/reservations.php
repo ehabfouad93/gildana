@@ -3,7 +3,7 @@ declare(strict_types=1);
 require __DIR__ . '/_init.php';
 
 /** Every reservation (contract) with its collection position. Accountant + owner services. */
-require_role('accountant', 'owner_services');
+require_cap('contracts.view', 'payments.record');
 
 $q       = trim((string) ($_GET['q'] ?? ''));
 $project = (int) ($_GET['project'] ?? 0);
@@ -45,7 +45,7 @@ foreach ($rows as $r) {
     $sum['overdue'] += (float) $r['overdue'];
 }
 
-if (($_GET['export'] ?? '') === 'csv') {
+if (($_GET['export'] ?? '') === 'csv' && can('export.csv')) {
     header('Content-Type: text/csv; charset=UTF-8');
     header('Content-Disposition: attachment; filename="reservations-' . date('Ymd') . '.csv"');
     echo "\xEF\xBB\xBF";

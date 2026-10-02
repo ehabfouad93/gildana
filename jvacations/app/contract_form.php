@@ -6,20 +6,25 @@ require __DIR__ . '/_init.php';
  * Sales closes the deal: the client's official data and the payment plan.
  * Saving creates the reservation, generates the instalment schedule and moves
  * the client to "contracted". The plan can be corrected until the first
- * payment is recorded; after that it is locked so payments never orphan.
+ * payment is recorded; after that the plan is locked so payments never orphan.
+ * Whoever holds "Edit contracts" (admin by default) can still correct the
+ * contract data after that; the plan itself changes only through Reschedule
+ * on the statement.
  */
-require_role('sales');
+require_cap('clients.close', 'contracts.edit');
 
 $cid = (int) ($_GET['client'] ?? 0);
 $c   = client_or_403($cid, $ME);
-if ($ME['role'] === 'sales' && (int) $c['sales_id'] !== $ME['id']) { http_response_code(403); exit(t('err.forbidden')); }
+$editor = can('contracts.edit');
+if (!$editor && (int) $c['sales_id'] !== $ME['id']) { http_response_code(403); exit(t('err.forbidden')); }
 
 $ct = db_row("SELECT * FROM contracts WHERE client_id = ?", [$cid]);
-if (!$ct && $c['stage'] !== 'confirmed') {
+if (!$ct && $c['stage'] !== 'arrived') {
     flash(t('err.wrong_stage'), 'error');
     redirect('client.php?id=' . $cid);
 }
-if ($ct && (float) db_val("SELECT COALESCE(SUM(paid_amount),0) FROM instalments WHERE contract_id = ?", [$ct['id']]) > 0) {
+$planLocked = $ct && (float) db_val("SELECT COALESCE(SUM(paid_amount),0) FROM instalments WHERE contract_id = ?", [$ct['id']]) > 0;
+if ($planLocked && !$editor) {
     flash(t('contract.locked'), 'error');
     redirect('contract.php?id=' . (int) $ct['id']);
 }
@@ -27,7 +32,8 @@ if ($ct && (float) db_val("SELECT COALESCE(SUM(paid_amount),0) FROM instalments 
 $projects = [];
 foreach (db_all("SELECT id, name FROM projects WHERE active = 1 OR id = ? ORDER BY name", [$ct['project_id'] ?? 0]) as $p) $projects[$p['id']] = $p['name'];
 $monthOpts = month_options();
-$canPct    = $ME['role'] === 'admin';
+if ($ct && !in_array((int) $ct['months'], $monthOpts, true)) $monthOpts[] = (int) $ct['months'];
+$canPct    = $editor;
 
 $today = date('Y-m-d');
 $defaults = [
@@ -63,6 +69,14 @@ if ($ct && $_SERVER['REQUEST_METHOD'] !== 'POST') {
     $val['down_pct']     = rtrim(rtrim($ct['down_pct'], '0'), '.');
 }
 if (!$canPct) $val['down_pct'] = $ct ? rtrim(rtrim($ct['down_pct'], '0'), '.') : setting('down_pct');
+if ($planLocked) {
+    // Payments exist: the plan fields always come from the stored contract.
+    $val['total_amount']   = rtrim(rtrim($ct['total_amount'], '0'), '.');
+    $val['down_pct']       = rtrim(rtrim($ct['down_pct'], '0'), '.');
+    $val['months']         = (string) $ct['months'];
+    $val['first_due_date'] = (string) $ct['first_due_date'];
+    $val['contract_date']  = (string) $ct['contract_date'];
+}
 
 $errors = [];
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -92,6 +106,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($sy < 2000 || $sy > 2100)                  $errors[] = t('contract.err.start');
     if ($val['email'] !== '' && !filter_var($val['email'], FILTER_VALIDATE_EMAIL)) $errors[] = t('err.bad_email');
 
+    if (!$errors && $planLocked) {
+        db_run("UPDATE contracts SET official_name=?, national_id=?, nationality=?, birth_date=?, address=?, phone=?, email=?, second_party=?,
+                project_id=?, unit_type=?, season=?, weeks_per_year=?, duration_years=?, start_year=?, notes=?, updated_at=NOW() WHERE id=?",
+            [$val['official_name'], $val['national_id'], $val['nationality'] ?: null, $birth, $val['address'] ?: null, $val['phone'] ?: null,
+             $val['email'] ?: null, $val['second_party'] ?: null, (int) $val['project_id'], $val['unit_type'] ?: null, $val['season'] ?: null,
+             $wpy, $dur, $sy, $val['notes'] ?: null, $ct['id']]);
+        log_event($cid, 'contract_edited', t('contract.data_only'));
+        flash(t('contract.saved_data'));
+        redirect('contract.php?id=' . (int) $ct['id']);
+    }
     if (!$errors) {
         $plan = build_schedule($total, $pct, $months, $cDate, $first);
         $pdo  = db();
@@ -132,6 +156,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             throw $ex;
         }
         flash(t('contract.saved'));
+        if (!$ct) wa_fire('contracted', $cid);
         redirect('contract.php?id=' . $contractId);
     }
 }
@@ -144,6 +169,8 @@ page_head(t('contract.form_title'), t('contract.form_sub', ['name' => $c['full_n
 ?>
 <?php if ($errors): ?><div class="alert error"><ul class="err-list"><?php foreach ($errors as $er): ?><li><?= e($er) ?></li><?php endforeach; ?></ul></div><?php endif; ?>
 
+<?php if ($planLocked): ?><div class="alert warn"><?= e(t('contract.plan_locked_admin')) ?>
+  <a href="reservation.php?id=<?= (int) $ct['id'] ?>#reschedule"><?= e(t('res.reschedule')) ?></a></div><?php endif; ?>
 <form method="post" class="contract-form" id="contractForm">
   <?= csrf_field() ?>
   <div class="grid-main">
@@ -196,20 +223,20 @@ page_head(t('contract.form_title'), t('contract.form_sub', ['name' => $c['full_n
       <h2>3 · <?= e(t('contract.sec.payment')) ?></h2>
       <div class="grid2">
         <div class="field"><span class="lbl"><?= e(t('contract.date')) ?> *</span>
-          <input type="date" name="contract_date" value="<?= e($val['contract_date']) ?>" required data-calc></div>
+          <input type="date" name="contract_date" value="<?= e($val['contract_date']) ?>" required data-calc <?= $planLocked ? 'readonly' : '' ?>></div>
         <div class="field"><span class="lbl"><?= e(t('contract.total')) ?> (<?= e(setting('currency')) ?>) *</span>
-          <input type="text" inputmode="decimal" name="total_amount" value="<?= e($val['total_amount']) ?>" required dir="ltr" data-calc></div>
+          <input type="text" inputmode="decimal" name="total_amount" value="<?= e($val['total_amount']) ?>" required dir="ltr" data-calc <?= $planLocked ? 'readonly' : '' ?>></div>
         <div class="field"><span class="lbl"><?= e(t('contract.down_pct')) ?></span>
-          <input type="number" step="0.01" name="down_pct" value="<?= e($val['down_pct']) ?>" <?= $canPct ? '' : 'readonly' ?> data-calc>
+          <input type="number" step="0.01" name="down_pct" value="<?= e($val['down_pct']) ?>" <?= $canPct && !$planLocked ? '' : 'readonly' ?> data-calc>
           <?php if (!$canPct): ?><span class="hint"><?= e(t('contract.pct_fixed')) ?></span><?php endif; ?></div>
         <div class="field"><span class="lbl"><?= e(t('contract.months')) ?> *</span>
           <div class="seg">
             <?php foreach ($monthOpts as $m): ?>
-              <label class="seg-opt"><input type="radio" name="months" value="<?= $m ?>" <?= (string) $m === $val['months'] ? 'checked' : '' ?> required data-calc><span><?= e(t('contract.months_n', ['n' => (string) $m])) ?></span></label>
+              <label class="seg-opt"><input type="radio" name="months" value="<?= $m ?>" <?= (string) $m === $val['months'] ? 'checked' : '' ?> <?= $planLocked && (string) $m !== $val['months'] ? 'disabled' : '' ?> required data-calc><span><?= e(t('contract.months_n', ['n' => (string) $m])) ?></span></label>
             <?php endforeach; ?>
           </div></div>
         <div class="field"><span class="lbl"><?= e(t('contract.first_due')) ?> *</span>
-          <input type="date" name="first_due_date" value="<?= e($val['first_due_date']) ?>" required data-calc></div>
+          <input type="date" name="first_due_date" value="<?= e($val['first_due_date']) ?>" required data-calc <?= $planLocked ? 'readonly' : '' ?>></div>
       </div>
       <div class="field"><span class="lbl"><?= e(t('contract.notes')) ?></span>
         <textarea name="notes" rows="2"><?= e($val['notes']) ?></textarea></div>

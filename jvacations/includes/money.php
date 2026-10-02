@@ -58,3 +58,50 @@ function build_schedule(int $totalCents, float $downPct, int $months, string $co
     }
     return ['down' => $down, 'monthly' => $base, 'rows' => $rows];
 }
+
+/**
+ * Re-plan what is still owed on a contract without touching recorded payments.
+ *
+ *   - fully paid instalments stay exactly as they are;
+ *   - a partly paid instalment is closed at what was actually paid (its shortfall
+ *     moves into the new plan);
+ *   - an unpaid down payment stays as it is;
+ *   - every other unpaid instalment is replaced by $months new ones from $firstDue,
+ *     splitting (new total − kept) the same way build_schedule() does.
+ *
+ * @param list<array{id:int,seq:int,amount:int,paid:int,status:string}> $rows  amounts in cents
+ * @return array{close:array<int,int>, delete:list<int>, kept:int, monthly:int, rows:list<array{seq:int,due:string,amount:int}>}
+ * @throws InvalidArgumentException when the new total is below what is already kept
+ */
+function reschedule_plan(array $rows, int $newTotal, int $months, string $firstDue): array
+{
+    $close = []; $delete = []; $kept = 0; $maxSeq = 0;
+    foreach ($rows as $r) {
+        if ($r['status'] === 'paid') {
+            $kept += $r['amount'];
+        } elseif ($r['paid'] > 0) {
+            $close[$r['id']] = $r['paid'];
+            $kept += $r['paid'];
+        } elseif ($r['seq'] === 0) {
+            $kept += $r['amount'];
+        } else {
+            $delete[] = $r['id'];
+            continue;
+        }
+        $maxSeq = max($maxSeq, $r['seq']);
+    }
+    $remaining = $newTotal - $kept;
+    if ($remaining < 0) throw new InvalidArgumentException('below_kept');
+
+    $out = []; $base = 0;
+    if ($remaining > 0) {
+        $months = max(1, $months);
+        $base = intdiv($remaining, $months * 100) * 100;
+        if ($base === 0) $base = intdiv($remaining, $months);
+        for ($i = 1; $i <= $months; $i++) {
+            $out[] = ['seq' => $maxSeq + $i, 'due' => add_months($firstDue, $i - 1),
+                      'amount' => $i < $months ? $base : $remaining - $base * ($months - 1)];
+        }
+    }
+    return ['close' => $close, 'delete' => $delete, 'kept' => $kept, 'monthly' => $base, 'rows' => $out];
+}

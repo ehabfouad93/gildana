@@ -6,41 +6,50 @@ require __DIR__ . '/_init.php';
  * One client list, scoped per role. Each department gets its own queue
  * (what is waiting on them) plus the clients it has already handled.
  */
-require_role('advisor', 'booker', 'communicator', 'sales', 'owner_services');
+require_cap('clients.add', 'clients.book', 'clients.confirm', 'clients.arrive', 'clients.close', 'clients.view_all');
 
 $me = $ME['id'];
 
-/** tab key => [label, WHERE sql, params, order] */
+/**
+ * tab key => [label, WHERE sql, params, order]. A person gets the tabs of every
+ * capability they hold, so a custom role combining two jobs sees both queues.
+ */
 $views = [];
-switch ($ME['role']) {
-    case 'advisor':
-        $views['mine']    = [t('tab.mine'),        "c.created_by = ?", [$me], 'c.id DESC'];
-        $views['waiting'] = [t('tab.waiting_book'), "c.created_by = ? AND c.stage = 'new'", [$me], 'c.id DESC'];
-        $views['won']     = [t('tab.won'),         "c.created_by = ? AND c.stage = 'contracted'", [$me], 'c.closed_at DESC'];
-        break;
-    case 'booker':
-        $views['to_book'] = [t('tab.to_book'),     "c.stage = 'new'", [], 'c.id ASC'];
-        $views['booked']  = [t('tab.booked_by_me'), "c.booker_id = ? AND c.stage <> 'new'", [$me], 'c.meeting_date DESC, c.meeting_time DESC'];
-        break;
-    case 'communicator':
+if ($ME['role'] === 'admin') {
+    $views['all'] = [t('tab.all'), "1=1", [], 'c.id DESC'];
+    foreach (STAGES as $s) {
+        $views[$s] = [t('stage.' . $s), "c.stage = ?", [$s], 'c.id DESC'];
+    }
+} else {
+    if (can('clients.arrive')) {
+        $views['today']      = [t('tab.expected_today'), "c.stage IN ('booked','confirmed') AND c.meeting_date = CURDATE()", [], 'c.meeting_time ASC'];
+        $views['expected']   = [t('tab.expected'),       "c.stage IN ('booked','confirmed')", [], 'c.meeting_date ASC, c.meeting_time ASC'];
+        $views['at_office']  = [t('tab.at_office'),      "c.stage = 'arrived'", [], 'c.arrived_at DESC'];
+    }
+    if (can('clients.close')) {
+        $views['meetings'] = [t('tab.my_meetings'),  "c.sales_id = ? AND c.stage = 'arrived'", [$me], 'c.arrived_at ASC'];
+        $views['upcoming'] = [t('tab.pending_conf'), "c.sales_id = ? AND c.stage IN ('booked','confirmed')", [$me], 'c.meeting_date ASC, c.meeting_time ASC'];
+        $views['won']      = [t('tab.won'),          "c.sales_id = ? AND c.stage = 'contracted'", [$me], 'c.closed_at DESC'];
+        $views['lost']     = [t('tab.lost'),         "c.sales_id = ? AND c.stage = 'lost'", [$me], 'c.closed_at DESC'];
+    }
+    if (can('clients.confirm')) {
         $views['to_confirm'] = [t('tab.to_confirm'), "c.stage = 'booked'", [], 'c.meeting_date ASC, c.meeting_time ASC'];
         $views['confirmed']  = [t('tab.confirmed'),  "c.stage = 'confirmed'", [], 'c.meeting_date ASC, c.meeting_time ASC'];
         $views['handled']    = [t('tab.handled'),    "c.communicator_id = ?", [$me], 'c.confirmed_at DESC'];
-        break;
-    case 'sales':
-        $views['meetings'] = [t('tab.my_meetings'), "c.sales_id = ? AND c.stage = 'confirmed'", [$me], 'c.meeting_date ASC, c.meeting_time ASC'];
-        $views['upcoming'] = [t('tab.pending_conf'), "c.sales_id = ? AND c.stage = 'booked'", [$me], 'c.meeting_date ASC, c.meeting_time ASC'];
-        $views['won']      = [t('tab.won'),         "c.sales_id = ? AND c.stage = 'contracted'", [$me], 'c.closed_at DESC'];
-        $views['lost']     = [t('tab.lost'),        "c.sales_id = ? AND c.stage = 'lost'", [$me], 'c.closed_at DESC'];
-        break;
-    case 'owner_services':
+    }
+    if (can('clients.book')) {
+        $views['to_book'] = [t('tab.to_book'),      "c.stage = 'new'", [], 'c.id ASC'];
+        $views['booked']  = [t('tab.booked_by_me'), "c.booker_id = ? AND c.stage <> 'new'", [$me], 'c.meeting_date DESC, c.meeting_time DESC'];
+    }
+    if (can('clients.add')) {
+        $views['mine']    = [t('tab.mine'),         "c.created_by = ?", [$me], 'c.id DESC'];
+        $views['waiting'] = [t('tab.waiting_book'), "c.created_by = ? AND c.stage = 'new'", [$me], 'c.id DESC'];
+        $views['added_won'] = [t('tab.won'),        "c.created_by = ? AND c.stage = 'contracted'", [$me], 'c.closed_at DESC'];
+    }
+    if (can('clients.view_all')) {
         $views['owners'] = [t('tab.owners'), "c.stage = 'contracted'", [], 'c.closed_at DESC'];
-        break;
-    default: // admin
-        $views['all'] = [t('tab.all'), "1=1", [], 'c.id DESC'];
-        foreach (STAGES as $s) {
-            $views[$s] = [t('stage.' . $s), "c.stage = ?", [$s], 'c.id DESC'];
-        }
+        $views['every']  = [t('tab.all'),    "1=1", [], 'c.id DESC'];
+    }
 }
 
 $tab = (string) ($_GET['tab'] ?? '');
@@ -49,9 +58,9 @@ if (!isset($views[$tab])) $tab = (string) array_key_first($views);
 
 $q = trim((string) ($_GET['q'] ?? ''));
 if ($q !== '') {
-    $where  .= " AND (c.full_name LIKE ? OR c.phone LIKE ? OR c.phone2 LIKE ? OR ct.contract_no LIKE ?)";
-    $like    = '%' . $q . '%';
-    array_push($params, $like, $like, $like, $like);
+    [$sw, $sp] = client_search_sql($q);
+    $where  .= " AND $sw";
+    $params  = array_merge($params, $sp);
 }
 
 $rows = db_all(
@@ -69,7 +78,7 @@ foreach ($views as $k => $v) {
     $tabData[$k] = ['label' => $v[0], 'count' => (int) db_val("SELECT COUNT(*) FROM clients c WHERE {$v[1]}", $v[2])];
 }
 
-if (($_GET['export'] ?? '') === 'csv' && has_role('owner_services')) {
+if (($_GET['export'] ?? '') === 'csv' && can('export.csv')) {
     header('Content-Type: text/csv; charset=UTF-8');
     header('Content-Disposition: attachment; filename="clients-' . $tab . '-' . date('Ymd') . '.csv"');
     echo "\xEF\xBB\xBF";
@@ -82,8 +91,8 @@ if (($_GET['export'] ?? '') === 'csv' && has_role('owner_services')) {
 }
 
 $actions = '';
-if (has_role('advisor')) $actions .= '<a class="btn btn-primary" href="client_new.php">+ ' . e(t('nav.client_new')) . '</a>';
-if (has_role('owner_services')) $actions .= '<a class="btn" href="?' . e(http_build_query(['tab' => $tab, 'q' => $q, 'export' => 'csv'])) . '">' . e(t('ui.export_csv')) . '</a>';
+if (can('clients.add')) $actions .= '<a class="btn btn-primary" href="client_new.php">+ ' . e(t('nav.client_new')) . '</a>';
+if (can('export.csv')) $actions .= '<a class="btn" href="?' . e(http_build_query(['tab' => $tab, 'q' => $q, 'export' => 'csv'])) . '">' . e(t('ui.export_csv')) . '</a>';
 
 layout_header(t('nav.clients.' . $ME['role']), 'clients');
 page_head(t('nav.clients.' . $ME['role']), t('clients.sub.' . $ME['role']), $actions);
@@ -117,7 +126,7 @@ echo tabs($tabData, $tab, 'tab', $q !== '' ? ['q' => $q] : []);
     <tbody>
     <?php foreach ($rows as $r): ?>
       <tr>
-        <td class="text-muted"><?= (int) $r['id'] ?></td>
+        <td class="mono"><?= e(client_code((int) $r['id'])) ?></td>
         <td><a class="strong" href="client.php?id=<?= (int) $r['id'] ?>"><?= e($r['full_name']) ?></a>
           <?php if ($r['contract_no']): ?><div class="text-muted small mono"><?= e($r['contract_no']) ?></div><?php endif; ?></td>
         <td dir="ltr" class="nowrap"><?= e($r['phone']) ?></td>

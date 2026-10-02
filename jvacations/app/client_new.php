@@ -6,13 +6,13 @@ require __DIR__ . '/_init.php';
  * Step 1 — the advisor adds a lead. The same form edits a lead while it is
  * still waiting for the booker; after that the lead belongs to the pipeline.
  */
-require_role('advisor');
-
 $id = (int) ($_GET['id'] ?? 0);
 $c  = null;
+if (!$id) require_cap('clients.add');
 if ($id) {
     $c = client_or_403($id, $ME);
-    if ($c['stage'] !== 'new' && $ME['role'] !== 'admin') {
+    $own = can('clients.add') && (int) $c['created_by'] === $ME['id'] && $c['stage'] === 'new';
+    if (!can('clients.edit') && !$own) {
         flash(t('client.locked'), 'error');
         redirect('client.php?id=' . $id);
     }
@@ -51,8 +51,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $id = db_insert("INSERT INTO clients (full_name, phone, phone2, email, city, job, marital_status, source, notes, stage, created_by, created_at, updated_at)
                              VALUES (?,?,?,?,?,?,?,?,?, 'new', ?, NOW(), NOW())", array_merge($params, [$ME['id']]));
             log_event($id, 'created');
+            $isNew = true;
         }
         flash(t('ui.saved'));
+        if (!empty($isNew)) wa_fire('created', $id);
         redirect(isset($_POST['and_new']) ? 'client_new.php' : 'clients.php');
     }
 }

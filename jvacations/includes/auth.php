@@ -2,12 +2,12 @@
 declare(strict_types=1);
 
 /**
- * Authentication + role guards. Every account has exactly one role; each page
- * declares which roles may open it with require_role(), and client-level access
- * is decided by can_view_client() in domain.php.
+ * Authentication. Every account has exactly one role; what a role may do is a
+ * set of capabilities (caps.php) the admin can edit, and client-level access is
+ * decided by can_view_client() in domain.php.
  */
 
-const ROLES = ['admin', 'advisor', 'booker', 'communicator', 'sales', 'accountant', 'owner_services'];
+const ROLES = ['admin', 'advisor', 'booker', 'communicator', 'sales_manager', 'sales', 'accountant', 'owner_services'];
 
 function attempt_login(string $email, string $password): bool
 {

@@ -7,8 +7,9 @@ require __DIR__ . '/_init.php';
  * generated from the contract. The accountant reads it; owner services records
  * each payment (paid / partial / unpaid, date, receipt).
  */
-require_role('accountant', 'owner_services');
-$canPay = has_role('owner_services');
+require_cap('contracts.view', 'payments.record');
+$canPay = can('payments.record');
+$canResched = can('contracts.reschedule');
 
 $id = (int) ($_GET['id'] ?? 0);
 $ct = db_row("SELECT ct.*, p.name AS project_name, c.full_name, c.phone AS client_phone, u.name AS sales_name
@@ -16,6 +17,71 @@ $ct = db_row("SELECT ct.*, p.name AS project_name, c.full_name, c.phone AS clien
                 LEFT JOIN users u ON u.id = ct.created_by WHERE ct.id = ?", [$id]);
 if (!$ct) { http_response_code(404); exit(t('err.not_found')); }
 $cur = $ct['currency'];
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'reschedule') {
+    verify_csrf();
+    if (!$canResched) { http_response_code(403); exit(t('err.forbidden')); }
+    $back   = 'reservation.php?id=' . $id;
+    $total  = to_cents($_POST['total_amount'] ?? '');
+    $months = (int) ($_POST['months'] ?? 0);
+    $first  = valid_date($_POST['first_due'] ?? '');
+    if ($total <= 0 || $months < 1 || $months > 120 || !$first) { flash(t('res.resched_err'), 'error'); redirect($back . '#reschedule'); }
+
+    $rows = array_map(fn($r) => ['id' => (int) $r['id'], 'seq' => (int) $r['seq'], 'amount' => to_cents($r['amount']),
+                                 'paid' => to_cents($r['paid_amount']), 'status' => $r['status']],
+                      db_all("SELECT id, seq, amount, paid_amount, status FROM instalments WHERE contract_id = ? ORDER BY seq", [$id]));
+    try {
+        $plan = reschedule_plan($rows, $total, $months, $first);
+    } catch (InvalidArgumentException $e) {
+        flash(t('res.resched_below'), 'error');
+        redirect($back . '#reschedule');
+    }
+    $pdo = db();
+    $pdo->beginTransaction();
+    try {
+        foreach ($plan['close'] as $iid => $paid) {
+            db_run("UPDATE instalments SET amount = ?, status = 'paid', note = CONCAT(COALESCE(note,''), ?), updated_by = ?, updated_at = NOW() WHERE id = ?",
+                [from_cents($paid), ' [' . t('res.closed_partial') . ']', $ME['id'], $iid]);
+        }
+        if ($plan['delete']) {
+            db_run("DELETE FROM instalments WHERE contract_id = ? AND id IN (" . implode(',', array_map('intval', $plan['delete'])) . ")", [$id]);
+        }
+        $st = $pdo->prepare("INSERT INTO instalments (contract_id, seq, due_date, amount) VALUES (?,?,?,?)");
+        foreach ($plan['rows'] as $r) $st->execute([$id, $r['seq'], $r['due'], from_cents($r['amount'])]);
+        $n = (int) db_val("SELECT COUNT(*) FROM instalments WHERE contract_id = ? AND seq > 0", [$id]);
+        db_run("UPDATE contracts SET total_amount = ?, months = ?, monthly_amount = ?, updated_at = NOW() WHERE id = ?",
+            [from_cents($total), $n, from_cents($plan['monthly'] ?: to_cents($ct['monthly_amount'])), $id]);
+        log_event((int) $ct['client_id'], 'rescheduled', money(from_cents($total), $cur) . ' · ' . t('res.resched_line', ['n' => (string) $months, 'from' => fmt_date($first)])
+            . (post_str('reason') !== '' ? ' — ' . post_str('reason') : ''));
+        $pdo->commit();
+    } catch (Throwable $ex) {
+        $pdo->rollBack();
+        throw $ex;
+    }
+    flash(t('res.resched_done'));
+    redirect($back);
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit_inst') {
+    verify_csrf();
+    if (!$canResched) { http_response_code(403); exit(t('err.forbidden')); }
+    $iid  = (int) ($_POST['inst_id'] ?? 0);
+    $inst = db_row("SELECT * FROM instalments WHERE id = ? AND contract_id = ?", [$iid, $id]);
+    $amt  = to_cents($_POST['amount'] ?? '');
+    $due  = valid_date($_POST['due_date'] ?? '');
+    if (!$inst || $amt <= 0 || !$due || $amt < to_cents($inst['paid_amount'])) {
+        flash(t('res.edit_inst_err'), 'error');
+    } else {
+        $status = to_cents($inst['paid_amount']) >= $amt ? 'paid' : (to_cents($inst['paid_amount']) > 0 ? 'partial' : 'unpaid');
+        db_run("UPDATE instalments SET amount = ?, due_date = ?, status = ?, updated_by = ?, updated_at = NOW() WHERE id = ?",
+            [from_cents($amt), $due, $status, $ME['id'], $iid]);
+        db_run("UPDATE contracts SET total_amount = (SELECT SUM(amount) FROM instalments WHERE contract_id = ?), updated_at = NOW() WHERE id = ?", [$id, $id]);
+        log_event((int) $ct['client_id'], 'inst_edited', seq_label((int) $inst['seq']) . ': ' . money($inst['amount'], $cur) . ' / ' . fmt_date($inst['due_date'])
+            . ' → ' . money(from_cents($amt), $cur) . ' / ' . fmt_date($due));
+        flash(t('ui.saved'));
+    }
+    redirect('reservation.php?id=' . $id . '#i' . $iid);
+}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     verify_csrf();
@@ -51,6 +117,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         log_event((int) $ct['client_id'], 'payment', seq_label((int) $inst['seq']) . ' → ' . t('pay.' . $status)
             . ($amount > 0 ? ' · ' . money(from_cents($amount), $cur) : ''));
         flash(t('ui.saved'));
+        if ($amount > 0 && $amount > to_cents($inst['paid_amount'])) {
+            wa_fire('payment', (int) $ct['client_id'], ['amount' => money(from_cents($amount), $cur), 'item' => seq_label((int) $inst['seq'])]);
+        }
     }
     redirect('reservation.php?id=' . $id . '#i' . $iid);
 }
@@ -71,6 +140,7 @@ page_head(t('res.statement'), $ct['contract_no'] . ' · ' . $ct['official_name']
 
 <div class="card">
   <dl class="dl dl-3">
+    <?= dl_row(t('search.client_no'), client_code((int) $ct['client_id'])) ?>
     <?= dl_row(t('contract.official_name'), $ct['official_name']) ?>
     <?= dl_row(t('contract.national_id'), $ct['national_id']) ?>
     <?= dl_row(t('client.phone'), $ct['phone'] ?: $ct['client_phone']) ?>
@@ -99,7 +169,7 @@ page_head(t('res.statement'), $ct['contract_no'] . ' · ' . $ct['official_name']
     <thead><tr>
       <th>#</th><th><?= e(t('pay.item')) ?></th><th><?= e(t('pay.due_date')) ?></th><th class="num"><?= e(t('pay.amount')) ?></th>
       <th><?= e(t('pay.status')) ?></th><th class="num"><?= e(t('pay.paid_amount')) ?></th><th><?= e(t('pay.paid_on')) ?></th>
-      <th><?= e(t('pay.receipt')) ?></th><?php if ($canPay): ?><th class="no-print"></th><?php endif; ?>
+      <th><?= e(t('pay.receipt')) ?></th><?php if ($canPay || $canResched): ?><th class="no-print"></th><?php endif; ?>
     </tr></thead>
     <tbody>
     <?php foreach ($inst as $i):
@@ -113,10 +183,26 @@ page_head(t('res.statement'), $ct['contract_no'] . ' · ' . $ct['official_name']
         <td class="num nowrap"><?= (float) $i['paid_amount'] > 0 ? e(money($i['paid_amount'], $cur)) : '—' ?></td>
         <td class="nowrap"><?= e(fmt_date($i['paid_on'])) ?><?= $i['method'] ? '<div class="small text-muted">' . e($methods[$i['method']] ?? $i['method']) . '</div>' : '' ?></td>
         <td><?= e($i['receipt_no'] ?? '—') ?><?= $i['note'] ? '<div class="small text-muted" dir="auto">' . e($i['note']) . '</div>' : '' ?></td>
-        <?php if ($canPay): ?>
-        <td class="no-print"><button class="btn btn-sm" type="button" data-toggle="pf<?= (int) $i['id'] ?>"><?= e(t('pay.update')) ?></button></td>
+        <?php if ($canPay || $canResched): ?>
+        <td class="no-print nowrap">
+          <?php if ($canPay): ?><button class="btn btn-sm" type="button" data-toggle="pf<?= (int) $i['id'] ?>"><?= e(t('pay.update')) ?></button><?php endif; ?>
+          <?php if ($canResched && $i['status'] !== 'paid'): ?><button class="btn btn-sm btn-ghost" type="button" data-toggle="ef<?= (int) $i['id'] ?>" title="<?= e(t('res.edit_inst')) ?>">✎</button><?php endif; ?>
+        </td>
         <?php endif; ?>
       </tr>
+      <?php if ($canResched && $i['status'] !== 'paid'): ?>
+      <tr class="pay-form-row no-print" id="ef<?= (int) $i['id'] ?>" hidden>
+        <td colspan="9">
+          <form method="post" class="pay-form">
+            <?= csrf_field() ?><input type="hidden" name="action" value="edit_inst"><input type="hidden" name="inst_id" value="<?= (int) $i['id'] ?>">
+            <label><span><?= e(t('pay.due_date')) ?></span><input type="date" name="due_date" value="<?= e($i['due_date']) ?>" required></label>
+            <label><span><?= e(t('pay.amount')) ?></span><input type="text" inputmode="decimal" name="amount" value="<?= e($i['amount']) ?>" dir="ltr" required></label>
+            <button class="btn btn-primary btn-sm" type="submit"><?= e(t('res.edit_inst')) ?></button>
+            <span class="small text-muted"><?= e(t('res.edit_inst_hint')) ?></span>
+          </form>
+        </td>
+      </tr>
+      <?php endif; ?>
       <?php if ($canPay): ?>
       <tr class="pay-form-row no-print" id="pf<?= (int) $i['id'] ?>" hidden>
         <td colspan="9">
@@ -141,8 +227,30 @@ page_head(t('res.statement'), $ct['contract_no'] . ' · ' . $ct['official_name']
       <td colspan="3"><strong><?= e(t('res.totals')) ?></strong></td>
       <td class="num"><strong><?= e(money($totals['total'], $cur)) ?></strong></td><td></td>
       <td class="num"><strong><?= e(money($totals['paid'], $cur)) ?></strong></td>
-      <td colspan="<?= $canPay ? 3 : 2 ?>"><?= e(t('res.remaining')) ?>: <strong><?= e(money($totals['remaining'], $cur)) ?></strong></td>
+      <td colspan="<?= ($canPay || $canResched) ? 3 : 2 ?>"><?= e(t('res.remaining')) ?>: <strong><?= e(money($totals['remaining'], $cur)) ?></strong></td>
     </tr></tfoot>
   </table></div>
 </div>
+
+<?php if ($canResched):
+    $unpaidLeft = (int) db_val("SELECT COUNT(*) FROM instalments WHERE contract_id = ? AND seq > 0 AND status = 'unpaid' AND paid_amount = 0", [$id]);
+    $nextDue    = (string) (db_val("SELECT MIN(due_date) FROM instalments WHERE contract_id = ? AND seq > 0 AND status = 'unpaid' AND paid_amount = 0", [$id]) ?: add_months(date('Y-m-01'), 1)); ?>
+<form method="post" class="card action-card no-print" id="reschedule" data-confirm-form="<?= e(t('res.resched_q')) ?>">
+  <?= csrf_field() ?><input type="hidden" name="action" value="reschedule">
+  <h2><?= e(t('res.reschedule')) ?></h2>
+  <p class="hint-line"><?= e(t('res.resched_hint', ['n' => (string) $unpaidLeft])) ?></p>
+  <div class="grid3">
+    <div class="field"><span class="lbl"><?= e(t('res.new_total')) ?> (<?= e($cur) ?>)</span>
+      <input type="text" inputmode="decimal" name="total_amount" value="<?= e(rtrim(rtrim($ct['total_amount'], '0'), '.')) ?>" dir="ltr" required></div>
+    <div class="field"><span class="lbl"><?= e(t('res.new_months')) ?></span>
+      <input type="number" name="months" min="1" max="120" value="<?= max(1, $unpaidLeft) ?>" required list="monthOpts">
+      <datalist id="monthOpts"><?php foreach (month_options() as $m): ?><option value="<?= $m ?>"><?php endforeach; ?></datalist>
+      <span class="hint"><?= e(t('res.new_months_hint')) ?></span></div>
+    <div class="field"><span class="lbl"><?= e(t('res.new_first')) ?></span>
+      <input type="date" name="first_due" value="<?= e($nextDue) ?>" required></div>
+  </div>
+  <div class="field"><span class="lbl"><?= e(t('client.reason')) ?></span><input type="text" name="reason"></div>
+  <button class="btn btn-primary" type="submit"><?= e(t('res.resched_btn')) ?></button>
+</form>
+<?php endif; ?>
 <?php layout_footer();

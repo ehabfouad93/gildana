@@ -93,3 +93,41 @@
     calc();
   }
 })();
+
+/* ── v2 helpers: WhatsApp automation form, placeholder copy ── */
+(function () {
+  'use strict';
+  var box = document.getElementById('paramsBox');
+  document.querySelectorAll('[data-var]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      if (!box) return;
+      var v = box.value.replace(/\s+$/, '');
+      box.value = (v ? v + '\n' : '') + b.getAttribute('data-var');
+      box.focus();
+    });
+  });
+
+  var pick = document.getElementById('tplPick');
+  var prev = document.getElementById('tplBody');
+  function showTpl() {
+    if (!pick || !prev) return;
+    var o = pick.options[pick.selectedIndex];
+    var body = o ? o.getAttribute('data-body') : '';
+    prev.hidden = !body;
+    prev.textContent = body || '';
+    var n = o ? parseInt(o.getAttribute('data-vars') || '0', 10) : 0;
+    if (box && n && !box.value.trim()) {
+      var keys = ['name', 'meeting_date', 'meeting_time', 'meeting_place', 'sales_name'];
+      box.value = keys.slice(0, n).join('\n');
+    }
+  }
+  if (pick) { pick.addEventListener('change', showTpl); showTpl(); }
+
+  document.querySelectorAll('.ph-row code').forEach(function (c) {
+    c.addEventListener('click', function () {
+      if (navigator.clipboard) navigator.clipboard.writeText(c.textContent);
+      c.style.background = '#cdebd8';
+      setTimeout(function () { c.style.background = ''; }, 600);
+    });
+  });
+})();

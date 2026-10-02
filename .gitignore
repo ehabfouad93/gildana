@@ -35,3 +35,7 @@ listening/storage/*
 
 # J Vacations
 jvacations/config.php
+
+# Uploaded contract templates (stay in git: folder only)
+jvacations/storage/templates/*
+!jvacations/storage/templates/.gitkeep

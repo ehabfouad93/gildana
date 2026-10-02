@@ -101,8 +101,10 @@ cd /opt/jvacations && git pull
 docker exec jvacations php deploy/docker/migrate.php
 ```
 
-The code is mounted into the container, so there's no rebuild or restart.
-`migrate.php` only applies new `.sql` files and is safe to run every time.
+The code is mounted into the container, so there's no rebuild or restart, and
+nothing else on the server is touched. `migrate.php` only applies new `.sql`
+files, fixes the ownership of `storage/templates` (where uploaded contract
+templates go), and is safe to run every time.
 
 ## Backup
 

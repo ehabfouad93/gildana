@@ -3,7 +3,7 @@ declare(strict_types=1);
 require __DIR__ . '/_init.php';
 
 /** Resorts / projects that contracts and stays point at. */
-require_role('owner_services');
+require_cap('projects.manage');
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     verify_csrf();
