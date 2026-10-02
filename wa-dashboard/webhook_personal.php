@@ -93,6 +93,20 @@ try {
 
 $cid = (int) $client['id'];
 
+/* ── delivery receipts: our messages delivered and read (campaigns, qualifiers, the Inbox) ── */
+require_once __DIR__ . '/includes/msg_status.php';
+$receipts = pw_parse_status_updates($data);
+if ($receipts) {
+    require_once __DIR__ . '/includes/campaign.php';
+    $touched = [];
+    foreach ($receipts as [$wamid, $st]) {
+        $camp = msg_status_apply((int) $client['id'], $wamid, $st);
+        if ($camp) $touched[$camp] = true;
+    }
+    foreach (array_keys($touched) as $campId) campaign_refresh_counts($campId);
+    exit;
+}
+
 /* ── connection-state events keep the client's status in sync (QR scanned, phone offline) ── */
 $ev = strtolower((string) ($data['event'] ?? ''));
 if (strpos($ev, 'connection') !== false) {

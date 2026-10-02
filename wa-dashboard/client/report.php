@@ -14,7 +14,9 @@ if (!$camp) { http_response_code(404); exit('Campaign not found.'); }
 
 /* ── CSV export of per-message results ── */
 if (($_GET['export'] ?? '') === '1') {
-    $rows = db_all("SELECT phone_e164,status,wa_message_id,error_title,sent_at,delivered_at,read_at FROM campaign_messages WHERE campaign_id=? ORDER BY id", [$id]);
+    $exF = ['sent' => "status IN ('sent','delivered','read')", 'delivered' => "status IN ('delivered','read')", 'read' => "status='read'",
+            'unread' => "status IN ('sent','delivered')", 'failed' => "status IN ('failed','dead','review')", 'queued' => "status IN ('queued','sending')"][(string) ($_GET['status'] ?? '')] ?? '1=1';
+    $rows = db_all("SELECT phone_e164,status,wa_message_id,error_title,sent_at,delivered_at,read_at FROM campaign_messages WHERE campaign_id=? AND $exF ORDER BY id", [$id]);
     header('Content-Type: text/csv; charset=UTF-8');
     header('Content-Disposition: attachment; filename="campaign-' . $id . '-' . date('Y-m-d') . '.csv"');
     echo "\xEF\xBB\xBF";
@@ -43,18 +45,24 @@ $counts = [
     'read'      => (int) $camp['read_count'],
     'failed'    => (int) $camp['failed_count'],
 ];
+$counts['unread'] = max(0, $counts['sent'] - $counts['read']);       // reached the phone, not opened yet
+$pct = fn(int $n, int $of) => $of > 0 ? round(100 * $n / $of) . '%' : '—';
 $queued = (int) db_val("SELECT COUNT(*) FROM campaign_messages WHERE campaign_id=? AND status IN ('queued','sending')", [$id]);
 
 // per-message list (paged)
 $page = max(1, (int) ($_GET['page'] ?? 1)); $per = 50; $off = ($page - 1) * $per;
 $statusFilter = (string) ($_GET['status'] ?? '');
 $where = "campaign_id=?"; $params = [$id];
-if (in_array($statusFilter, ['queued','sending','sent','delivered','read','failed'], true)) { $where .= " AND status=?"; $params[] = $statusFilter; }
+// Each filter matches its tile: Sent = everything that went out, Unread = went out but not read yet,
+// Failed = failed for good (including given up after retries, or never confirmed).
+$filterSql = ['sent' => "status IN ('sent','delivered','read')", 'delivered' => "status IN ('delivered','read')", 'read' => "status='read'",
+              'unread' => "status IN ('sent','delivered')", 'failed' => "status IN ('failed','dead','review')", 'queued' => "status IN ('queued','sending')"];
+if (isset($filterSql[$statusFilter])) $where .= " AND " . $filterSql[$statusFilter];
 $msgTotal = (int) db_val("SELECT COUNT(*) FROM campaign_messages WHERE $where", $params);
 $messages = db_all("SELECT * FROM campaign_messages WHERE $where ORDER BY id DESC LIMIT $per OFFSET $off", $params);
 $pages = (int) max(1, ceil($msgTotal / $per));
 
-$actions = '<a class="btn btn-ghost btn-sm" href="report.php?id=' . $id . '&export=1">Export CSV</a><a class="btn btn-ghost btn-sm" href="campaigns.php">← Campaigns</a>';
+$actions = '<a class="btn btn-ghost btn-sm" href="report.php?id=' . $id . '&export=1' . ($statusFilter !== '' ? '&status=' . urlencode($statusFilter) : '') . '">Export CSV</a><a class="btn btn-ghost btn-sm" href="campaigns.php">← Campaigns</a>';
 client_header('Report · ' . $camp['name'], 'campaigns', $CLIENT);
 ?>
 <div class="page-head">
@@ -69,11 +77,12 @@ client_header('Report · ' . $camp['name'], 'campaigns', $CLIENT);
 </p>
 
 <div class="stats-row">
-  <div class="stat-tile"><span class="lbl">Total</span><span class="val" id="s-total"><?= $counts['total'] ?></span></div>
-  <div class="stat-tile"><span class="lbl">Sent</span><span class="val" id="s-sent"><?= $counts['sent'] ?></span><span class="sub" id="s-queued"><?= $queued ?> pending</span></div>
-  <div class="stat-tile"><span class="lbl">Delivered</span><span class="val" id="s-delivered"><?= $counts['delivered'] ?></span></div>
-  <div class="stat-tile"><span class="lbl">Read</span><span class="val" id="s-read"><?= $counts['read'] ?></span></div>
-  <div class="stat-tile"><span class="lbl">Failed</span><span class="val danger" id="s-failed"><?= $counts['failed'] ?></span></div>
+  <a class="stat-tile" href="report.php?id=<?= $id ?>"><span class="lbl">Total</span><span class="val" id="s-total"><?= $counts['total'] ?></span><span class="sub" id="s-queued"><?= $queued ?> pending</span></a>
+  <a class="stat-tile" href="report.php?id=<?= $id ?>&status=sent"><span class="lbl">Sent</span><span class="val" id="s-sent"><?= $counts['sent'] ?></span><span class="sub" id="p-sent"><?= $pct($counts['sent'], $counts['total']) ?> of all</span></a>
+  <a class="stat-tile" href="report.php?id=<?= $id ?>&status=delivered"><span class="lbl">Delivered</span><span class="val" id="s-delivered"><?= $counts['delivered'] ?></span><span class="sub" id="p-delivered"><?= $pct($counts['delivered'], $counts['sent']) ?> of sent</span></a>
+  <a class="stat-tile" href="report.php?id=<?= $id ?>&status=read"><span class="lbl">Read</span><span class="val accent" id="s-read"><?= $counts['read'] ?></span><span class="sub" id="p-read"><?= $pct($counts['read'], $counts['sent']) ?> of sent</span></a>
+  <a class="stat-tile" href="report.php?id=<?= $id ?>&status=unread"><span class="lbl">Unread</span><span class="val" id="s-unread"><?= $counts['unread'] ?></span><span class="sub" id="p-unread"><?= $pct($counts['unread'], $counts['sent']) ?> of sent</span></a>
+  <a class="stat-tile" href="report.php?id=<?= $id ?>&status=failed"><span class="lbl">Failed</span><span class="val danger" id="s-failed"><?= $counts['failed'] ?></span><span class="sub" id="p-failed"><?= $pct($counts['failed'], $counts['total']) ?> of all</span></a>
 </div>
 
 <?php
@@ -106,7 +115,7 @@ if ($failReasons): ?>
   <div style="padding:14px 18px" class="row-between">
     <div style="display:flex;gap:6px;flex-wrap:wrap">
       <?php
-      $filters = ['' => 'All', 'sent' => 'Sent', 'delivered' => 'Delivered', 'read' => 'Read', 'failed' => 'Failed', 'queued' => 'Pending'];
+      $filters = ['' => 'All', 'sent' => 'Sent', 'delivered' => 'Delivered', 'read' => 'Read', 'unread' => 'Unread', 'failed' => 'Failed', 'queued' => 'Pending'];
       foreach ($filters as $val => $lbl):
         $on = ($val === $statusFilter || ($val === '' && $statusFilter === ''));
       ?>
@@ -153,6 +162,14 @@ if (ACTIVE) {
       for (const k of ['total','sent','delivered','read','failed']) {
         const el = document.getElementById('s-'+k); if (el) el.textContent = d[k+'_count'] ?? d[k] ?? el.textContent;
       }
+      const sent = +d.sent_count || 0, read = +d.read_count || 0, total = +d.total_count || 0;
+      const pc = (n, of) => of > 0 ? Math.round(100 * n / of) + '%' : '—';
+      document.getElementById('s-unread').textContent = Math.max(0, sent - read);
+      document.getElementById('p-sent').textContent = pc(sent, total) + ' of all';
+      document.getElementById('p-delivered').textContent = pc(+d.delivered_count || 0, sent) + ' of sent';
+      document.getElementById('p-read').textContent = pc(read, sent) + ' of sent';
+      document.getElementById('p-unread').textContent = pc(Math.max(0, sent - read), sent) + ' of sent';
+      document.getElementById('p-failed').textContent = pc(+d.failed_count || 0, total) + ' of all';
       document.getElementById('s-queued').textContent = (d.queued||0)+' pending';
       if (['completed','failed','canceled'].includes(d.status)) { clearInterval(poll); location.reload(); }
     } catch(e){}

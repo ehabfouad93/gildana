@@ -161,12 +161,18 @@ $counts = db_row(
        FROM flow_runs WHERE flow_id=?", [$fid]
 ) ?: [];
 
+require_once __DIR__ . '/../includes/msg_status.php';
+$mc = qualifier_msg_counts($cid, $fid)[$fid] ?? ['leads' => 0, 'sent' => 0, 'read' => 0, 'unread' => 0, 'failed' => 0];
 $grade = (string) ($_GET['grade'] ?? '');
+$msg = (string) ($_GET['msg'] ?? '');
+if (!in_array($msg, ['sent', 'read', 'unread', 'failed'], true)) $msg = '';
 $where = "r.flow_id=?"; $params = [$fid];
 if (in_array($grade, ['hot','warm','cold','not_interested','no_answer'], true)) { $where .= " AND r.grade=?"; $params[] = $grade; }
+if ($msg !== '') $where .= " AND " . qualifier_msg_filter($msg, 'r');
 $page = max(1, (int) ($_GET['page'] ?? 1)); $per = 50; $off = ($page - 1) * $per;
 $total = (int) db_val("SELECT COUNT(*) FROM flow_runs r WHERE $where", $params);
-$leads = db_all("SELECT r.*, c.phone_e164, c.name FROM flow_runs r JOIN contacts c ON c.id=r.contact_id WHERE $where ORDER BY r.id DESC LIMIT $per OFFSET $off", $params);
+$leads = db_all("SELECT r.*, c.phone_e164, c.name, " . qualifier_best_sql('r') . " AS msg_best, (" . qualifier_msg_filter('failed', 'r') . ") AS msg_failed FROM flow_runs r JOIN contacts c ON c.id=r.contact_id WHERE $where ORDER BY r.id DESC LIMIT $per OFFSET $off", $params);
+$q = fn(array $set) => 'leads.php?' . http_build_query(array_filter(['flow' => $fid, 'grade' => $grade, 'msg' => $msg] + $set, 'strlen'));
 $pages = (int) max(1, ceil($total / $per));
 
 function lead_status_pill(string $s): string {
@@ -202,21 +208,32 @@ page_head('Leads — ' . $flow['name'], $actions);
   <div class="stat-tile"><span class="lbl">No answer</span><span class="val"><?= (int) ($counts['noans'] ?? 0) ?></span></div>
   <div class="stat-tile"><span class="lbl">Chatting</span><span class="val"><?= (int) ($counts['chatting'] ?? 0) ?></span><span class="sub"><?= (int) ($counts['completed'] ?? 0) ?> scored</span></div>
 </div>
+<?php $pc = fn(int $n, int $of) => $of > 0 ? round(100 * $n / $of) . '%' : '—'; ?>
+<div class="stats-row">
+  <?php foreach (['sent' => ['Sent', $pc($mc['sent'], $mc['leads']) . ' of leads', ''], 'read' => ['Read', $pc($mc['read'], $mc['sent']) . ' of sent', 'accent'],
+                  'unread' => ['Unread', $pc($mc['unread'], $mc['sent']) . ' of sent', ''], 'failed' => ['Failed', $pc($mc['failed'], $mc['leads']) . ' of leads', 'danger']] as $k => [$l, $s, $cls]): ?>
+    <a class="stat-tile <?= $msg === $k ? 'on' : '' ?>" href="<?= e($q(['msg' => $msg === $k ? '' : $k, 'page' => ''])) ?>"><span class="lbl"><?= $l ?></span><span class="val <?= $cls ?>"><?= $mc[$k] ?></span><span class="sub"><?= $s ?></span></a>
+  <?php endforeach; ?>
+</div>
 
 <div class="card card-flush">
   <div style="padding:14px 18px" class="row-between">
     <div style="display:flex;gap:6px">
       <?php foreach (['' => 'All','hot' => 'Hot','warm' => 'Warm','cold' => 'Cold','not_interested' => 'Not interested','no_answer' => 'No answer'] as $v => $l): ?>
-        <a class="btn <?= $grade === $v ? 'btn-dark' : 'btn-ghost' ?> btn-sm" href="leads.php?flow=<?= $fid ?><?= $v ? '&grade=' . $v : '' ?>"><?= $l ?></a>
+        <a class="btn <?= $grade === $v ? 'btn-dark' : 'btn-ghost' ?> btn-sm" href="<?= e($q(['grade' => $v, 'page' => ''])) ?>"><?= $l ?></a>
+      <?php endforeach; ?>
+      <span class="sep-v"></span>
+      <?php foreach (['' => 'Any message', 'sent' => 'Sent', 'read' => 'Read', 'unread' => 'Unread', 'failed' => 'Failed'] as $v => $l): ?>
+        <a class="btn <?= $msg === $v ? 'btn-dark' : 'btn-ghost' ?> btn-sm" href="<?= e($q(['msg' => $v, 'page' => ''])) ?>"><?= $l ?></a>
       <?php endforeach; ?>
     </div>
     <span class="text-muted" style="font-size:12.5px"><?= number_format($total) ?> lead<?= $total === 1 ? '' : 's' ?></span>
   </div>
   <div class="table-wrap">
     <table class="data">
-      <thead><tr><th>Phone</th><th>Name</th><th>Status</th><th>Score</th><th>Grade</th><th>Reason</th><th>Added</th><th></th></tr></thead>
+      <thead><tr><th>Phone</th><th>Name</th><th>Message</th><th>Status</th><th>Score</th><th>Grade</th><th>Reason</th><th>Added</th><th></th></tr></thead>
       <tbody>
-      <?php if (!$leads): ?><tr><td colspan="8"><div class="empty">No leads yet. Activate the qualifier and it imports from your sheet.</div></td></tr><?php endif; ?>
+      <?php if (!$leads): ?><tr><td colspan="9"><div class="empty">No leads<?= $msg !== '' || $grade !== '' ? ' match this filter' : ' yet' ?>. <?= $msg === '' && $grade === '' ? ' Activate the qualifier and it imports from your sheet.' : '' ?></div></td></tr><?php endif; ?>
       <?php foreach ($leads as $r):
         $ctx    = json_decode((string) $r['context'], true) ?: [];
         $tr     = json_encode($ctx['transcript'] ?? [], JSON_UNESCAPED_UNICODE);
@@ -226,6 +243,7 @@ page_head('Leads — ' . $flow['name'], $actions);
         <tr>
           <td class="mono">+<?= e((string) $r['phone_e164']) ?></td>
           <td><?= e((string) $r['name']) ?: '<span class="text-muted">—</span>' ?></td>
+          <td><?php $b = (int) $r['msg_best']; ?><span class="pill <?= [3 => 'green', 2 => 'blue', 1 => 'gray'][$b] ?? ((int) $r['msg_failed'] ? 'red' : 'gray') ?>"><?= [3 => 'Read', 2 => 'Delivered · unread', 1 => 'Sent · unread'][$b] ?? ((int) $r['msg_failed'] ? 'Failed' : 'Not sent yet') ?></span></td>
           <td><?= lead_status_pill((string) $r['status']) ?></td>
           <td><strong><?= (int) $r['score'] ?></strong></td>
           <td><?= grade_pill($r['grade']) ?></td>
@@ -245,7 +263,7 @@ page_head('Leads — ' . $flow['name'], $actions);
   <?php if ($pages > 1): ?>
     <div style="padding:14px 18px;display:flex;gap:6px;justify-content:center;flex-wrap:wrap">
       <?php for ($p = 1; $p <= min($pages, 30); $p++): ?>
-        <a class="btn <?= $p === $page ? 'btn-dark' : 'btn-ghost' ?> btn-sm" href="leads.php?flow=<?= $fid ?><?= $grade ? '&grade=' . $grade : '' ?>&page=<?= $p ?>"><?= $p ?></a>
+        <a class="btn <?= $p === $page ? 'btn-dark' : 'btn-ghost' ?> btn-sm" href="<?= e($q(['page' => $p])) ?>"><?= $p ?></a>
       <?php endfor; ?>
     </div>
   <?php endif; ?>

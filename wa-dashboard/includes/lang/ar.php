@@ -55,6 +55,8 @@ return [
     'New secret' => 'مفتاح توقيع جديد', 'New URL' => 'رابط جديد', '+ Make an incoming URL' => '+ إنشاء رابط استقبال', '+ Make a key' => '+ إنشاء مفتاح',
     'Read only' => 'قراءة فقط', 'Read & write' => 'قراءة وكتابة', 'Revoke' => 'إلغاء', 'Revoked' => 'ملغي', 'Copy' => 'نسخ', 'Copy URL' => 'نسخ الرابط',
     'Field mapping and options' => 'ربط الحقول والخيارات', 'Save mapping' => 'حفظ الربط', 'Retry' => 'إعادة المحاولة', 'Sent' => 'تم الإرسال', 'Failed' => 'فشل',
+    'Recipients' => 'المستلمون', 'Unread' => 'غير مقروءة', 'Read' => 'مقروءة', 'Delivered' => 'تم التسليم', 'Pending' => 'قيد الانتظار', 'Any message' => 'أي رسالة',
+    'Message' => 'الرسالة', 'Read · ' => 'مقروءة · ', 'Delivered · unread' => 'سُلّمت · غير مقروءة', 'Sent · unread' => 'أُرسلت · غير مقروءة', 'Not sent yet' => 'لم تُرسل بعد',
     'Remove from favourites' => 'أزل من المفضلة', 'Language and appearance' => 'اللغة والمظهر',
     'Appearance: Automatic' => 'المظهر: تلقائي', 'Appearance: Light' => 'المظهر: فاتح', 'Appearance: Dark' => 'المظهر: داكن',
     'Go to a page, or find a lead…' => 'انتقل إلى صفحة أو ابحث عن عميل…', 'Go to a page…' => 'انتقل إلى صفحة…', 'Nothing found' => 'لا توجد نتائج',

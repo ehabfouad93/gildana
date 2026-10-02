@@ -161,7 +161,8 @@ function pw_webhook_payload(string $hook): array
         'url'      => $hook,
         'byEvents' => false,
         'base64'   => false,
-        'events'   => ['MESSAGES_UPSERT', 'CONNECTION_UPDATE'],
+        // MESSAGES_UPDATE carries delivered / read receipts for what we send.
+        'events'   => ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE'],
     ];
 }
 

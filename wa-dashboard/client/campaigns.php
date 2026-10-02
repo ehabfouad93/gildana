@@ -41,15 +41,30 @@ $campaigns = db_all(
 $actions = '<a class="btn btn-primary btn-sm" href="campaign_new.php">+ New Campaign</a>';
 client_header('Campaigns', 'campaigns', $CLIENT);
 page_head('Campaigns', $actions);
+
+// Every campaign together: how many people were sent to, read it, have not read it yet, or never got it.
+$sum = ['total' => 0, 'sent' => 0, 'read' => 0, 'failed' => 0];
+foreach ($campaigns as $c_) { $sum['total'] += (int) $c_['total_count']; $sum['sent'] += (int) $c_['sent_count']; $sum['read'] += (int) $c_['read_count']; $sum['failed'] += (int) $c_['failed_count']; }
+$sum['unread'] = max(0, $sum['sent'] - $sum['read']);
+$pc = fn(int $n, int $of) => $of > 0 ? round(100 * $n / $of) . '%' : '—';
 ?>
+<?php if ($campaigns): ?>
+<div class="stats-row">
+  <div class="stat-tile"><span class="lbl">Recipients</span><span class="val"><?= number_format($sum['total']) ?></span><span class="sub"><?= count($campaigns) ?> campaign<?= count($campaigns) === 1 ? '' : 's' ?></span></div>
+  <div class="stat-tile"><span class="lbl">Sent</span><span class="val"><?= number_format($sum['sent']) ?></span><span class="sub"><?= $pc($sum['sent'], $sum['total']) ?> of recipients</span></div>
+  <div class="stat-tile"><span class="lbl">Read</span><span class="val accent"><?= number_format($sum['read']) ?></span><span class="sub"><?= $pc($sum['read'], $sum['sent']) ?> of sent</span></div>
+  <div class="stat-tile"><span class="lbl">Unread</span><span class="val"><?= number_format($sum['unread']) ?></span><span class="sub"><?= $pc($sum['unread'], $sum['sent']) ?> of sent</span></div>
+  <div class="stat-tile"><span class="lbl">Failed</span><span class="val danger"><?= number_format($sum['failed']) ?></span><span class="sub"><?= $pc($sum['failed'], $sum['total']) ?> of recipients</span></div>
+</div>
+<?php endif; ?>
 
 <div class="card card-flush">
   <div class="table-wrap">
     <table class="data">
-      <thead><tr><th>Campaign</th><th>Template</th><th>Status</th><th>Progress</th><th>Failed</th><th>When</th><th></th></tr></thead>
+      <thead><tr><th>Campaign</th><th>Template</th><th>Status</th><th>Progress</th><th class="num">Sent</th><th class="num">Read</th><th class="num">Unread</th><th class="num">Failed</th><th>When</th><th></th></tr></thead>
       <tbody>
       <?php if (!$campaigns): ?>
-        <tr><td colspan="7"><div class="empty">No campaigns yet.</div></td></tr>
+        <tr><td colspan="10"><div class="empty">No campaigns yet.</div></td></tr>
       <?php endif; ?>
       <?php foreach ($campaigns as $c):
         $total = max(1, (int) $c['total_count']);
@@ -69,7 +84,12 @@ page_head('Campaigns', $actions);
             </div>
             <small class="text-muted"><?= (int) $c['sent_count'] ?>/<?= (int) $c['total_count'] ?> sent · <?= (int) $c['delivered_count'] ?> delivered</small>
           </td>
-          <td><?= (int) $c['failed_count'] ? '<span class="pill red">' . (int) $c['failed_count'] . '</span>' : '0' ?></td>
+          <?php $unread = max(0, (int) $c['sent_count'] - (int) $c['read_count']); $rl = 'report.php?id=' . (int) $c['id'] . '&status='; ?>
+          <td class="num"><a href="<?= $rl ?>sent"><?= (int) $c['sent_count'] ?></a></td>
+          <td class="num"><a href="<?= $rl ?>read"><?= (int) $c['read_count'] ?></a>
+            <?php if ((int) $c['sent_count']): ?><small class="text-muted cm-pct"><?= round(100 * (int) $c['read_count'] / (int) $c['sent_count']) ?>%</small><?php endif; ?></td>
+          <td class="num"><a href="<?= $rl ?>unread"><?= $unread ?></a></td>
+          <td class="num"><?= (int) $c['failed_count'] ? '<a href="' . $rl . 'failed" class="pill red">' . (int) $c['failed_count'] . '</a>' : '0' ?></td>
           <td class="text-muted">
             <?= $c['status'] === 'scheduled' && $c['scheduled_at']
                 ? e(date('d M, H:i', strtotime((string) $c['scheduled_at'])))

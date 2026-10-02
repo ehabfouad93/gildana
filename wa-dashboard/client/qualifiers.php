@@ -111,6 +111,13 @@ foreach ($flows as $f) {
         : ['retry' => [], 'never' => []];
 }
 
+// Each qualifier's leads by what happened to the outreach: sent, read, not read yet, never arrived.
+require_once __DIR__ . '/../includes/msg_status.php';
+$mc = qualifier_msg_counts($cid);
+$sum = ['leads' => 0, 'sent' => 0, 'read' => 0, 'unread' => 0, 'failed' => 0];
+foreach ($mc as $x) foreach ($sum as $k => $_) $sum[$k] += $x[$k];
+$pc = fn(int $n, int $of) => $of > 0 ? round(100 * $n / $of) . '%' : '—';
+
 $actions = '<a class="btn btn-ghost btn-sm" href="diagnostics.php">🩺 Health check</a>'
          . '<button class="btn btn-primary btn-sm" onclick="document.getElementById(\'m-new\').classList.add(\'open\')">+ New Qualifier</button>';
 client_header('Lead Qualifier', 'qualifier', $CLIENT);
@@ -122,24 +129,35 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
   <?php if (!($CLIENT['ai_provider'] ?? '')): ?> Add your AI key in <a href="settings.php#ai">Settings</a> first.<?php endif; ?>
 </div>
 
+<?php if ($flows): ?>
+<div class="stats-row">
+  <div class="stat-tile"><span class="lbl">Leads</span><span class="val"><?= number_format($sum['leads']) ?></span><span class="sub"><?= count($flows) ?> qualifier<?= count($flows) === 1 ? '' : 's' ?></span></div>
+  <div class="stat-tile"><span class="lbl">Sent</span><span class="val"><?= number_format($sum['sent']) ?></span><span class="sub"><?= $pc($sum['sent'], $sum['leads']) ?> of leads</span></div>
+  <div class="stat-tile"><span class="lbl">Read</span><span class="val accent"><?= number_format($sum['read']) ?></span><span class="sub"><?= $pc($sum['read'], $sum['sent']) ?> of sent</span></div>
+  <div class="stat-tile"><span class="lbl">Unread</span><span class="val"><?= number_format($sum['unread']) ?></span><span class="sub"><?= $pc($sum['unread'], $sum['sent']) ?> of sent</span></div>
+  <div class="stat-tile"><span class="lbl">Failed</span><span class="val danger"><?= number_format($sum['failed']) ?></span><span class="sub"><?= $pc($sum['failed'], $sum['leads']) ?> of leads</span></div>
+</div>
+<?php endif; ?>
+
 <div class="card card-flush">
   <div class="table-wrap">
     <table class="data">
-      <thead><tr><th>Qualifier</th><th>Sheet</th><th>Leads</th><th>Hot</th><th>Not sent</th><th>Active</th><th></th></tr></thead>
+      <thead><tr><th>Qualifier</th><th>Sheet</th><th class="num">Leads</th><th class="num">Sent</th><th class="num">Read</th><th class="num">Unread</th><th class="num">Failed</th><th class="num">Hot</th><th>Active</th><th></th></tr></thead>
       <tbody>
-      <?php if (!$flows): ?><tr><td colspan="7"><div class="empty">No qualifiers yet.</div></td></tr><?php endif; ?>
+      <?php if (!$flows): ?><tr><td colspan="10"><div class="empty">No qualifiers yet.</div></td></tr><?php endif; ?>
       <?php foreach ($flows as $f):
         $sc = json_decode((string) $f['source_config'], true) ?: [];
       ?>
         <tr>
           <td><strong><?= e((string) $f['name']) ?></strong> <?= $f['status'] === 'draft' ? '<span class="pill gray">draft</span>' : '' ?></td>
           <td><?= !empty($sc['csv_url']) ? '<span class="pill green">connected</span>' : '<span class="pill gray">not set</span>' ?></td>
-          <td><?= (int) $f['leads'] ?></td>
-          <td><?= (int) $f['hot'] ? '<span class="pill red">' . (int) $f['hot'] . '</span>' : '0' ?></td>
-          <td><?= (int) $f['failed']
-                ? '<a href="#fail-' . (int) $f['id'] . '" class="pill gold" title="Outreach that never reached the lead">'
-                  . (int) $f['failed'] . '</a>'
-                : '<span class="text-muted">0</span>' ?></td>
+          <?php $m_ = $mc[(int) $f['id']] ?? ['sent' => 0, 'read' => 0, 'unread' => 0, 'failed' => 0]; $ll = 'leads.php?flow=' . (int) $f['id'] . '&msg='; ?>
+          <td class="num"><a href="leads.php?flow=<?= (int) $f['id'] ?>"><?= (int) $f['leads'] ?></a></td>
+          <td class="num"><a href="<?= $ll ?>sent"><?= $m_['sent'] ?></a></td>
+          <td class="num"><a href="<?= $ll ?>read"><?= $m_['read'] ?></a><?php if ($m_['sent']): ?><small class="text-muted cm-pct"><?= round(100 * $m_['read'] / $m_['sent']) ?>%</small><?php endif; ?></td>
+          <td class="num"><a href="<?= $ll ?>unread"><?= $m_['unread'] ?></a></td>
+          <td class="num"><?= $m_['failed'] ? '<a href="' . $ll . 'failed" class="pill red" title="Outreach that never reached the lead">' . $m_['failed'] . '</a>' : '<span class="text-muted">0</span>' ?></td>
+          <td class="num"><?= (int) $f['hot'] ? '<span class="pill red">' . (int) $f['hot'] . '</span>' : '0' ?></td>
           <td><label class="switch"><input type="checkbox" <?= $f['status'] === 'active' ? 'checked' : '' ?> onchange="toggleQ(<?= (int) $f['id'] ?>,this)"><span class="slider"></span></label></td>
           <td style="text-align: end;white-space:nowrap">
             <form method="post" style="display:inline" onsubmit="return confirm('Import new leads from the sheet and send outreach now?')">

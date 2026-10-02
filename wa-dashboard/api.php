@@ -7,7 +7,7 @@ declare(strict_types=1);
  *
  *   GET    /api.php/v1/me                         the key and its account
  *   GET    /api.php/v1/leads                      ?updated_since=&created_since=&stage=&owner_email=&phone=&external_id=&page=&per_page=
- *   GET    /api.php/v1/leads/{ref}                ref = id, lead code (A1B2C3) or ext:<their id>
+ *   GET    /api.php/v1/leads/{ref}                ref = id, lead code (A1B2C3, or code:482913), or ext:<their id>
  *   POST   /api.php/v1/leads                      create — or update the lead with the same external_id / phone
  *   PATCH  /api.php/v1/leads/{ref}                change only the fields sent
  *   GET    /api.php/v1/leads/{ref}/activities
@@ -58,9 +58,12 @@ if (in_array($method, ['POST', 'PATCH', 'PUT'], true)) {
 
 /** A lead by id, code or ext:<their id>, in this account and in the pipeline (or the recycle bin, for reading). */
 $find = function (string $ref) use ($cid, $out): array {
+    $byCode = fn(string $code) => db_row("SELECT id FROM contacts WHERE client_id=? AND code=?", [$cid, strtoupper(ltrim($code, '#'))]);
     if (str_starts_with($ref, 'ext:')) $c = db_row("SELECT id FROM contacts WHERE client_id=? AND external_id=?", [$cid, urldecode(substr($ref, 4))]);
-    elseif (ctype_digit($ref)) $c = db_row("SELECT id FROM contacts WHERE client_id=? AND id=?", [$cid, (int) $ref]);
-    else $c = db_row("SELECT id FROM contacts WHERE client_id=? AND code=?", [$cid, strtoupper(ltrim($ref, '#'))]);
+    elseif (str_starts_with($ref, 'code:')) $c = $byCode(substr($ref, 5));
+    // A lead code can be all digits (482913), so a number that is not one of our ids is tried as a code.
+    elseif (ctype_digit($ref)) $c = db_row("SELECT id FROM contacts WHERE client_id=? AND id=?", [$cid, (int) $ref]) ?: $byCode($ref);
+    else $c = $byCode($ref);
     if (!$c || !($l = crm_int_lead((int) $c['id'])) || ($l['stage_id'] === null)) $out(404, 'No lead ' . $ref . '.');
     return $l;
 };

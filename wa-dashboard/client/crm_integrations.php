@@ -265,7 +265,7 @@ if (!$ready): ?><div class="card"><p>Run the latest update (migration 058) to us
   <p>Base address <code class="ltr"><?= e($api) ?></code> — send the key as <code>Authorization: Bearer rvn_…</code> (or <code>X-Api-Key</code>). JSON in, JSON out; 120 requests a minute per key.</p>
   <div class="table-wrap"><table class="data int-endpoints"><tbody>
     <tr><td><code>GET /leads</code></td><td>Leads, newest first. Filters: <code>updated_since</code>, <code>created_since</code>, <code>stage</code>, <code>owner_email</code>, <code>phone</code>, <code>external_id</code>, <code>page</code>, <code>per_page</code> (up to 200).</td></tr>
-    <tr><td><code>GET /leads/{ref}</code></td><td>One lead. <code>{ref}</code> is our id, the lead code (<code>A1B2C3</code>) or <code>ext:&lt;your id&gt;</code>.</td></tr>
+    <tr><td><code>GET /leads/{ref}</code></td><td>One lead. <code>{ref}</code> is our id, the lead code (<code>A1B2C3</code> — or <code>code:482913</code> for an all-digit code) or <code>ext:&lt;your id&gt;</code>.</td></tr>
     <tr><td><code>POST /leads</code></td><td>Add a lead — or update the one with the same <code>external_id</code> or phone. 201 when added, 200 when updated.</td></tr>
     <tr><td><code>PATCH /leads/{ref}</code></td><td>Change only the fields you send, including <code>stage</code>, <code>substatus</code>, <code>owner_email</code>.</td></tr>
     <tr><td><code>POST /leads/{ref}/activities</code></td><td>Log a call, meeting, WhatsApp, email or note: <code>{"kind":"call","outcome":"answered","body":"…"}</code></td></tr>
