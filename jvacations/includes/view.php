@@ -62,6 +62,16 @@ function locale_toggle(): string
     return $out . '</span>';
 }
 
+/** Favicon, theme colour and the brand serif. $base is the path to the app root. */
+function brand_head(string $base = ''): string
+{
+    return '<link rel="icon" type="image/png" href="' . $base . 'assets/brand/favicon.png">'
+         . '<link rel="apple-touch-icon" href="' . $base . 'assets/brand/apple-touch-icon.png">'
+         . '<meta name="theme-color" content="#13343b">'
+         . '<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+         . '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&amp;display=swap">';
+}
+
 function asset(string $file): string
 {
     return '../assets/' . $file . '?v=' . (@filemtime(dirname(__DIR__) . '/assets/' . $file) ?: '1');
@@ -77,14 +87,16 @@ function layout_header(string $title, string $active): void
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title><?= e($title) ?> — <?= e(setting('company_name')) ?></title>
+<?= brand_head('../') ?>
 <link rel="stylesheet" href="<?= e(asset('jv.css')) ?>">
 </head>
 <body>
 <header class="topbar">
-  <div class="topbar-brand">
+  <a class="topbar-brand" href="dashboard.php">
+    <img class="brand-logo" src="../assets/brand/logo-mark.png" alt="">
     <span class="brand-mark"><?= e(setting('company_name')) ?></span>
     <span class="topbar-sub"><?= e(t('role.' . $u['role'])) ?></span>
-  </div>
+  </a>
   <form class="top-search" method="get" action="search.php" role="search">
     <input type="search" name="q" placeholder="<?= e(t('search.top')) ?>" aria-label="<?= e(t('nav.search')) ?>">
   </form>

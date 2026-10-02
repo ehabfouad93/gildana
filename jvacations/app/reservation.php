@@ -136,7 +136,7 @@ $actions = '<button class="btn btn-primary" type="button" onclick="window.print(
 layout_header(t('res.statement') . ' ' . $ct['contract_no'], 'reservations');
 page_head(t('res.statement'), $ct['contract_no'] . ' · ' . $ct['official_name'], $actions);
 ?>
-<div class="print-only print-title"><?= e(setting('company_name')) ?> — <?= e(t('res.statement')) ?> · <?= e(date('Y-m-d')) ?></div>
+<div class="print-only print-title"><img src="../assets/brand/logo-mark.png" alt="" style="height:40px;vertical-align:middle;margin-inline-end:10px"><?= e(setting('company_name')) ?> — <?= e(t('res.statement')) ?> · <?= e(date('Y-m-d')) ?></div>
 
 <div class="card">
   <dl class="dl dl-3">

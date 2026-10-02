@@ -24,7 +24,7 @@ const STAGES = ['new', 'booked', 'confirmed', 'arrived', 'contracted', 'lost', '
 function setting_defaults(): array
 {
     return [
-        'company_name'    => 'J Vacations',
+        'company_name'    => 'J Vacation Club',
         'company_address' => '',
         'company_phone'   => '',
         'company_reg'     => '',

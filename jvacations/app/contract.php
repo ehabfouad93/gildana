@@ -27,14 +27,23 @@ $pct   = rtrim(rtrim($ct['down_pct'], '0'), '.');
 $terms = trim(setting('terms_' . $lang));
 $seasonLbl = $ct['season'] ? $L('season.' . $ct['season']) : '—';
 
+// The Word download is a standalone file, so it carries the logo inline.
+$logoFile = dirname(__DIR__) . '/assets/brand/logo-mark.png';
+$logoSrc  = (($_GET['download'] ?? '') === 'doc' && is_file($logoFile))
+    ? 'data:image/png;base64,' . base64_encode((string) file_get_contents($logoFile))
+    : '../assets/brand/logo-mark.png';
+
 ob_start();
 ?>
 <div class="contract-doc" dir="<?= $lang === 'ar' ? 'rtl' : 'ltr' ?>" lang="<?= e($lang) ?>">
   <div class="cd-head">
-    <div>
+    <div class="cd-brand">
+      <img class="cd-logo" src="<?= $logoSrc ?>" alt="">
+      <div>
       <div class="cd-company"><?= e(setting('company_name')) ?></div>
       <div class="cd-small"><?= e(setting('company_address')) ?><?= setting('company_phone') !== '' ? ' · ' . e(setting('company_phone')) : '' ?></div>
       <?php if (setting('company_reg') !== ''): ?><div class="cd-small"><?= e($L('doc.reg')) ?>: <?= e(setting('company_reg')) ?></div><?php endif; ?>
+      </div>
     </div>
     <div class="cd-meta">
       <div><?= e($L('contract.no')) ?>: <strong><?= e($ct['contract_no']) ?></strong></div>
@@ -134,7 +143,7 @@ if (($_GET['download'] ?? '') === 'doc') {
 
 if (($_GET['print'] ?? '') === '1') {
     ?><!DOCTYPE html><html lang="<?= e($lang) ?>" dir="<?= $lang === 'ar' ? 'rtl' : 'ltr' ?>"><head><meta charset="UTF-8">
-<title><?= e($ct['contract_no']) ?></title><style><?= $docCss ?></style></head>
+<title><?= e($ct['contract_no']) ?></title><?= brand_head('../') ?><style><?= $docCss ?></style></head>
 <body class="print-body" onload="window.print()"><?= $doc ?></body></html><?php
     exit;
 }

@@ -6,20 +6,24 @@
   box-shadow: 0 2px 14px rgba(0,0,0,.08);
 }
 .contract-doc[dir="rtl"] { font-family: "Traditional Arabic", "Amiri", "Segoe UI", Tahoma, serif; font-size: 15px; line-height: 1.85; }
-.cd-head { display: flex; justify-content: space-between; gap: 20px; border-bottom: 3px double #b08a3e; padding-bottom: 12px; }
-.cd-company { font-size: 22px; font-weight: 700; color: #7a5a1c; letter-spacing: .04em; }
+.cd-head { display: flex; justify-content: space-between; gap: 20px; border-bottom: 3px double #a9c3bc; padding-bottom: 12px; }
+.cd-brand { display: flex; align-items: center; gap: 12px; }
+.cd-logo { height: 64px; width: auto; }
+.cd-company { font-size: 22px; font-weight: 700; color: #13343b; letter-spacing: .08em; text-transform: uppercase;
+              font-family: "Cormorant Garamond", "Times New Roman", Georgia, serif; }
+.contract-doc[dir="rtl"] .cd-company { letter-spacing: normal; }
 .cd-small { font-size: 12px; color: #555; }
 .cd-meta { font-size: 13px; text-align: end; }
-.cd-title { text-align: center; font-size: 20px; margin: 22px 0 6px; text-decoration: underline; text-underline-offset: 6px; }
+.cd-title { text-align: center; font-size: 20px; color: #13343b; margin: 22px 0 6px; text-decoration: underline; text-underline-offset: 6px; }
 .cd-intro { text-align: center; margin-bottom: 14px; }
-.contract-doc h3 { font-size: 15px; margin: 18px 0 6px; color: #7a5a1c; border-bottom: 1px solid #e3d6b8; padding-bottom: 3px; }
+.contract-doc h3 { font-size: 15px; margin: 18px 0 6px; color: #13343b; border-bottom: 1px solid #d4e2de; padding-bottom: 3px; }
 .cd-table { width: 100%; border-collapse: collapse; margin: 6px 0 8px; font-size: 13px; }
 .cd-table td { unicode-bidi: plaintext; }
-.cd-table th, .cd-table td { border: 1px solid #cfc4ad; padding: 6px 9px; text-align: start; vertical-align: top; }
-.cd-table th { background: #f7f1e3; font-weight: 600; width: 22%; }
+.cd-table th, .cd-table td { border: 1px solid #c9d8d4; padding: 6px 9px; text-align: start; vertical-align: top; }
+.cd-table th { background: #eef4f2; font-weight: 600; width: 22%; }
 .cd-schedule th { width: auto; }
 .cd-schedule td:last-child, .cd-schedule th:last-child { text-align: end; }
-.cd-schedule tbody tr:first-child td { font-weight: 700; background: #fbf7ee; }
+.cd-schedule tbody tr:first-child td { font-weight: 700; background: #f6f1e9; }
 .cd-terms { padding-inline-start: 22px; }
 .cd-terms li { margin-bottom: 5px; }
 .cd-sign { display: flex; justify-content: space-between; gap: 40px; margin-top: 46px; }

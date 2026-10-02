@@ -49,11 +49,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title><?= e(t('setup.title')) ?> — <?= e(setting('company_name')) ?></title>
+<?php require_once __DIR__ . '/includes/view.php'; echo brand_head(); ?>
 <link rel="stylesheet" href="assets/jv.css?v=<?= @filemtime(__DIR__ . '/assets/jv.css') ?: '1' ?>">
 </head>
 <body class="auth-body">
+<div class="auth-visual" aria-hidden="true"></div>
+<div class="auth-side">
 <div class="auth-card">
+  <img class="auth-logo" src="assets/brand/logo-mark.png" alt="">
   <div class="auth-brand"><?= e(setting('company_name')) ?></div>
+  <div class="auth-title"><?= e(t('setup.title')) ?></div>
+  <div class="auth-sub"><?= e(t('setup.sub')) ?></div>
   <div class="auth-tag"><?= e(t('setup.sub')) ?></div>
 
   <div class="alert success"><?= e(t('setup.db_ready', ['n' => (string) count($ran)])) ?></div>
@@ -76,6 +82,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     </div>
     <button class="btn btn-primary" type="submit"><?= e(t('setup.create')) ?></button>
   </form>
+</div>
 </div>
 </body>
 </html>

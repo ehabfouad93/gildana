@@ -37,11 +37,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title><?= e(t('auth.sign_in')) ?> — <?= e(setting('company_name')) ?></title>
+<?php require_once __DIR__ . '/includes/view.php'; echo brand_head(); ?>
 <link rel="stylesheet" href="assets/jv.css?v=<?= @filemtime(__DIR__ . '/assets/jv.css') ?: '1' ?>">
 </head>
 <body class="auth-body">
+<div class="auth-visual" aria-hidden="true"></div>
+<div class="auth-side">
 <div class="auth-card">
+  <img class="auth-logo" src="assets/brand/logo-mark.png" alt="">
   <div class="auth-brand"><?= e(setting('company_name')) ?></div>
+  <div class="auth-title"><?= e(t('auth.sign_in')) ?></div>
+  <div class="auth-sub"><?= e(setting('company_name') . ' — ' . t('app.tagline')) ?></div>
   <div class="auth-tag"><?= e(t('app.tagline')) ?></div>
 
   <?php if ($error !== ''): ?>
@@ -64,6 +70,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <a href="set_lang.php?to=en&amp;return=index.php">English</a> ·
     <a href="set_lang.php?to=ar&amp;return=index.php">العربية</a>
   </div>
+</div>
 </div>
 </body>
 </html>

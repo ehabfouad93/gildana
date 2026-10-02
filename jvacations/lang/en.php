@@ -2,7 +2,7 @@
 declare(strict_types=1);
 
 return [
-    'app.tagline' => 'Sales, contracts & owner services',
+    'app.tagline' => 'Your escape. Your way.',
 
     /* auth + setup */
     'auth.sign_in'      => 'Sign in',
