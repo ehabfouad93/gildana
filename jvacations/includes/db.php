@@ -21,8 +21,8 @@ function db(): PDO
             // so due dates and "overdue" agree whichever side computes them.
             $pdo->exec("SET time_zone = '" . date('P') . "'");
         } catch (PDOException $ex) {
-            http_response_code(500);
-            exit('Database connection failed. Check config.php and that MySQL is running.');
+            if (PHP_SAPI !== 'cli') http_response_code(500);
+            exit("Database connection failed. Check config.php and that MySQL is running.\n");
         }
     }
     return $pdo;

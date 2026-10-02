@@ -15,7 +15,10 @@
 # NOTE: the leading (.*/)? matters — this app's folder IS the document root, so
 # requests arrive as /includes/db.php with no parent segment. A pattern of the
 # form ^/.*/(includes)/ would never match and would protect nothing.
-RedirectMatch 403 ^/(.*/)?(includes|migrations|lang|tests)/
+RedirectMatch 403 ^/(.*/)?(includes|migrations|lang|tests|deploy)/
 
 # Default document.
 DirectoryIndex index.php
+
+# Never serve dotfiles (.env, .git, .htaccess).
+RedirectMatch 403 /\.

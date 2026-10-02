@@ -1,0 +1,82 @@
+# J Vacations — its own stack, next to (not inside) the Revenect stack.
+#
+# Isolation from the other apps on this server:
+#   - `name: jvacations` pins the compose project name. Without it, compose names the project
+#     after this folder ("docker") — the SAME name as the Revenect stack, and compose would
+#     then treat revenect's containers as orphans of this file.
+#   - Own containers (jvacations, jvacations-db), own volume, own private network.
+#   - Joins Traefik's network only so Traefik can route the domain; it publishes no ports
+#     and does not touch :80/:443.
+#
+# Before `docker compose up`, create .env in this folder (see DEPLOY.md):
+#   JV_DOMAIN=jvacations.gildana.net
+#   JV_DB_PASS=<long random password>
+#   TRAEFIK_NETWORK=<same value as in revenect's .env>
+#   TRAEFIK_CERTRESOLVER=<same value as in revenect's .env>
+
+name: jvacations
+
+services:
+  jvacations:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    image: jvacations-app
+    container_name: jvacations
+    restart: unless-stopped
+    volumes:
+      # The app itself, so `git pull` on the host updates the site with no rebuild.
+      - ../..:/var/www/html
+    environment:
+      TZ: ${TZ:-Africa/Cairo}
+    depends_on:
+      jvacations-db:
+        condition: service_healthy
+    networks:
+      - jvacations
+      - traefik
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=${TRAEFIK_NETWORK}
+      # Router/service names are unique to this app so they cannot override revenect's.
+      - traefik.http.routers.jvacations.rule=Host(`${JV_DOMAIN}`)
+      - traefik.http.routers.jvacations.entrypoints=websecure
+      - traefik.http.routers.jvacations.tls=true
+      - traefik.http.routers.jvacations.tls.certresolver=${TRAEFIK_CERTRESOLVER}
+      - traefik.http.services.jvacations.loadbalancer.server.port=80
+    mem_limit: 256m
+
+  jvacations-db:
+    image: mariadb:11
+    container_name: jvacations-db
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: jvacations
+      MARIADB_USER: jvacations
+      MARIADB_PASSWORD: ${JV_DB_PASS}
+      MARIADB_ROOT_PASSWORD: ${JV_DB_PASS}
+      TZ: ${TZ:-Africa/Cairo}
+    volumes:
+      - jvacations-db:/var/lib/mysql
+    # Small server shared with n8n and Revenect — keep this database lean.
+    command: >-
+      --innodb-buffer-pool-size=64M
+      --max-connections=30
+      --performance-schema=OFF
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      - jvacations
+    mem_limit: 384m
+
+volumes:
+  jvacations-db:
+
+networks:
+  jvacations:
+  traefik:
+    external: true
+    name: ${TRAEFIK_NETWORK}
