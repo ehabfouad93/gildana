@@ -1101,11 +1101,12 @@ async function bulkField(e){
 }
 /* Bulk: a template, with a value for each {{n}}. */
 const TOKENS = <?= json_encode(crm_tpl_tokens(), JSON_UNESCAPED_UNICODE) ?>;
+function tokGroups(f){const g={};Object.entries(TOKENS).forEach(([k,l])=>{const i=l.indexOf(': '),p=i>0?l.slice(0,i):'';(g[p]=g[p]||[]).push(f([k,l]))});return Object.entries(g).map(([p,o])=>p?`<optgroup label="${p}">${o.join('')}</optgroup>`:o.join('')).join('')}
 $m('tpl-pick')?.addEventListener('change', e => {
   const o = e.target.selectedOptions[0]; const n = parseInt(o.dataset.vars || '0', 10);
   $m('tpl-text').textContent = o.dataset.text || '';
   $m('tpl-vars').innerHTML = [...Array(n)].map((_, i) => `<div class="grid2"><div class="field"><span class="lbl">{{${i+1}}}</span>
-    <select name="vars[${i+1}]" onchange="this.closest('.grid2').querySelector('input').hidden = this.value !== 'text'">${Object.entries(TOKENS).map(([k,l]) => `<option value="${k}" ${i===0 && k==='first_name' ? 'selected' : ''}>${escH(l)}</option>`).join('')}</select></div>
+    <select name="vars[${i+1}]" onchange="this.closest('.grid2').querySelector('input').hidden = this.value !== 'text'">${tokGroups(([k,l]) => `<option value="${k}" ${i===0 && k==='first_name' ? 'selected' : ''}>${escH(l)}</option>`)}</select></div>
     <div class="field"><span class="lbl">&nbsp;</span><input name="vars_text[${i+1}]" hidden placeholder="Fixed text"></div></div>`).join('');
 });
 async function bulkTpl(e){

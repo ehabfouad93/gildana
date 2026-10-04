@@ -23,7 +23,8 @@ function crm_staff_wa_kinds(): array
 {
     return ['assigned' => 'A new lead is given to them', 'sla' => 'A lead of theirs is waiting too long',
             'followup' => 'A follow-up is due', 'reclaimed' => 'A lead is taken from them',
-            'visit' => 'A site visit is coming up', 'daily' => 'The daily report, every evening (managers)'];
+            'visit' => 'A site visit is coming up', 'stage' => 'A lead of theirs reaches a stage chosen below',
+            'daily' => 'The daily report, every evening (managers)'];
 }
 
 /**
@@ -57,6 +58,8 @@ function crm_notice_text(array $n): array
         'request'   => ($d['by'] ?? 'Someone') . ' asks to ' . (($d['what'] ?? '') === 'create' ? 'add a new lead' . (!empty($d['name']) ? ': ' . $d['name'] : '') : 'delete ' . $who),
         'request_done' => 'A manager ' . (!empty($d['ok']) ? 'approved' : 'refused') . ' your request to ' . (($d['what'] ?? '') === 'create' ? 'add ' . ($d['name'] ?? 'a lead') : 'delete ' . $who)
                           . (!empty($d['answer']) ? ' — “' . $d['answer'] . '”' : ''),
+        'stage'     => $who . ' moved to ' . ((string) db_val("SELECT name FROM crm_stages WHERE id=?", [(int) ($d['stage'] ?? 0)]) ?: 'a new stage')
+                       . ($proj !== '' ? ' — ' . $proj : ''),
         'visit'     => 'Site visit ' . (!empty($d['at']) ? date('D j M, H:i', strtotime((string) $d['at'])) : 'soon') . ': ' . $who . ($proj !== '' ? ' — ' . $proj : ''),
         default     => 'Update on ' . $who,
     };
@@ -104,22 +107,74 @@ function crm_notices_mark_read(int $userId, ?int $id = null): void
 
 /* ───────────────────────── WhatsApp to the salesperson ───────────────────────── */
 
+/** What can fill an alert's {{n}} or its wording: the alert itself, the person it goes to, and everything about the lead. */
+function crm_staff_tokens(int $clientId = 0): array
+{
+    $lead = function_exists('crm_tpl_tokens') ? crm_tpl_tokens($clientId) : ['name' => 'Lead: name', 'text' => 'Fixed text…'];
+    $text = $lead['text'] ?? 'Fixed text…'; unset($lead['text']);
+    return ['alert' => 'Alert: what happened', 'link' => 'Alert: link to open the lead', 'staff_name' => 'Alert: name of who gets it']
+         + $lead + ['text' => $text];
+}
+
+/** Each alert's own settings: [kind => [template => id, vars => [tokens], text => wording]]. */
+function crm_staff_custom(array $s): array
+{
+    return json_decode((string) ($s['staff_wa_custom'] ?? ''), true) ?: [];
+}
+
+/** The default wording when the company phone sends an alert, with its placeholders. */
+function crm_staff_default_text(): string
+{
+    return "{{alert}}\n{{link}}";
+}
+
+/** The value of one alert token for this notice. */
+function crm_staff_value(string $tok, array $n, array $t, string $url, string $staffName): string
+{
+    if ($tok === 'alert') return $t['text'];
+    if ($tok === 'link') return $url;
+    if ($tok === 'staff_name') return $staffName !== '' ? $staffName : '-';
+    $c = !empty($n['contact_id']) ? (db_row("SELECT * FROM contacts WHERE id=?", [(int) $n['contact_id']]) ?: []) : [];
+    if (!$c && !str_starts_with($tok, 'text:')) return '-';
+    $d = json_decode((string) ($n['data'] ?? ''), true) ?: [];
+    $ctx = [];
+    if (!empty($d['visit'])) {
+        $v = db_row("SELECT * FROM crm_visits WHERE id=?", [(int) $d['visit']]) ?: [];
+        $ctx = ['starts_at' => $v['starts_at'] ?? ($d['at'] ?? null), 'place' => $v['place'] ?? '', 'meet_url' => $v['meet_url'] ?? '', 'project_id' => $v['project_id'] ?? null];
+    }
+    return function_exists('crm_tpl_value') ? crm_tpl_value($tok, $c ?: ['client_id' => $n['client_id']], $ctx) : '-';
+}
+
+/** Wording with {{token}} placeholders filled in. */
+function crm_staff_render(string $text, array $n, array $t, string $url, string $staffName): string
+{
+    return (string) preg_replace_callback('/\{\{\s*([a-z0-9_:]+)\s*\}\}/i',
+        fn($m) => crm_staff_value(strtolower($m[1]), $n, $t, $url, $staffName), $text);
+}
+
 /**
  * Send one alert to a salesperson's own WhatsApp.
  *
- * The company's linked phone sends plain text, like a colleague would. Without one, the Business
- * API needs an approved template: {{1}} gets the alert, {{2}} the link, any others a dash.
+ * The company's linked phone sends plain text, like a colleague would — the alert's own wording
+ * when one is set. Without one, the Business API needs an approved template: the alert's own
+ * template and fields when set, else the account's alert template with {{1}} the alert, {{2}} the
+ * link and any others a dash.
  *
+ * @param array|null $notice the crm_notices row, so the alert's own wording and lead fields can be used
  * @return array{ok:bool, error:string, how:string}
  */
-function crm_staff_send(array $client, string $phone, string $text, string $url): array
+function crm_staff_send(array $client, string $phone, string $text, string $url, ?array $notice = null, string $staffName = ''): array
 {
     $s = crm_settings((int) $client['id']);
+    $kind = $notice ? ((string) $notice['kind'] === 'sla_team' ? 'sla' : (string) $notice['kind']) : '';
+    $own = $kind !== '' ? (crm_staff_custom($s)[$kind] ?? []) : [];
+    $t = ['text' => $text, 'url' => $url];
     if (($client['personal_status'] ?? '') === 'connected' && function_exists('pw_send_text')) {
-        $r = pw_send_text(array_merge($client, ['channel' => 'personal']), $phone, $text . "\n" . $url);
+        $body = $notice && trim((string) ($own['text'] ?? '')) !== '' ? crm_staff_render((string) $own['text'], $notice, $t, $url, $staffName) : $text . "\n" . $url;
+        $r = pw_send_text(array_merge($client, ['channel' => 'personal']), $phone, $body);
         return ['ok' => !empty($r['ok']), 'error' => (string) ($r['error_title'] ?? ''), 'how' => 'company_phone'];
     }
-    $tplId = (int) ($s['staff_wa_template'] ?? 0);
+    $tplId = (int) ($own['template'] ?? 0) ?: (int) ($s['staff_wa_template'] ?? 0);
     if (!$tplId || trim((string) ($client['phone_number_id'] ?? '')) === '') {
         return ['ok' => false, 'error' => 'Choose an approved template for alerts, or link the company phone.', 'how' => 'none'];
     }
@@ -128,13 +183,30 @@ function crm_staff_send(array $client, string $phone, string $text, string $url)
         return ['ok' => false, 'error' => 'The alert template is missing or not approved.', 'how' => 'template'];
     }
     $spec = wa_template_spec(json_decode((string) $tpl['components'], true) ?: []);
+    $tokens = !empty($own['template']) && (int) $own['template'] === $tplId ? (array) ($own['vars'] ?? []) : ['alert', 'link'];
     $vars = [];
     for ($i = 1; $i <= max(1, (int) ($spec['body_vars'] ?? 0)); $i++) {
-        $vars[(string) $i] = ['source' => 'static', 'value' => $i === 1 ? $text : ($i === 2 ? $url : '-')];
+        $tok = (string) ($tokens[$i - 1] ?? '');
+        $val = $tok === '' ? '-' : ($notice ? crm_staff_value($tok, $notice, $t, $url, $staffName)
+                                            : ($tok === 'alert' ? $text : ($tok === 'link' ? $url : (str_starts_with($tok, 'text:') ? substr($tok, 5) : '-'))));
+        $vars[(string) $i] = ['source' => 'static', 'value' => $val !== '' ? $val : '-'];
     }
     $r = channel_send_template(array_merge($client, ['channel' => 'cloud']), $phone, $tpl, ['vars' => $vars, 'header_vars' => []],
                                ['phone_e164' => $phone, 'name' => '', 'attributes' => null]);
     return ['ok' => !empty($r['ok']), 'error' => (string) ($r['error_title'] ?? ''), 'how' => 'template'];
+}
+
+/**
+ * A lead reached a stage: when the account sends the "reaches a stage" alert for this stage, tell
+ * the lead's salesperson (in the bell, and on WhatsApp by the usual pass).
+ */
+function crm_staff_stage_alert(int $clientId, int $contactId, int $stageId): void
+{
+    $s = crm_settings($clientId);
+    if (!in_array('stage', explode(',', (string) $s['staff_wa_kinds']), true)) return;
+    if (!in_array((string) $stageId, explode(',', (string) ($s['staff_wa_stages'] ?? '')), true)) return;
+    $owner = (int) db_val("SELECT owner_user_id FROM contacts WHERE id=? AND client_id=?", [$contactId, $clientId]);
+    if ($owner && function_exists('crm_notice')) crm_notice($clientId, $owner, 'stage', $contactId, ['stage' => $stageId]);
 }
 
 /**
@@ -144,7 +216,7 @@ function crm_staff_send(array $client, string $phone, string $text, string $url)
 function crm_staff_wa_tick(int $limit = 100): int
 {
     if (!db_has_column('crm_notices', 'wa_status')) return 0;
-    $rows = db_all("SELECT n.*, u.phone, u.wa_alerts, u.status AS ustatus FROM crm_notices n JOIN users u ON u.id = n.user_id
+    $rows = db_all("SELECT n.*, u.phone, u.wa_alerts, u.status AS ustatus, COALESCE(NULLIF(u.name,''), u.email) AS uname FROM crm_notices n JOIN users u ON u.id = n.user_id
                      WHERE n.wa_status IS NULL AND n.created_at > NOW() - INTERVAL 2 HOUR
                      ORDER BY n.id LIMIT " . (int) $limit);
     $sent = 0; $clients = [];
@@ -165,7 +237,7 @@ function crm_staff_wa_tick(int $limit = 100): int
         $url = rtrim(app_base_url(), '/') . '/client/' . $t['url'];
         // Claim it first, so a slow send and the next pass can never both send it.
         if (!db_run("UPDATE crm_notices SET wa_status='sending' WHERE id=? AND wa_status IS NULL", [(int) $n['id']])) continue;
-        $r = crm_staff_send($client, (string) $n['phone'], $t['text'], $url);
+        $r = crm_staff_send($client, (string) $n['phone'], $t['text'], $url, $n, (string) ($n['uname'] ?? ''));
         db_run("UPDATE crm_notices SET wa_status=?, wa_error=? WHERE id=?",
                [$r['ok'] ? 'sent' : 'failed', $r['ok'] ? null : mb_substr($r['error'], 0, 255), (int) $n['id']]);
         if ($r['ok']) $sent++;

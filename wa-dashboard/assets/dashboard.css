@@ -1662,3 +1662,12 @@ dialog { margin: auto; }
 .fail-table tr.on td { background: var(--brand-tint); }
 .fail-bar { display: inline-block; width: 70px; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; vertical-align: middle; margin-inline-end: 8px; }
 .fail-bar > span { display: block; height: 100%; background: var(--danger); border-radius: 3px; }
+
+/* ── CRM → Assignment rules: what each WhatsApp alert says ── */
+.sw-kind { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+.sw-kind summary { cursor: pointer; font-weight: 600; font-size: 13.5px; }
+.sw-kind[open] summary { margin-bottom: 10px; }
+.sw-kind textarea { width: 100%; }
+.sw-fields { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.sw-fields .crm-chip { cursor: pointer; font-size: 11.5px; }
+.sw-chips { display: flex; flex-wrap: wrap; gap: 4px 14px; }

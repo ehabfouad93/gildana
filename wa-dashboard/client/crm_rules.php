@@ -73,8 +73,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $kinds = array_values(array_intersect(array_keys(crm_staff_wa_kinds()), (array) ($_POST['kinds'] ?? [])));
         $tpl = (int) ($_POST['template'] ?? 0);
         if ($tpl && !db_val("SELECT COUNT(*) FROM templates WHERE id=? AND client_id=?", [$tpl, $cid])) $tpl = 0;
+        // Each alert's own template and fields (Business API), or its own wording (company phone).
+        $custom = [];
+        foreach ((array) ($_POST['custom'] ?? []) as $k => $c) {
+            if (!isset(crm_staff_wa_kinds()[$k]) || !is_array($c)) continue;
+            $ct = (int) ($c['template'] ?? 0);
+            if ($ct && !db_val("SELECT COUNT(*) FROM templates WHERE id=? AND client_id=?", [$ct, $cid])) $ct = 0;
+            $row = array_filter(['template' => $ct ?: null, 'vars' => $ct ? crm_tokens_from_post('vars', $c, crm_staff_tokens($cid)) : null,
+                                 'text' => mb_substr(trim((string) ($c['text'] ?? '')), 0, 1000) ?: null]);
+            if ($row) $custom[$k] = $row;
+        }
+        $stages = array_map('intval', (array) ($_POST['stages'] ?? []));
         crm_settings_set($cid, ['staff_wa_on' => !empty($_POST['on']) ? 1 : 0, 'staff_wa_template' => $tpl ?: null,
-                                'staff_wa_kinds' => implode(',', $kinds)]);
+                                'staff_wa_kinds' => implode(',', $kinds),
+                                'staff_wa_custom' => $custom ? json_encode($custom, JSON_UNESCAPED_UNICODE) : null,
+                                'staff_wa_stages' => $stages ? implode(',', $stages) : null]);
         flash('WhatsApp alerts saved.');
         redirect('crm_rules.php#staff-wa');
     }
@@ -206,6 +219,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
   $waFail = db_all("SELECT n.created_at, n.wa_error, COALESCE(NULLIF(u.name,''), u.email) who FROM crm_notices n JOIN users u ON u.id=n.user_id
                      WHERE n.client_id=? AND n.wa_status='failed' ORDER BY n.id DESC LIMIT 5", [$cid]);
   $kindsOn = array_filter(explode(',', (string) $s['staff_wa_kinds']));
+  $staffCustom = crm_staff_custom($s);
 ?>
 <div class="card" id="staff-wa">
   <h2>WhatsApp alerts to salespeople</h2>
@@ -221,12 +235,37 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
         <label class="mod-opt"><input type="checkbox" name="kinds[]" value="<?= $k ?>" <?= in_array($k, $kindsOn, true) ? 'checked' : '' ?>> <?= e($l) ?></label>
       <?php endforeach; ?>
     </div>
+    <div class="field" id="sw-stages"><span class="lbl">Stages that alert the salesperson</span>
+      <div class="sw-chips"><?php $stOn = explode(',', (string) ($s['staff_wa_stages'] ?? '')); foreach (crm_stages($cid) as $st): ?>
+        <label class="mod-opt"><input type="checkbox" name="stages[]" value="<?= (int) $st['id'] ?>" <?= in_array((string) $st['id'], $stOn, true) ? 'checked' : '' ?>> <?= e($st['name']) ?></label>
+      <?php endforeach; ?></div>
+      <div class="hint">With “A lead of theirs reaches a stage” ticked: when one of their leads moves into one of these stages.</div></div>
+
     <?php if (!$hasPhone): ?>
     <div class="field" style="max-width:420px"><span class="lbl">Template for alerts</span><select name="template">
       <option value="0">Choose an approved template…</option>
       <?php foreach ($approved as $t): ?><option value="<?= (int) $t['id'] ?>" <?= (int) $s['staff_wa_template'] === (int) $t['id'] ? 'selected' : '' ?>><?= e($t['wa_name'] . ' (' . $t['language'] . ', ' . strtolower((string) $t['category']) . ')') ?></option><?php endforeach; ?>
     </select></div>
     <?php endif; ?>
+    <div class="section-label">What each alert says</div>
+    <p class="text-muted" style="font-size:12.5px;margin:-4px 0 8px"><?= $hasPhone
+      ? 'Write each alert in your own words. Click a field to add it — it is filled in for each lead when the alert goes out.'
+      : 'Give an alert its own approved template and choose what fills each {{n}} — the alert, the link, the lead\'s name, phone, project, stage, budget, your own fields… Left empty, it uses the template above with {{1}} the alert and {{2}} the link.' ?></p>
+    <?php foreach (crm_staff_wa_kinds() as $k => $l): if ($k === 'daily') continue; $own = $staffCustom[$k] ?? []; ?>
+      <details class="sw-kind" data-kind="<?= $k ?>"<?= $own ? ' open' : '' ?>>
+        <summary><?= e($l) ?><?= $own ? ' <span class="pill blue">custom</span>' : '' ?></summary>
+        <?php if ($hasPhone): ?>
+          <textarea name="custom[<?= $k ?>][text]" rows="3" placeholder="<?= e(crm_staff_default_text()) ?>"><?= e((string) ($own['text'] ?? '')) ?></textarea>
+          <div class="sw-fields"><?php foreach (crm_staff_tokens($cid) as $tk => $tl): if ($tk === 'text') continue; ?><button type="button" class="crm-chip" data-tok="<?= e($tk) ?>"><?= e($tl) ?></button><?php endforeach; ?></div>
+        <?php else: ?>
+          <div class="field"><span class="lbl">Template</span><select name="custom[<?= $k ?>][template]" class="sw-tpl">
+            <option value="0">The alert template above</option>
+            <?php foreach ($approved as $t): ?><option value="<?= (int) $t['id'] ?>" <?= (int) ($own['template'] ?? 0) === (int) $t['id'] ? 'selected' : '' ?>><?= e($t['wa_name'] . ' (' . $t['language'] . ')') ?></option><?php endforeach; ?>
+          </select><div class="hint sw-prev" style="white-space:pre-wrap"></div></div>
+          <div class="sw-vars" data-prefix="custom[<?= $k ?>][vars]" data-tokens="<?= e(json_encode(array_values((array) ($own['vars'] ?? [])))) ?>"></div>
+        <?php endif; ?>
+      </details>
+    <?php endforeach; ?>
     <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary">Save alerts</button></div>
   </form>
   <form method="post" style="margin-top:8px"><?= csrf_field() ?><input type="hidden" name="action" value="staff_wa_test">
@@ -278,4 +317,35 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
     <button class="btn btn-primary">Save timers</button>
   </form>
 </div>
+<script>
+(function () {
+  const TPLS = <?= json_encode(crm_tpl_choices($cid), JSON_UNESCAPED_UNICODE) ?>;
+  const TOKENS = <?= json_encode(crm_staff_tokens($cid), JSON_UNESCAPED_UNICODE) ?>;
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  function tokGroups(f){const g={};Object.entries(TOKENS).forEach(([k,l])=>{const i=l.indexOf(': '),p=i>0?l.slice(0,i):'';(g[p]=g[p]||[]).push(f([k,l]))});return Object.entries(g).map(([p,o])=>p?`<optgroup label="${p}">${o.join('')}</optgroup>`:o.join('')).join('')}
+  // A field chip adds {{field}} where the cursor is in that alert's wording.
+  document.querySelectorAll('.sw-kind .crm-chip[data-tok]').forEach(b => b.addEventListener('click', () => {
+    const ta = b.closest('.sw-kind').querySelector('textarea'), tok = '{{' + b.dataset.tok + '}}';
+    const at = ta.selectionStart ?? ta.value.length;
+    ta.value = ta.value.slice(0, at) + tok + ta.value.slice(ta.selectionEnd ?? at); ta.focus(); ta.selectionStart = ta.selectionEnd = at + tok.length;
+  }));
+  // One picker per {{n}} of the alert's own template.
+  function draw(sel, first) {
+    const box = sel.closest('.sw-kind').querySelector('.sw-vars'), prev = sel.closest('.sw-kind').querySelector('.sw-prev');
+    const t = TPLS[sel.value]; box.innerHTML = ''; prev.textContent = t ? t.text : '';
+    if (!t) return;
+    const cur = first ? JSON.parse(box.dataset.tokens || '[]') : [];
+    const guess = ['alert', 'link', 'name', 'phone', 'project'];
+    for (let i = 0; i < t.body; i++) {
+      const tok = cur[i] || guess[i] || 'name', isText = tok.startsWith('text:');
+      const row = document.createElement('div'); row.className = 'tpl-var';
+      row.innerHTML = `<span class="tpl-var-n">{{${i + 1}}}</span><select name="${box.dataset.prefix}[${i}]">${tokGroups(([k, l]) => `<option value="${k}" ${(isText ? 'text' : tok) === k ? 'selected' : ''}>${esc(l)}</option>`)}</select>
+        <input type="text" name="${box.dataset.prefix.slice(0, -1)}_text][${i}]" value="${isText ? esc(tok.slice(5)) : ''}" placeholder="Type the text" ${isText ? '' : 'hidden'}>`;
+      row.querySelector('select').onchange = e => { row.querySelector('input').hidden = e.target.value !== 'text'; };
+      box.appendChild(row);
+    }
+  }
+  document.querySelectorAll('.sw-tpl').forEach(sel => { draw(sel, true); sel.addEventListener('change', () => draw(sel, false)); });
+})();
+</script>
 <?php layout_footer();

@@ -213,6 +213,7 @@ if (!$ev):
 (function(){
   const TPLS = <?= json_encode($tpls, JSON_UNESCAPED_UNICODE) ?>;
   const TOKENS = <?= json_encode(crm_tpl_tokens(), JSON_UNESCAPED_UNICODE) ?>;
+function tokGroups(f){const g={};Object.entries(TOKENS).forEach(([k,l])=>{const i=l.indexOf(': '),p=i>0?l.slice(0,i):'';(g[p]=g[p]||[]).push(f([k,l]))});return Object.entries(g).map(([p,o])=>p?`<optgroup label="${p}">${o.join('')}</optgroup>`:o.join('')).join('')}
   const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   const guess = ['first_name', 'event_name', 'event_date', 'event_time', 'event_place', 'owner_name'];
   function draw(sel, saved){
@@ -221,8 +222,8 @@ if (!$ev):
     for (let i = 0; i < t.body + t.header_vars; i++) {
       const cur = saved[i] || guess[i] || 'name', isText = cur.startsWith('text:');
       const row = document.createElement('div'); row.className = 'tpl-var';
-      row.innerHTML = `<span class="tpl-var-n">{{${i + 1}}}</span><select name="${prefix}[${i}]">${Object.entries(TOKENS).map(([k, l]) =>
-        `<option value="${k}" ${(isText ? 'text' : cur) === k ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>
+      row.innerHTML = `<span class="tpl-var-n">{{${i + 1}}}</span><select name="${prefix}[${i}]">${tokGroups(([k, l]) =>
+        `<option value="${k}" ${(isText ? 'text' : cur) === k ? 'selected' : ''}>${esc(l)}</option>`)}</select>
         <input type="text" name="${prefix}_text[${i}]" value="${isText ? esc(cur.slice(5)) : ''}" placeholder="Type the text" ${isText ? '' : 'hidden'}>`;
       row.querySelector('select').onchange = e => { row.querySelector('input').hidden = e.target.value !== 'text'; };
       box.appendChild(row);

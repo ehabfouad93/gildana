@@ -15,69 +15,115 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/inbox.php';          // inbox_send_template(): credits, channel, logging
+require_once __DIR__ . '/crm_fields.php';     // custom fields, money format — for the template variables
 
-/** What can fill a template's {{n}}, in words an admin picks from. */
-function crm_tpl_tokens(): array
+/**
+ * What can fill a template's {{n}}, in words an admin picks from: the lead, the salesperson, the
+ * visit or event, the company — and every custom field of the account (cf:<key>).
+ */
+function crm_tpl_tokens(int $clientId = 0): array
 {
-    return [
-        'name'        => 'Lead\'s name',
-        'first_name'  => 'Lead\'s first name',
-        'phone'       => 'Lead\'s phone',
-        'project'     => 'Project',
-        'unit_type'   => 'Unit type',
-        'budget'      => 'Budget',
-        'owner_name'  => 'Salesperson\'s name',
-        'owner_phone' => 'Salesperson\'s phone',
-        'stage'       => 'Stage',
-        'visit_date'  => 'Visit date',
-        'visit_time'  => 'Visit time',
-        'visit_place' => 'Visit place',
-        'meeting_link' => 'Online meeting link',
-        'event_name'  => 'Event name',
-        'event_date'  => 'Event date',
-        'event_time'  => 'Event time',
-        'event_place' => 'Event place or link',
-        'company'     => 'Company name',
-        'text'        => 'Fixed text…',
+    $t = [
+        'name'         => 'Lead: name',
+        'first_name'   => 'Lead: first name',
+        'phone'        => 'Lead: phone',
+        'email'        => 'Lead: email',
+        'code'         => 'Lead: lead code',
+        'project'      => 'Lead: project',
+        'unit_type'    => 'Lead: unit type',
+        'budget'       => 'Lead: budget',
+        'payment'      => 'Lead: payment (cash / instalments)',
+        'deal_value'   => 'Lead: deal value',
+        'stage'        => 'Lead: stage',
+        'substatus'    => 'Lead: sub-status',
+        'source'       => 'Lead: source',
+        'campaign'     => 'Lead: campaign',
+        'platform'     => 'Lead: platform',
+        'ad_name'      => 'Lead: ad name',
+        'created_date' => 'Lead: date added',
+        'followup_date' => 'Lead: next follow-up date',
+        'followup_time' => 'Lead: next follow-up time',
+        'owner_name'   => 'Salesperson: name',
+        'owner_first_name' => 'Salesperson: first name',
+        'owner_phone'  => 'Salesperson: phone',
+        'owner_email'  => 'Salesperson: email',
+        'visit_date'   => 'Visit: date',
+        'visit_time'   => 'Visit: time',
+        'visit_place'  => 'Visit: place',
+        'meeting_link' => 'Visit: online meeting link',
+        'event_name'   => 'Event: name',
+        'event_date'   => 'Event: date',
+        'event_time'   => 'Event: time',
+        'event_place'  => 'Event: place or link',
+        'company'      => 'Company name',
+        'today'        => 'Today\'s date',
     ];
+    $clientId = $clientId ?: (int) ($GLOBALS['CLIENT']['id'] ?? 0);
+    if ($clientId && function_exists('crm_fields')) {
+        foreach (crm_fields($clientId) as $f) $t['cf:' . $f['fkey']] = 'Custom field: ' . $f['label'];
+    }
+    return $t + ['text' => 'Fixed text…'];
 }
 
 /**
- * The value for one {{n}}. A token is 'name', or 'text:Our office' for fixed text. A value that
- * comes out empty becomes a dash rather than failing the send — Meta refuses a template with an
- * empty parameter, and "Hello -" is better than no message at all.
+ * The value for one {{n}}. A token is 'name', 'cf:nationality', or 'text:Our office' for fixed
+ * text. A value that comes out empty becomes a dash rather than failing the send — Meta refuses a
+ * template with an empty parameter, and "Hello -" is better than no message at all.
  */
 function crm_tpl_value(string $token, array $c, array $ctx = []): string
 {
     if (str_starts_with($token, 'text:')) return trim(substr($token, 5)) ?: '-';
     static $owners = [], $projects = [];
     $v = '';
+    $uid = (int) ($c['owner_user_id'] ?? 0);
+    if ($uid && str_starts_with($token, 'owner_')) $owners[$uid] ??= db_row("SELECT name, email, phone FROM users WHERE id=?", [$uid]) ?: [];
+    $o = $owners[$uid] ?? [];
+    $date = fn($x) => $x ? date('l j F', strtotime((string) $x)) : '';
+    if (str_starts_with($token, 'cf:')) {
+        $key = substr($token, 3);
+        $raw = (function_exists('crm_custom_get') ? crm_custom_get($c) : [])[$key] ?? '';
+        $f = null;
+        foreach (function_exists('crm_fields') ? crm_fields((int) ($c['client_id'] ?? 0), false) : [] as $ff) if ($ff['fkey'] === $key) $f = $ff;
+        $v = $f ? crm_custom_show($f, $raw) : (string) $raw;
+        $v = trim($v);
+        return $v !== '' ? $v : '-';
+    }
     switch ($token) {
         case 'name':       $v = (string) ($c['name'] ?? ''); break;
         case 'first_name': $v = (string) (preg_split('/\s+/u', trim((string) ($c['name'] ?? ''))) ?: [''])[0]; break;
         case 'phone':      $v = '+' . $c['phone_e164']; break;
+        case 'email':      $v = (string) ($c['email'] ?? ''); break;
+        case 'code':       $v = (string) ($c['code'] ?? ''); break;
         case 'unit_type':  $v = (string) ($c['unit_type'] ?? ''); break;
         case 'budget':     $v = (string) ($c['budget'] ?? ''); break;
+        case 'payment':    $v = (string) ($c['payment_pref'] ?? ''); break;
+        case 'deal_value': $v = (float) ($c['deal_value'] ?? 0) > 0 && function_exists('crm_money_fmt') ? crm_money_fmt($c['deal_value'], (int) $c['client_id']) : ''; break;
+        case 'substatus':  $v = (string) ($c['substatus'] ?? ''); break;
+        case 'source':     $v = (string) ($c['source'] ?? ''); break;
+        case 'campaign':   $v = (string) ($c['campaign'] ?? ''); break;
+        case 'platform':   $v = (string) ($c['platform'] ?? ''); break;
+        case 'ad_name':    $v = (string) ($c['ad_name'] ?? ''); break;
+        case 'created_date': $v = $date($c['crm_added_at'] ?? $c['created_at'] ?? ''); break;
+        case 'followup_date': $v = $date($c['next_followup_at'] ?? ''); break;
+        case 'followup_time': $v = !empty($c['next_followup_at']) ? date('g:i A', strtotime((string) $c['next_followup_at'])) : ''; break;
+        case 'today':      $v = date('l j F'); break;
         case 'project':
             $pid = (int) ($ctx['project_id'] ?? $c['project_id'] ?? 0);
             if ($pid) $v = $projects[$pid] ??= (string) db_val("SELECT name FROM crm_projects WHERE id=?", [$pid]);
             break;
-        case 'owner_name': case 'owner_phone':
-            $uid = (int) ($c['owner_user_id'] ?? 0);
-            if ($uid) {
-                $owners[$uid] ??= db_row("SELECT name, email, phone FROM users WHERE id=?", [$uid]) ?: [];
-                $v = $token === 'owner_name' ? (string) (($owners[$uid]['name'] ?? '') ?: '') : (!empty($owners[$uid]['phone']) ? '+' . $owners[$uid]['phone'] : '');
-            }
-            break;
+        case 'owner_name':       $v = (string) ($o['name'] ?? ''); break;
+        case 'owner_first_name': $v = (string) (preg_split('/\s+/u', trim((string) ($o['name'] ?? ''))) ?: [''])[0]; break;
+        case 'owner_phone':      $v = !empty($o['phone']) ? '+' . $o['phone'] : ''; break;
+        case 'owner_email':      $v = (string) ($o['email'] ?? ''); break;
         case 'stage':
             if (!empty($c['stage_id'])) $v = (string) db_val("SELECT name FROM crm_stages WHERE id=?", [(int) $c['stage_id']]);
             break;
-        case 'visit_date':  $v = !empty($ctx['starts_at']) ? date('l j F', strtotime((string) $ctx['starts_at'])) : ''; break;
+        case 'visit_date':  $v = $date($ctx['starts_at'] ?? ''); break;
         case 'visit_time':  $v = !empty($ctx['starts_at']) ? date('g:i A', strtotime((string) $ctx['starts_at'])) : ''; break;
         case 'visit_place': $v = (string) ($ctx['place'] ?? ''); break;
         case 'meeting_link': $v = (string) ($ctx['meet_url'] ?? ''); break;
         case 'event_name':  $v = (string) ($ctx['event_name'] ?? ''); break;
-        case 'event_date':  $v = !empty($ctx['event_at']) ? date('l j F', strtotime((string) $ctx['event_at'])) : ''; break;
+        case 'event_date':  $v = $date($ctx['event_at'] ?? ''); break;
         case 'event_time':  $v = !empty($ctx['event_at']) ? date('g:i A', strtotime((string) $ctx['event_at'])) : ''; break;
         case 'event_place': $v = (string) ($ctx['event_place'] ?? ''); break;
         case 'company':     $v = (string) db_val("SELECT name FROM clients WHERE id=?", [(int) $c['client_id']]); break;
@@ -107,15 +153,16 @@ function crm_tpl_choices(int $clientId): array
 }
 
 /** Tokens from a posted form (vars[1]=name, vars_text[3]=Our office…), in order. */
-function crm_tokens_from_post(string $prefix, array $post): array
+function crm_tokens_from_post(string $prefix, array $post, ?array $allowed = null): array
 {
+    $allowed ??= crm_tpl_tokens();
     $vars = (array) ($post[$prefix] ?? []); $txt = (array) ($post[$prefix . '_text'] ?? []);
     ksort($vars);
     $out = [];
     foreach ($vars as $i => $tok) {
         $tok = (string) $tok;
         if ($tok === 'text') $tok = 'text:' . mb_substr(trim((string) ($txt[$i] ?? '')), 0, 200);
-        elseif (!isset(crm_tpl_tokens()[$tok])) $tok = 'name';
+        elseif (!isset($allowed[$tok]) && !preg_match('/^cf:[a-z0-9_]{1,40}$/', $tok)) $tok = 'name';
         $out[] = $tok;
     }
     return $out;
@@ -218,6 +265,7 @@ function crm_auto_on_stage(array $client, int $contactId, int $stageId, bool $ar
     if (!db_has_column('crm_msg_queue', 'context')) return;              // migration 041 not applied yet
     $cid = (int) $client['id'];
     if (function_exists('crm_capi_on_stage')) crm_capi_on_stage($client, $contactId, $stageId);   // tell Meta, for form leads
+    if (function_exists('crm_staff_stage_alert')) crm_staff_stage_alert($cid, $contactId, $stageId);   // tell the salesperson, when chosen
     try {
         $m = db_row("SELECT * FROM crm_stage_msgs WHERE client_id=? AND stage_id=? AND active=1", [$cid, $stageId]);
         if ($m && (!$arrival || (int) $m['on_arrival'])) {
