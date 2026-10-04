@@ -21,57 +21,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['ajax'])) {
 /* ── Create client ── */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'create_client') {
     verify_csrf();
-    $name    = trim((string) ($_POST['name'] ?? ''));
-    $email   = strtolower(trim((string) ($_POST['email'] ?? '')));
-    $pass    = (string) ($_POST['password'] ?? '');
-    $credits = max(0, (int) ($_POST['credits'] ?? 0));
-
-    if ($name === '') {
-        $err = 'Client name is required.';
-    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        $err = 'Enter a valid login email.';
-    } elseif (strlen($pass) < 8) {
-        $err = 'Login password must be at least 8 characters.';
-    } elseif (db_val("SELECT COUNT(*) FROM users WHERE email = ?", [$email])) {
-        $err = 'That login email is already in use.';
-    } else {
-        $pdo = db();
-        $pdo->beginTransaction();
-        try {
-            $clientId = db_insert(
-                "INSERT INTO clients
-                    (name, sender_display, company, contact_person, contact_phone, contact_email,
-                     category, timezone, default_country, notes, credits_balance, low_credit_threshold, status, created_at)
-                 VALUES (?,?,?,?,?,?,?,?,?,?,0,?, 'active', NOW())",
-                [
-                    $name,
-                    trim((string) ($_POST['sender_display'] ?? '')) ?: $name,
-                    trim((string) ($_POST['company'] ?? '')),
-                    trim((string) ($_POST['contact_person'] ?? '')),
-                    trim((string) ($_POST['contact_phone'] ?? '')),
-                    trim((string) ($_POST['contact_email'] ?? '')),
-                    trim((string) ($_POST['category'] ?? '')),
-                    trim((string) ($_POST['timezone'] ?? '')),
-                    trim((string) ($_POST['default_country'] ?? '')),
-                    trim((string) ($_POST['notes'] ?? '')) ?: null,
-                    max(0, (int) ($_POST['low_credit_threshold'] ?? 100)),
-                ]
-            );
-            db_insert(
-                "INSERT INTO users (client_id, email, password_hash, role, status, created_at)
-                 VALUES (?,?,?, 'client', 'active', NOW())",
-                [$clientId, $email, password_hash($pass, PASSWORD_DEFAULT)]
-            );
-            $pdo->commit();
-            if ($credits > 0) credits_adjust($clientId, $credits, 'initial_grant');
-            flash('Client "' . $name . '" created. Now add their WhatsApp credentials.');
-            redirect('client.php?id=' . $clientId);
-        } catch (Throwable $ex) {
-            if ($pdo->inTransaction()) $pdo->rollBack();
-            error_log('client create failed: ' . $ex->getMessage());
-            $err = 'Could not create the client. Please try again.';
-        }
+    require_once __DIR__ . '/../includes/client_account.php';
+    $r = client_account_create($_POST);
+    if ($r['ok']) {
+        flash('Client "' . trim((string) $_POST['name']) . '" created. Now add their WhatsApp credentials.');
+        redirect('client.php?id=' . $r['id']);
     }
+    $err = $r['error'];
 }
 
 $q = trim((string) ($_GET['q'] ?? ''));

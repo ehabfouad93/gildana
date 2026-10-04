@@ -18,6 +18,8 @@ require_once __DIR__ . '/includes/bootstrap.php';
 require_once __DIR__ . '/includes/help.php';
 require_once __DIR__ . '/includes/video_view.php';
 require_once __DIR__ . '/includes/notify.php';
+require_once __DIR__ . '/includes/access_request.php';
+require_once __DIR__ . '/includes/seo.php';
 
 // First run: no admin yet → go create one.
 if (!admin_exists()) {
@@ -32,40 +34,9 @@ if ($u) {
 
 /* ── Request access ──────────────────────────────────────────────────────────────
    There is no self-signup: an account is created by the operator, with a WhatsApp number
-   attached to it. So the front door is a request, and it lands in the same place support
-   requests do — Admin → Help Content — rather than in an inbox that may not be watched. */
-$sent = false;
-$err  = '';
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'access') {
-    verify_csrf();
-    $name    = trim((string) ($_POST['name'] ?? ''));
-    $email   = trim((string) ($_POST['email'] ?? ''));
-    $company = trim((string) ($_POST['company'] ?? ''));
-    $phone   = trim((string) ($_POST['phone'] ?? ''));
-    $about   = trim((string) ($_POST['about'] ?? ''));
-    // Hidden from people, irresistible to bots. Silently accepted so the bot doesn't retry.
-    $trap    = trim((string) ($_POST['website'] ?? ''));
-
-    if ($trap !== '') {
-        $sent = true;
-    } elseif ($name === '' || $email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        $err = 'Please give us your name and a valid email address.';
-    } else {
-        $body = "Name: {$name}\nEmail: {$email}\nBusiness: " . ($company ?: '—')
-              . "\nWhatsApp: " . ($phone ?: '—') . "\n\n" . ($about ?: '(no message)');
-        try {
-            db_run("INSERT INTO support_tickets (client_id,user_id,name,email,subject,message,status,created_at)
-                    VALUES (NULL, NULL, ?, ?, ?, ?, 'open', NOW())",
-                [mb_substr($name, 0, 120), mb_substr($email, 0, 190),
-                 'Access request: ' . mb_substr($company ?: $name, 0, 150), $body]);
-            @notify_admin('Access request from ' . $name, $body);
-            $sent = true;
-        } catch (Throwable $e) {
-            error_log('access request failed: ' . $e->getMessage());
-            $err = 'Something went wrong on our side. Please try again in a moment.';
-        }
-    }
-}
+   attached to it. So the front door is a request, which lands in Admin → Requests. The same
+   form lives on its own page (request.php) for sharing as a link. */
+[$sent, $err] = access_request_handle('landing');
 
 $appName = brand_name();
 $faqs    = faq_live();
@@ -120,12 +91,8 @@ $steps = [
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title><?= e($appName) ?> — WhatsApp campaigns, automations and a live inbox</title>
-<meta name="description" content="<?= e($appName) ?> turns WhatsApp into a working sales channel: bulk campaigns, an automation builder you can preview before it sends, an AI agent that answers from your own knowledge, and lead scoring you can read.">
+<?= seo_head(['path' => '', 'faq' => $faqs]) ?>
 <meta name="theme-color" content="#0B1020">
-<meta property="og:title" content="<?= e($appName) ?> — <?= e(BRAND_TAGLINE) ?>">
-<meta property="og:description" content="Campaigns, automations, an AI agent and a live inbox — on the WhatsApp number your customers already message.">
-<meta property="og:type" content="website">
 <link rel="icon" href="assets/icons/favicon.png">
 <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -538,44 +505,7 @@ $steps = [
       </ul>
     </div>
 
-    <form class="form" method="post" action="#access">
-      <?= csrf_field() ?>
-      <input type="hidden" name="action" value="access">
-      <?php if ($sent): ?>
-        <div class="note ok">Thank you — that is with us. We will reply by email today or
-          the next working day.</div>
-      <?php elseif ($err): ?>
-        <div class="note bad"><?= e($err) ?></div>
-      <?php endif; ?>
-
-      <div class="fi">
-        <label for="a-name">Your name</label>
-        <input id="a-name" type="text" name="name" value="<?= old('name') ?>" required maxlength="120" autocomplete="name">
-      </div>
-      <div class="fi">
-        <label for="a-email">Email</label>
-        <input id="a-email" type="email" name="email" value="<?= old('email') ?>" required maxlength="190" autocomplete="email">
-      </div>
-      <div class="fi">
-        <label for="a-company">Business name</label>
-        <input id="a-company" type="text" name="company" value="<?= old('company') ?>" maxlength="150" autocomplete="organization">
-      </div>
-      <div class="fi">
-        <label for="a-phone">WhatsApp number <span style="font-weight:400;opacity:.6">(optional)</span></label>
-        <input id="a-phone" type="tel" name="phone" value="<?= old('phone') ?>" maxlength="32" placeholder="+20 …" autocomplete="tel">
-      </div>
-      <div class="fi">
-        <label for="a-about">What do you want to use it for?</label>
-        <textarea id="a-about" name="about" maxlength="2000" placeholder="e.g. we have 4,000 customers in a sheet and want to send an offer, then answer whoever replies"><?= old('about') ?></textarea>
-      </div>
-      <!-- Hidden from people, irresistible to bots. -->
-      <div style="position:absolute;left:-9999px" aria-hidden="true">
-        <label for="a-website">Website</label>
-        <input id="a-website" type="text" name="website" tabindex="-1" autocomplete="off">
-      </div>
-      <button type="submit" class="btn btn-primary">Request access</button>
-      <p class="fine">Already have an account? <a href="login.php" style="color:#fff">Log in</a>.</p>
-    </form>
+    <?= access_request_form($sent, $err, '#access') ?>
   </div>
 </section>
 
@@ -590,7 +520,8 @@ $steps = [
         <a href="#qualifier">Lead Qualifier</a>
         <?php if ($plans): ?><a href="#pricing">Pricing</a><?php endif; ?>
         <?php if ($faqs): ?><a href="#faq">FAQ</a><?php endif; ?>
-        <a href="#access">Get started</a>
+        <a href="help-center.php">Help Center</a>
+        <a href="request.php">Get started</a>
         <a href="login.php">Log in</a>
       </nav>
     </div>

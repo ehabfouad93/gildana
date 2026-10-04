@@ -17,7 +17,8 @@ function faq_live(): array
 
 function help_setting(string $k, string $default = ''): string
 {
-    try { $v = db_val("SELECT v FROM app_settings WHERE k=?", [$k]); return $v === null ? $default : (string) $v; }
+    // No row comes back as false, a NULL value as null: both mean "not set".
+    try { $v = db_val("SELECT v FROM app_settings WHERE k=?", [$k]); return $v === null || $v === false ? $default : (string) $v; }
     catch (Throwable $e) { return $default; }
 }
 

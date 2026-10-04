@@ -180,4 +180,18 @@ return [
     'Sub-statuses' => 'الحالات الفرعية', 'Save sub-statuses' => 'حفظ الحالات الفرعية', 'Your own fields' => 'حقولك الخاصة', 'Add field' => 'إضافة حقل',
     'Unit types' => 'أنواع الوحدات', 'Lost reasons' => 'أسباب الخسارة', 'Money and fresh leads' => 'العملة والعملاء الجدد', 'Currency' => 'العملة',
     'Fresh for (days)' => 'جديد لمدة (أيام)', 'Available' => 'متاح', 'Away' => 'غائب', 'Open' => 'مفتوح', 'Hidden' => 'مخفي',
+    // Admin → Requests and Admin → SEO
+    'SEO' => 'تحسين الظهور (SEO)', 'Link to the form' => 'رابط النموذج', 'Copy link' => 'نسخ الرابط', 'All requests' => 'كل الطلبات',
+    'Converted' => 'تحوّل إلى عميل', 'Declined' => 'مرفوض', 'waiting for a reply' => 'بانتظار الرد', 'in conversation' => 'قيد التواصل',
+    'now clients' => 'أصبحوا عملاء', 'not a fit' => 'غير مناسب', 'Convert to client' => 'تحويل إلى عميل', 'Reply by email' => 'الرد بالبريد',
+    'Delete (spam)' => 'حذف (رسالة مزعجة)', 'Job title' => 'المسمى الوظيفي', 'Received' => 'تاريخ الاستلام',     'What they want to use it for' => 'ما يريدون استخدامه له', 'Shared link' => 'الرابط المباشر', 'Landing page' => 'الصفحة الرئيسية',
+    'Create client' => 'إنشاء العميل', 'Send by email' => 'إرسال بالبريد', 'Open the account →' => 'فتح الحساب ←',
+    'Know which ad or post each request came from' => 'اعرف من أي إعلان أو منشور جاء كل طلب', 'Business' => 'النشاط التجاري', 'From' => 'المصدر',
+    'In search results' => 'في نتائج البحث', 'When the link is shared' => 'عند مشاركة الرابط', 'Who is behind it' => 'الجهة المالكة',
+    'AI assistants' => 'مساعدو الذكاء الاصطناعي', 'Verification and analytics' => 'التحقق والتحليلات', 'Save SEO settings' => 'حفظ إعدادات SEO',
+    'Help Center questions' => 'أسئلة مركز المساعدة', 'Open the Help Center' => 'فتح مركز المساعدة', 'Restore the recommended wording' => 'استعادة الصياغة المقترحة',
+    'What search engines and AI assistants read' => 'ما تقرؤه محركات البحث ومساعدو الذكاء الاصطناعي', 'Site address' => 'عنوان الموقع',
+    'Preview' => 'معاينة', 'Keywords, in English and Arabic' => 'الكلمات المفتاحية بالعربية والإنجليزية',
+    'Share image' => 'صورة المشاركة', 'Company name' => 'اسم الشركة', 'Logo' => 'الشعار', 'Contact email' => 'بريد التواصل', 'Contact phone' => 'هاتف التواصل',
+    'Areas served' => 'المناطق المخدومة', 'Social profiles' => 'حسابات التواصل الاجتماعي', 'Test in Google' => 'اختبار في جوجل',
 ];

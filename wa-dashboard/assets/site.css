@@ -426,3 +426,34 @@ p { margin: 0; }
 .vlang-b:hover { color: var(--ink); }
 .vlang-b.on { background: var(--ink); color: #fff; }
 .vlang-b:focus-visible { outline: 2px solid var(--v); outline-offset: 2px; }
+
+/* ── Help Center and the request page (help-center.php, request.php) ───────── */
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.hc-top { padding: 72px 40px 56px; background: var(--paper); border-bottom: 1px solid var(--line); }
+.hc-top .wrap { max-width: 840px; }
+.hc-crumbs { font-family: var(--mono); font-size: 12px; letter-spacing: .08em; color: var(--faint); margin-bottom: 18px; }
+.hc-crumbs a { color: var(--v); text-decoration: none; }
+.hc-top h1 { font-size: 56px; line-height: 1.05; margin: 0 0 14px; }
+.hc-top p { font-size: 18px; color: var(--slate); max-width: 36em; margin: 0 0 28px; }
+.hc-search input { width: 100%; box-sizing: border-box; font: inherit; font-size: 16px; padding: 15px 18px; border-radius: 14px;
+                   border: 1px solid var(--line-2); background: var(--card); color: var(--text); }
+.hc-search input:focus { outline: 2px solid var(--v); outline-offset: 1px; border-color: transparent; }
+.hc-body { padding-top: 48px; }
+.qa summary .hc-qh { display: inline; font: inherit; letter-spacing: inherit; margin: 0; }
+.qa:target summary { color: var(--v); }
+.hc-link { margin-left: 8px; color: var(--faint); text-decoration: none; font-family: var(--mono); font-size: 13px; }
+.hc-link:hover { color: var(--v); }
+.hc-empty { max-width: 840px; margin: 0 auto; color: var(--slate); }
+.hc-empty a { color: var(--v); }
+.hc-cta { text-align: center; }
+.hc-cta .wrap { max-width: 640px; }
+.hc-cta .btn { margin-top: 8px; }
+.req-page h1 { font-size: 44px; line-height: 1.1; margin: 0 0 18px; color: #fff; }
+.req-page { min-height: calc(100vh - 220px); }
+.req-more { color: var(--on-dark-2); font-size: 14.5px; margin-top: 18px; }
+.req-more a { color: #fff; }
+@media (max-width: 700px) {
+  .hc-top { padding: 44px 22px 36px; }
+  .hc-top h1 { font-size: 38px; }
+  .req-page h1 { font-size: 32px; }
+}

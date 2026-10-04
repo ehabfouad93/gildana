@@ -51,6 +51,7 @@ $appName = brand_name();
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
 <?= pwa_head('./') ?>
 <title>Sign in — <?= e($appName) ?></title>
 <link rel="stylesheet" href="assets/dashboard.css?v=<?= @filemtime(__DIR__ . '/assets/dashboard.css') ?: '7' ?>">

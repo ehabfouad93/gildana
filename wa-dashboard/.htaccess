@@ -31,3 +31,14 @@ RedirectMatch 404 (^|/)uploads/materials/
 <IfModule mod_setenvif.c>
     SetEnvIf Authorization "(.+)" HTTP_AUTHORIZATION=$1
 </IfModule>
+
+# Being found (Admin → SEO): these are built from the settings, not files on disk.
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule ^robots\.txt$ robots.php [L]
+    RewriteRule ^sitemap\.xml$ sitemap.php [L]
+    RewriteRule ^llms\.txt$ llms.php [L]
+    RewriteRule ^llms-full\.txt$ llms.php?full=1 [L]
+    RewriteRule ^get-started$ request.php [L,QSA]
+    RewriteRule ^help-center$ help-center.php [L,QSA]
+</IfModule>

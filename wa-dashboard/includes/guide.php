@@ -252,9 +252,9 @@ function guide_all(): array
         'title' => 'Help content',
         'intro' => 'The FAQ your clients read, and the requests they send you.',
         'steps' => [
-            ['Edit the questions', 'They appear both in the in-app Help centre and on your public site — one set, so they cannot disagree.'],
+            ['Edit the questions', 'They appear in the in-app Help centre, on your public site and on the public Help Center page — one set, so they cannot disagree.'],
             ['Reorder or hide', 'Hiding removes a question from both places without deleting it.'],
-            ['Answer the requests', 'Support requests and access requests from the site both land here.'],
+            ['Answer the requests', 'Support requests land here. "Get started" requests from the site have their own page: Requests.'],
         ],
     ],
 

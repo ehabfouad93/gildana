@@ -76,9 +76,13 @@ function topbar_unread(array $user): int
 function nav_items(string $role): array
 {
     if ($role === 'admin') {
+        require_once __DIR__ . '/access_request.php';
+        $req = ['label' => 'Requests', 'url' => 'requests.php', 'icon' => 'inbox'];
+        if (($n = access_request_new_count()) > 0) $req['badge'] = $n;   // waiting for a first reply
         return [
             'overview'  => ['label' => 'Overview',  'url' => 'index.php',     'icon' => 'grid'],
             'clients'   => ['label' => 'Clients',   'url' => 'clients.php',   'icon' => 'users'],
+            'requests'  => $req,
             'inbox'     => ['label' => 'Inbox',      'url' => 'inbox.php',     'icon' => 'chat'],
             'campaigns' => ['label' => 'Campaigns', 'url' => 'campaigns.php', 'icon' => 'send'],
             'contacts'  => ['label' => 'Contacts',  'url' => 'contacts.php',  'icon' => 'book'],
@@ -88,6 +92,7 @@ function nav_items(string $role): array
             'plans'     => ['label' => 'Plans',      'url' => 'plans.php',     'icon' => 'chart'],
             'rates'     => ['label' => 'Rates',      'url' => 'rates.php',     'icon' => 'doc'],
             'help'      => ['label' => 'Help Content', 'url' => 'help_admin.php', 'icon' => 'book'],
+            'seo'       => ['label' => 'SEO',        'url' => 'seo.php',       'icon' => 'globe'],
             'settings'  => ['label' => 'Settings',  'url' => 'settings.php',  'icon' => 'gear'],
         ];
     }
@@ -244,6 +249,8 @@ function nav_icon(string $key): string
         'team'  => "<circle cx=\"5.5\" cy=\"6\" r=\"2\"/><circle cx=\"11\" cy=\"6\" r=\"2\"/><path d=\"M1.5 13c0-2 1.8-3.2 4-3.2s4 1.2 4 3.2M10 10c2 0 4.5 1 4.5 3\"/>",
         'bot'   => "<rect x=\"3\" y=\"5\" width=\"10\" height=\"7\" rx=\"2\"/><path d=\"M8 5V2.5M6 2.5h4\"/><circle cx=\"6\" cy=\"8.5\" r=\".8\"/><circle cx=\"10\" cy=\"8.5\" r=\".8\"/><path d=\"M1.5 8v2M14.5 8v2\"/>",
         'target'=> "<circle cx=\"8\" cy=\"8\" r=\"6\"/><circle cx=\"8\" cy=\"8\" r=\"3\"/><circle cx=\"8\" cy=\"8\" r=\".6\" fill=\"currentColor\"/>",
+        'inbox' => "<path d=\"M2 9.5l1.6-6a1 1 0 011-.8h6.8a1 1 0 011 .8l1.6 6v3a1 1 0 01-1 1H3a1 1 0 01-1-1v-3z\"/><path d=\"M2 9.5h3.5l1 1.5h3l1-1.5H14\"/>",
+        'globe' => "<circle cx=\"8\" cy=\"8\" r=\"6.2\"/><path d=\"M1.8 8h12.4M8 1.8c1.8 1.9 2.6 3.9 2.6 6.2S9.8 12.3 8 14.2C6.2 12.3 5.4 10.3 5.4 8S6.2 3.7 8 1.8z\"/>",
         'chat'  => "<path d=\"M2.5 3.5h11a1 1 0 011 1v6a1 1 0 01-1 1H6l-3 2.5V11.5H2.5a1 1 0 01-1-1v-6a1 1 0 011-1z\"/><path d=\"M5 6.5h6M5 9h4\"/>",
     ];
     return "<svg $s>" . ($icons[$key] ?? $icons['grid']) . "</svg>";
@@ -284,6 +291,7 @@ function layout_header(string $title, string $role, string $active, array $opts 
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
 <title><?= e($title) ?> — <?= e($appName) ?></title>
 <link rel="stylesheet" href="<?= $root ?>assets/dashboard.css?v=<?= @filemtime(__DIR__ . '/../assets/dashboard.css') ?: '7' ?>">
 <?php
@@ -439,6 +447,7 @@ $barH   = max(58, $logoH + 22);
         <?php else: ?>
         <a class="sb-link <?= $key === $active ? 'active' : '' ?>" href="<?= e($navBase . $item['url']) ?>">
           <?= nav_icon($item['icon']) ?> <span><?= e($item['label']) ?></span>
+          <?php if (!empty($item['badge'])): ?><span class="sb-count"><?= (int) $item['badge'] ?></span><?php endif; ?>
         </a>
         <?php endif; ?>
       <?php endforeach; ?>
