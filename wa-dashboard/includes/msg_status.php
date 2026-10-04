@@ -114,3 +114,53 @@ function qualifier_msg_counts(int $clientId, ?int $flowId = null): array
                                                      'unread' => (int) $r['unread'], 'failed' => (int) $r['failed']];
     return $out;
 }
+
+/* ───────────────────────── why a qualifier's outreach failed ───────────────────────── */
+
+/** The last failure recorded for a lead (run alias r): WhatsApp's code and wording. */
+function qualifier_fail_sql(string $r = 'r'): string
+{
+    return "(SELECT fm.error_code FROM flow_messages fm WHERE fm.run_id={$r}.id AND fm.status='failed' ORDER BY fm.id DESC LIMIT 1) AS fail_code,
+            (SELECT fm.error_title FROM flow_messages fm WHERE fm.run_id={$r}.id AND fm.status='failed' ORDER BY fm.id DESC LIMIT 1) AS fail_title";
+}
+
+/** One lead's failure, explained: [slug, label, action, hint, code, detail]. */
+function qualifier_fail_reason(array $run): array
+{
+    if (!function_exists('wa_error_explain')) require_once __DIR__ . '/whatsapp.php';
+    $ctx   = json_decode((string) ($run['context'] ?? ''), true) ?: [];
+    $code  = (string) ($run['fail_code'] ?? '') ?: (string) ($ctx['send_error_code'] ?? '');
+    $title = (string) ($run['fail_title'] ?? '') ?: (string) ($ctx['send_error'] ?? '');
+    if ($code === '' && $title === '') {
+        $x = ['action' => 'later', 'label' => 'Stopped before sending', 'hint' => 'The message never went out — usually no credits or no outreach template at the time. Resending is safe once that is fixed.'];
+    } elseif (stripos($title, 'credit') !== false) {
+        $x = ['action' => 'fix', 'label' => 'Out of credits', 'hint' => 'There were no credits left when this lead came in. Top up, then resend.'];
+    } elseif (stripos($title, 'template configured') !== false) {
+        $x = ['action' => 'fix', 'label' => 'No outreach template', 'hint' => 'The qualifier had no first message set. Choose one in Edit, or resend with another template.'];
+    } else {
+        $x = wa_error_explain($code, $title);
+    }
+    $slug = trim((string) preg_replace('~[^a-z0-9]+~', '-', strtolower($x['label'])), '-');
+    return [$slug, $x['label'], $x['action'], $x['hint'], $code, $title];
+}
+
+/**
+ * Every lead of a qualifier whose outreach failed, grouped by cause, biggest first.
+ * Each group: label, action (later | never | fix), hint, codes, sample, ids (all), resend (ids that can be resent).
+ */
+function qualifier_failures(int $flowId): array
+{
+    $rows = db_all("SELECT r.id, r.status, r.grade, r.context, " . qualifier_fail_sql('r') . "
+                      FROM flow_runs r WHERE r.flow_id=? AND " . qualifier_msg_filter('failed', 'r') . " ORDER BY r.id DESC", [$flowId]);
+    $g = [];
+    foreach ($rows as $r) {
+        [$slug, $label, $action, $hint, $code, $title] = qualifier_fail_reason($r);
+        $g[$slug] ??= ['slug' => $slug, 'label' => $label, 'action' => $action, 'hint' => $hint, 'codes' => [], 'sample' => $title, 'ids' => [], 'resend' => []];
+        $g[$slug]['ids'][] = (int) $r['id'];
+        if ($code !== '') $g[$slug]['codes'][$code] = true;
+        // A lead that already has an outcome (hot, not interested…) is left alone; one already queued is on its way.
+        if (in_array((string) $r['grade'], ['', 'no_answer'], true) && $r['status'] !== 'queued') $g[$slug]['resend'][] = (int) $r['id'];
+    }
+    usort($g, fn($a, $b) => count($b['ids']) <=> count($a['ids']));
+    return $g;
+}

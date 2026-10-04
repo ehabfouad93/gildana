@@ -160,8 +160,9 @@ foreach (($data['entry'] ?? []) as $entry) {
                 db_run("UPDATE flow_messages SET status='read' WHERE wa_message_id=? AND status IN ('sent','delivered')", [$wamid]);
             } elseif ($status === 'failed') {
                 $fe = $st['errors'][0] ?? [];
-                db_run("UPDATE flow_messages SET status='failed', error_title=? WHERE wa_message_id=? AND status='sent'",
-                    [substr((string) ($fe['title'] ?? ($fe['message'] ?? 'Failed')), 0, 255), $wamid]);
+                // The code too, so the Lead Qualifier can group failures by cause and say which are worth resending.
+                db_run("UPDATE flow_messages SET status='failed', error_title=?, error_code=? WHERE wa_message_id=? AND status='sent'",
+                    [substr((string) ($fe['title'] ?? ($fe['message'] ?? 'Failed')), 0, 255), isset($fe['code']) ? substr((string) $fe['code'], 0, 32) : null, $wamid]);
             }
 
             // Inbox: forward-only status for any outbound message (automation / manual / campaign).

@@ -1729,6 +1729,25 @@ function auto_mark_run_error(int $runId, string $err): void
 }
 
 /**
+ * The message a resend asked for instead of the qualifier's own: another approved template with
+ * its own field values, or (personal number) a written message. Null when it can't be used, in
+ * which case the qualifier's own message goes out.
+ */
+function auto_outreach_override(array $ov, int $clientId, int $stepId): ?array
+{
+    static $cache = [];
+    $text = trim((string) ($ov['text'] ?? ''));
+    if ($text !== '') return ['plain' => $text, 'media' => '', 'name' => 'Message', 'lang' => 'en', 'components' => [], 'body_text' => '', 'cfg' => [], 'stepId' => $stepId];
+    $tid = (int) ($ov['template_id'] ?? 0);
+    if ($tid <= 0) return null;
+    $tpl = $cache[$clientId . ':' . $tid] ??= db_row("SELECT id, wa_name, language, components, body_text FROM templates WHERE id=? AND client_id=?", [$tid, $clientId]) ?: null;
+    if (!$tpl) return null;
+    return ['name' => (string) $tpl['wa_name'], 'lang' => (string) $tpl['language'], 'template_id' => (int) $tpl['id'],
+            'components' => json_decode((string) $tpl['components'], true) ?: [], 'body_text' => (string) ($tpl['body_text'] ?? ''),
+            'cfg' => (array) ($ov['cfg'] ?? []), 'stepId' => $stepId];
+}
+
+/**
  * Send the outreach template for QUEUED qualifier runs in throttled parallel batches
  * (reuses wa_send_template_batch, like campaigns). Success → waiting_input (awaits the reply);
  * failure → blocked with the Meta error stored in context.send_error. Returns messages sent.
@@ -1817,6 +1836,9 @@ function automation_send_outreach(int $maxPerRun = 0, int $onlyFlowId = 0): int
                 }
             }
             $t = $tplCache[$fid];
+            // A resend can carry its own message (Lead Qualifier → Resend failed → another template).
+            $ov = (array) ((json_decode((string) $r['context'], true) ?: [])['outreach'] ?? []);
+            if ($ov) $t = auto_outreach_override($ov, $cid, $t ? $t['stepId'] : 0) ?? $t;
             if (!$t) { auto_mark_run_error((int) $r['id'], 'No outreach template configured.'); continue; }
 
             if (credits_adjust($cid, -1, 'automation', null) === null) {

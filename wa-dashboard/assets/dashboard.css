@@ -1656,3 +1656,9 @@ dialog { margin: auto; }
 @media (max-width: 560px) { .seo-share { flex-direction: column; } .seo-share img { width: 100%; } }
 .sb-link > .sb-count { margin-inline-start: auto; }
 .sb-link.active > .sb-count { background: rgba(255,255,255,.24); color: #fff; }
+
+/* ── Lead Qualifier: why messages failed ── */
+.fail-table td { vertical-align: top; }
+.fail-table tr.on td { background: var(--brand-tint); }
+.fail-bar { display: inline-block; width: 70px; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; vertical-align: middle; margin-inline-end: 8px; }
+.fail-bar > span { display: block; height: 100%; background: var(--danger); border-radius: 3px; }

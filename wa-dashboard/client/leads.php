@@ -92,12 +92,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'resen
     $run = db_row("SELECT * FROM flow_runs WHERE id=? AND flow_id=? AND client_id=?", [(int) ($_POST['run_id'] ?? 0), $fid, $cid]);
     if (!$run) { flash('Lead not found.', 'error'); redirect('leads.php?flow=' . $fid); }
     $ctx = json_decode((string) $run['context'], true) ?: [];
-    unset($ctx['send_error']);
-    db_run("UPDATE flow_runs SET status='queued', context=?, updated_at=NOW() WHERE id=?",
+    unset($ctx['send_error'], $ctx['send_error_code'], $ctx['outreach']);
+    db_run("UPDATE flow_runs SET status='queued', wait_until=NULL, context=?, updated_at=NOW() WHERE id=?",
         [json_encode($ctx, JSON_UNESCAPED_UNICODE), (int) $run['id']]);
     trigger_worker();
     flash('Re-queued — the outreach will be sent again shortly.');
     redirect('leads.php?flow=' . $fid);
+}
+
+/* ── Resend the leads whose outreach failed: all of one cause, or every one worth resending,
+      with the qualifier's own message or another template / message, now or in 24 hours. ── */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'resend_failed') {
+    verify_csrf();
+    require_once __DIR__ . '/../includes/msg_status.php';
+    $scope = (string) ($_POST['scope'] ?? 'retry');
+    $ids = [];
+    foreach (qualifier_failures($fid) as $g) {
+        if ($scope === 'all' || ($scope === 'retry' && $g['action'] !== 'never') || $scope === $g['slug']) $ids = array_merge($ids, $g['resend']);
+    }
+    $ov = null;
+    $use = (string) ($_POST['use'] ?? 'same');
+    if ($use === 'template') {
+        $tpl = db_row("SELECT id, components FROM templates WHERE id=? AND client_id=? AND status='APPROVED'", [(int) ($_POST['template_id'] ?? 0), $cid]);
+        if (!$tpl) { flash('Choose an approved template.', 'error'); redirect('leads.php?flow=' . $fid . '&msg=failed'); }
+        $cfg = ['vars' => []];
+        foreach ((array) ($_POST['var'] ?? []) as $i => $v) {
+            $v = trim((string) $v);
+            $cfg['vars'][(string) (int) $i] = $v === '{name}' ? ['source' => 'name', 'fallback' => trim((string) ($_POST['fallback'] ?? ''))] : ['source' => 'static', 'value' => $v];
+        }
+        if (($m = trim((string) ($_POST['header_media'] ?? ''))) !== '') $cfg['header_media'] = $m;
+        $ov = ['template_id' => (int) $tpl['id'], 'cfg' => $cfg];
+    } elseif ($use === 'text') {
+        $text = trim((string) ($_POST['text'] ?? ''));
+        if ($text === '' || !channel_is_personal($CLIENT)) { flash('Write the message to send.', 'error'); redirect('leads.php?flow=' . $fid . '&msg=failed'); }
+        $ov = ['text' => mb_substr($text, 0, 4000)];
+    }
+    $later = ($_POST['when'] ?? 'now') === 'later';
+    foreach ($ids as $id) {
+        $ctx = json_decode((string) db_val("SELECT context FROM flow_runs WHERE id=?", [$id]), true) ?: [];
+        unset($ctx['send_error'], $ctx['send_error_code'], $ctx['outreach']);
+        if ($ov) $ctx['outreach'] = $ov;
+        $ctx['resends'] = (int) ($ctx['resends'] ?? 0) + 1;
+        $ctx['resent_at'] = date('Y-m-d H:i:s');
+        db_run("UPDATE flow_runs SET status='queued', wait_until=?, context=?, updated_at=NOW() WHERE id=? AND flow_id=?",
+               [$later ? date('Y-m-d H:i:s', time() + 86400) : null, json_encode($ctx, JSON_UNESCAPED_UNICODE), $id, $fid]);
+    }
+    if ($ids && !$later) trigger_worker();
+    flash($ids ? count($ids) . ' lead' . (count($ids) === 1 ? '' : 's') . ' queued to resend ' . ($later ? 'in 24 hours' : 'now') . '. They leave the Failed list once delivered.'
+               : 'Nothing to resend in that group.', $ids ? 'success' : 'error');
+    redirect('leads.php?flow=' . $fid . '&msg=failed');
 }
 
 /* ── Manually mark a lead as "Not interested" (with a reason) ── */
@@ -116,11 +159,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'mark_
     redirect('leads.php?flow=' . $fid);
 }
 
-/* ── CSV export (leads + captured answers) ── */
+require_once __DIR__ . '/../includes/msg_status.php';
+$grade = (string) ($_GET['grade'] ?? '');
+$msg = (string) ($_GET['msg'] ?? '');
+if (!in_array($msg, ['sent', 'read', 'unread', 'failed'], true)) $msg = '';
+$where = "r.flow_id=?"; $params = [$fid];
+if (in_array($grade, ['hot','warm','cold','not_interested','no_answer'], true)) { $where .= " AND r.grade=?"; $params[] = $grade; }
+if ($msg !== '') $where .= " AND " . qualifier_msg_filter($msg, 'r');
+// One cause of failure, from the "Why messages failed" report.
+$failures = qualifier_failures($fid);
+$reason = (string) ($_GET['reason'] ?? '');
+$rg = $msg === 'failed' ? (array_values(array_filter($failures, fn($g) => $g['slug'] === $reason))[0] ?? null) : null;
+if (!$rg) $reason = '';
+else $where .= ' AND r.id IN (' . (implode(',', array_map('intval', $rg['ids'])) ?: '0') . ')';
+/* ── CSV export: the leads the page is showing (grade, message and failure-reason filters), with
+      what happened to each one's message and why it failed. ── */
 if (($_GET['export'] ?? '') === '1') {
     $rows = db_all(
-        "SELECT r.*, c.phone_e164, c.name FROM flow_runs r JOIN contacts c ON c.id=r.contact_id
-          WHERE r.flow_id=? ORDER BY r.id DESC", [$fid]
+        "SELECT r.*, c.phone_e164, c.name, " . qualifier_best_sql('r') . " AS msg_best, " . qualifier_fail_sql('r') . "
+           FROM flow_runs r JOIN contacts c ON c.id=r.contact_id WHERE $where ORDER BY r.id DESC", $params
     );
     // union of captured field keys (not_interested_reason gets its own column, below)
     $fieldKeys = [];
@@ -134,16 +191,20 @@ if (($_GET['export'] ?? '') === '1') {
     $fieldKeys = array_keys($fieldKeys);
 
     header('Content-Type: text/csv; charset=UTF-8');
-    header('Content-Disposition: attachment; filename="leads-' . $fid . '-' . date('Y-m-d') . '.csv"');
+    header('Content-Disposition: attachment; filename="leads-' . $fid . ($msg ? '-' . $msg : '') . ($grade ? '-' . $grade : '') . '-' . date('Y-m-d') . '.csv"');
     echo "\xEF\xBB\xBF";
-    echo implode(',', array_map('csv_cell', array_merge(['phone', 'name', 'status', 'score', 'grade', 'not_interested_reason', 'created'], $fieldKeys))) . "\n";
+    echo implode(',', array_map('csv_cell', array_merge(['phone', 'name', 'message', 'failure_reason', 'error_code', 'error_detail', 'status', 'score', 'grade', 'not_interested_reason', 'resends', 'created'], $fieldKeys))) . "\n";
     foreach ($rows as $r) {
         $ctx = json_decode((string) $r['context'], true) ?: [];
         $fields = (array) ($ctx['fields'] ?? []);
+        $b = (int) $r['msg_best'];
+        $fail = $b === 0 && ($r['fail_title'] !== null || ($r['status'] === 'blocked' && !$r['grade'])) ? qualifier_fail_reason($r) : null;
         $out = [
-            (string) $r['phone_e164'], (string) $r['name'], (string) $r['status'],
-            (string) (int) $r['score'], (string) ($r['grade'] ?? ''),
-            (string) (($fields['not_interested_reason'] ?? '') ?: ($ctx['send_error'] ?? '')), (string) $r['created_at'],
+            (string) $r['phone_e164'], (string) $r['name'],
+            [3 => 'read', 2 => 'delivered', 1 => 'sent'][$b] ?? ($fail ? 'failed' : 'not sent yet'),
+            $fail ? $fail[1] : '', $fail ? $fail[4] : '', $fail ? $fail[5] : '',
+            (string) $r['status'], (string) (int) $r['score'], (string) ($r['grade'] ?? ''),
+            (string) ($fields['not_interested_reason'] ?? ''), (string) (int) ($ctx['resends'] ?? 0), (string) $r['created_at'],
         ];
         foreach ($fieldKeys as $k) $out[] = (string) ($fields[$k] ?? '');
         echo implode(',', array_map('csv_cell', $out)) . "\n";
@@ -161,18 +222,11 @@ $counts = db_row(
        FROM flow_runs WHERE flow_id=?", [$fid]
 ) ?: [];
 
-require_once __DIR__ . '/../includes/msg_status.php';
 $mc = qualifier_msg_counts($cid, $fid)[$fid] ?? ['leads' => 0, 'sent' => 0, 'read' => 0, 'unread' => 0, 'failed' => 0];
-$grade = (string) ($_GET['grade'] ?? '');
-$msg = (string) ($_GET['msg'] ?? '');
-if (!in_array($msg, ['sent', 'read', 'unread', 'failed'], true)) $msg = '';
-$where = "r.flow_id=?"; $params = [$fid];
-if (in_array($grade, ['hot','warm','cold','not_interested','no_answer'], true)) { $where .= " AND r.grade=?"; $params[] = $grade; }
-if ($msg !== '') $where .= " AND " . qualifier_msg_filter($msg, 'r');
 $page = max(1, (int) ($_GET['page'] ?? 1)); $per = 50; $off = ($page - 1) * $per;
 $total = (int) db_val("SELECT COUNT(*) FROM flow_runs r WHERE $where", $params);
-$leads = db_all("SELECT r.*, c.phone_e164, c.name, " . qualifier_best_sql('r') . " AS msg_best, (" . qualifier_msg_filter('failed', 'r') . ") AS msg_failed FROM flow_runs r JOIN contacts c ON c.id=r.contact_id WHERE $where ORDER BY r.id DESC LIMIT $per OFFSET $off", $params);
-$q = fn(array $set) => 'leads.php?' . http_build_query(array_filter(['flow' => $fid, 'grade' => $grade, 'msg' => $msg] + $set, 'strlen'));
+$leads = db_all("SELECT r.*, c.phone_e164, c.name, " . qualifier_best_sql('r') . " AS msg_best, (" . qualifier_msg_filter('failed', 'r') . ") AS msg_failed, " . qualifier_fail_sql('r') . " FROM flow_runs r JOIN contacts c ON c.id=r.contact_id WHERE $where ORDER BY r.id DESC LIMIT $per OFFSET $off", $params);
+$q = fn(array $set) => 'leads.php?' . http_build_query(array_filter($set + ['flow' => $fid, 'grade' => $grade, 'msg' => $msg, 'reason' => $reason], 'strlen'));
 $pages = (int) max(1, ceil($total / $per));
 
 function lead_status_pill(string $s): string {
@@ -195,7 +249,8 @@ $actions = '<button class="btn btn-primary btn-sm" onclick="document.getElementB
          . '<input type="hidden" name="action" value="import_now">'
          . '<button class="btn btn-ghost btn-sm">&#8635; Import now</button></form>'
          . '<a class="btn btn-ghost btn-sm" href="qualifier_edit.php?id=' . $fid . '">Edit</a>'
-         . '<a class="btn btn-ghost btn-sm" href="leads.php?flow=' . $fid . '&export=1">Export CSV</a>';
+         . '<a class="btn btn-ghost btn-sm" href="' . e($q(['export' => '1', 'page' => ''])) . '" title="The leads shown below, with what happened to each message">Export CSV'
+         . ($msg || $grade ? ' (' . number_format($total) . ')' : '') . '</a>';
 client_header('Leads · ' . $flow['name'], 'qualifier', $CLIENT);
 page_head('Leads — ' . $flow['name'], $actions);
 ?>
@@ -212,22 +267,60 @@ page_head('Leads — ' . $flow['name'], $actions);
 <div class="stats-row">
   <?php foreach (['sent' => ['Sent', $pc($mc['sent'], $mc['leads']) . ' of leads', ''], 'read' => ['Read', $pc($mc['read'], $mc['sent']) . ' of sent', 'accent'],
                   'unread' => ['Unread', $pc($mc['unread'], $mc['sent']) . ' of sent', ''], 'failed' => ['Failed', $pc($mc['failed'], $mc['leads']) . ' of leads', 'danger']] as $k => [$l, $s, $cls]): ?>
-    <a class="stat-tile <?= $msg === $k ? 'on' : '' ?>" href="<?= e($q(['msg' => $msg === $k ? '' : $k, 'page' => ''])) ?>"><span class="lbl"><?= $l ?></span><span class="val <?= $cls ?>"><?= $mc[$k] ?></span><span class="sub"><?= $s ?></span></a>
+    <a class="stat-tile <?= $msg === $k ? 'on' : '' ?>" href="<?= e($q(['msg' => $msg === $k ? '' : $k, 'page' => '', 'reason' => ''])) ?>"><span class="lbl"><?= $l ?></span><span class="val <?= $cls ?>"><?= $mc[$k] ?></span><span class="sub"><?= $s ?></span></a>
   <?php endforeach; ?>
 </div>
+
+<?php if ($failures):
+  $nFail = array_sum(array_map(fn($g) => count($g['ids']), $failures));
+  $nRetry = array_sum(array_map(fn($g) => $g['action'] !== 'never' ? count($g['resend']) : 0, $failures));
+  $act = ['later' => ['blue', 'Worth resending'], 'fix' => ['gold', 'Fix first'], 'never' => ['red', "Won't get through"]]; ?>
+<div class="card" id="why-failed">
+  <div class="row-between" style="flex-wrap:wrap;gap:10px">
+    <div>
+      <h2 style="margin:0">Why messages failed</h2>
+      <p class="text-muted" style="font-size:12.5px;margin:4px 0 0"><?= $nFail ?> lead<?= $nFail === 1 ? '' : 's' ?> never received the first message, by cause. Hover a cause for what WhatsApp said.</p>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <a class="btn btn-ghost btn-sm" href="<?= e('leads.php?' . http_build_query(['flow' => $fid, 'msg' => 'failed', 'export' => '1'])) ?>">Export failed</a>
+      <button type="button" class="btn btn-primary btn-sm" onclick="openResend('retry')"<?= $nRetry ? '' : ' disabled' ?>>Resend failed (<?= $nRetry ?>)</button>
+    </div>
+  </div>
+  <div class="table-wrap" style="margin-top:12px">
+    <table class="data fail-table">
+      <thead><tr><th>Cause</th><th class="num">Leads</th><th class="num">Share</th><th>What to do</th><th></th></tr></thead>
+      <tbody>
+      <?php foreach ($failures as $g): [$cls, $lbl] = $act[$g['action']] ?? $act['later']; $n = count($g['ids']); ?>
+        <tr<?= $reason === $g['slug'] ? ' class="on"' : '' ?>>
+          <td title="<?= e($g['sample']) ?>"><strong><?= e($g['label']) ?></strong>
+            <?php if ($g['codes']): ?><div class="text-muted" style="font-size:11.5px">code <?= e(implode(', ', array_keys($g['codes']))) ?></div><?php endif; ?></td>
+          <td class="num"><?= $n ?></td>
+          <td class="num"><div class="fail-bar"><span style="width:<?= round($n / $nFail * 100) ?>%"></span></div><?= round($n / $nFail * 100) ?>%</td>
+          <td style="max-width:420px"><span class="pill <?= $cls ?>"><?= e($lbl) ?></span> <span class="text-muted" style="font-size:12px"><?= strip_tags($g['hint'], '<em><strong>') ?></span></td>
+          <td style="text-align:end;white-space:nowrap">
+            <a class="btn btn-ghost btn-sm" href="<?= e($q(['msg' => 'failed', 'reason' => $g['slug'], 'grade' => '', 'page' => ''])) ?>">Show</a>
+            <?php if ($g['resend']): ?><button type="button" class="btn btn-ghost btn-sm" onclick="openResend(<?= e(json_encode($g['slug'])) ?>)">Resend <?= count($g['resend']) ?></button><?php endif; ?>
+          </td>
+        </tr>
+      <?php endforeach; ?>
+      </tbody>
+    </table>
+  </div>
+</div>
+<?php endif; ?>
 
 <div class="card card-flush">
   <div style="padding:14px 18px" class="row-between">
     <div style="display:flex;gap:6px">
       <?php foreach (['' => 'All','hot' => 'Hot','warm' => 'Warm','cold' => 'Cold','not_interested' => 'Not interested','no_answer' => 'No answer'] as $v => $l): ?>
-        <a class="btn <?= $grade === $v ? 'btn-dark' : 'btn-ghost' ?> btn-sm" href="<?= e($q(['grade' => $v, 'page' => ''])) ?>"><?= $l ?></a>
+        <a class="btn <?= $grade === $v ? 'btn-dark' : 'btn-ghost' ?> btn-sm" href="<?= e($q(['grade' => $v, 'page' => '', 'reason' => ''])) ?>"><?= $l ?></a>
       <?php endforeach; ?>
       <span class="sep-v"></span>
       <?php foreach (['' => 'Any message', 'sent' => 'Sent', 'read' => 'Read', 'unread' => 'Unread', 'failed' => 'Failed'] as $v => $l): ?>
-        <a class="btn <?= $msg === $v ? 'btn-dark' : 'btn-ghost' ?> btn-sm" href="<?= e($q(['msg' => $v, 'page' => ''])) ?>"><?= $l ?></a>
+        <a class="btn <?= $msg === $v ? 'btn-dark' : 'btn-ghost' ?> btn-sm" href="<?= e($q(['msg' => $v, 'page' => '', 'reason' => ''])) ?>"><?= $l ?></a>
       <?php endforeach; ?>
     </div>
-    <span class="text-muted" style="font-size:12.5px"><?= number_format($total) ?> lead<?= $total === 1 ? '' : 's' ?></span>
+    <span class="text-muted" style="font-size:12.5px"><?php if ($rg): ?><a class="pill red" href="<?= e($q(['reason' => '', 'page' => ''])) ?>" title="Show every failed lead"><?= e($rg['label']) ?> ✕</a> <?php endif; ?><?= number_format($total) ?> lead<?= $total === 1 ? '' : 's' ?></span>
   </div>
   <div class="table-wrap">
     <table class="data">
@@ -238,7 +331,9 @@ page_head('Leads — ' . $flow['name'], $actions);
         $ctx    = json_decode((string) $r['context'], true) ?: [];
         $tr     = json_encode($ctx['transcript'] ?? [], JSON_UNESCAPED_UNICODE);
         $reason = (string) (($ctx['fields'] ?? [])['not_interested_reason'] ?? '');
-        if ($reason === '') $reason = (string) ($ctx['send_error'] ?? '');   // surface Meta send error for blocked leads
+        $resends = (int) ($ctx['resends'] ?? 0);
+        $fail   = (int) $r['msg_best'] === 0 && (int) $r['msg_failed'] ? qualifier_fail_reason($r) : null;
+        if ($reason === '' && $fail) $reason = $fail[1] . ($fail[4] !== '' ? ' (' . $fail[4] . ')' : '');   // why WhatsApp refused it
       ?>
         <tr>
           <td class="mono">+<?= e((string) $r['phone_e164']) ?></td>
@@ -247,7 +342,7 @@ page_head('Leads — ' . $flow['name'], $actions);
           <td><?= lead_status_pill((string) $r['status']) ?></td>
           <td><strong><?= (int) $r['score'] ?></strong></td>
           <td><?= grade_pill($r['grade']) ?></td>
-          <td class="text-muted" style="max-width:220px;font-size:12px"><?= $reason !== '' ? e($reason) : '<span class="text-muted">—</span>' ?></td>
+          <td class="text-muted" style="max-width:220px;font-size:12px"<?= $fail ? ' title="' . e($fail[5]) . '"' : '' ?>><?= $reason !== '' ? e($reason) : '<span class="text-muted">—</span>' ?><?= $resends ? '<div>Resent ×' . $resends . '</div>' : '' ?></td>
           <td class="text-muted"><?= e(date('d M, H:i', strtotime((string) $r['created_at']))) ?></td>
           <td style="text-align: end;white-space:nowrap">
             <button class="btn-link" onclick='editLead(this)' data-run="<?= (int) $r['id'] ?>" data-phone="<?= e((string) $r['phone_e164']) ?>" data-name="<?= e((string) $r['name']) ?>">Edit</button>
@@ -344,5 +439,77 @@ function viewChat(btn){
   document.getElementById('m-chat').classList.add('open');
 }
 </script>
+
+<?php if ($failures):
+  $tpls = db_all("SELECT id, wa_name, language, components, body_text FROM templates WHERE client_id=? AND status='APPROVED' ORDER BY wa_name", [$cid]);
+  $tplJs = array_map(function ($t) { $sp = wa_template_spec(json_decode((string) $t['components'], true) ?: []);
+      return ['id' => (int) $t['id'], 'name' => $t['wa_name'] . ' · ' . $t['language'], 'body' => (string) $t['body_text'], 'vars' => (int) $sp['body_vars'],
+              'media' => in_array(strtoupper((string) $sp['header']['format']), ['IMAGE', 'VIDEO', 'DOCUMENT'], true)]; }, $tpls);
+  $personal = channel_is_personal($CLIENT); ?>
+<dialog class="lead-dlg" id="resend-dlg" aria-labelledby="resend-title">
+  <form method="post">
+    <?= csrf_field() ?><input type="hidden" name="action" value="resend_failed">
+    <h2 id="resend-title">Resend failed messages</h2>
+    <div class="field"><span class="lbl">Which leads</span>
+      <select name="scope" id="rs-scope">
+        <option value="retry">Every failed lead worth resending (<?= $nRetry ?>)</option>
+        <option value="all">Every failed lead, whatever the cause (<?= array_sum(array_map(fn($g) => count($g['resend']), $failures)) ?>)</option>
+        <?php foreach ($failures as $g): if (!$g['resend']) continue; ?><option value="<?= e($g['slug']) ?>">Only: <?= e($g['label']) ?> (<?= count($g['resend']) ?>)</option><?php endforeach; ?>
+      </select>
+      <div class="hint">Leads that already have a grade are left alone. Each resend uses one credit.</div></div>
+    <div class="field"><span class="lbl">Send</span>
+      <label class="mod-opt"><input type="radio" name="use" value="same" checked> The qualifier's own first message</label>
+      <?php if ($tplJs): ?><label class="mod-opt"><input type="radio" name="use" value="template"> Another approved template</label><?php endif; ?>
+      <?php if ($personal): ?><label class="mod-opt"><input type="radio" name="use" value="text"> A message I write now</label><?php endif; ?>
+    </div>
+    <div id="rs-tpl" hidden>
+      <div class="field"><span class="lbl">Template</span><select name="template_id" id="rs-tid"><?php foreach ($tplJs as $t): ?><option value="<?= $t['id'] ?>"><?= e($t['name']) ?></option><?php endforeach; ?></select>
+        <div class="hint" id="rs-body" style="white-space:pre-wrap"></div></div>
+      <div id="rs-vars"></div>
+      <div class="field" id="rs-media" hidden><span class="lbl">Header image / video / document link</span><input type="text" name="header_media" class="ltr" placeholder="https://…"></div>
+    </div>
+    <div class="field" id="rs-text" hidden><span class="lbl">Message</span><textarea name="text" rows="4" placeholder="Hi {{name}}, …"></textarea>
+      <div class="hint">{{name}} becomes the lead's name.</div></div>
+    <div class="field"><span class="lbl">When</span>
+      <label class="mod-opt"><input type="radio" name="when" value="now" checked> Now</label>
+      <label class="mod-opt"><input type="radio" name="when" value="later"> In 24 hours <span class="text-muted">— best for “Capped by WhatsApp”, which lifts after a day</span></label>
+    </div>
+    <div class="dlg-btns">
+      <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">Cancel</button>
+      <button type="submit" class="btn btn-primary">Queue the resend</button>
+    </div>
+  </form>
+</dialog>
+<script>
+const RS_TPLS = <?= json_encode($tplJs, JSON_UNESCAPED_UNICODE) ?>;
+function openResend(scope) {
+  const d = document.getElementById('resend-dlg'); document.getElementById('rs-scope').value = scope; d.showModal();
+}
+(function () {
+  const d = document.getElementById('resend-dlg'); if (!d) return;
+  const tid = document.getElementById('rs-tid');
+  function drawVars() {
+    const t = RS_TPLS.find(x => String(x.id) === (tid ? tid.value : '')); const box = document.getElementById('rs-vars'); box.innerHTML = '';
+    if (!t) return;
+    document.getElementById('rs-body').textContent = t.body;
+    document.getElementById('rs-media').hidden = !t.media;
+    for (let i = 1; i <= t.vars; i++) {
+      const f = document.createElement('div'); f.className = 'field';
+      f.innerHTML = '<span class="lbl">{{' + i + '}}</span><input type="text" name="var[' + i + ']" value="' + (i === 1 ? '{name}' : '') + '" placeholder="Text, or {name} for the lead\'s name">';
+      box.appendChild(f);
+    }
+    if (t.vars) { const fb = document.createElement('div'); fb.className = 'field';
+      fb.innerHTML = '<span class="lbl">If a lead has no name, use</span><input type="text" name="fallback" placeholder="e.g. there">'; box.appendChild(fb); }
+  }
+  function sync() {
+    const use = d.querySelector('input[name=use]:checked').value;
+    document.getElementById('rs-tpl').hidden = use !== 'template'; document.getElementById('rs-text').hidden = use !== 'text';
+    if (use === 'template') drawVars();
+  }
+  d.querySelectorAll('input[name=use]').forEach(r => r.addEventListener('change', sync));
+  if (tid) tid.addEventListener('change', drawVars);
+})();
+</script>
+<?php endif; ?>
 
 <?php layout_footer(); ?>
