@@ -13,7 +13,7 @@ declare(strict_types=1);
 /** Every filter the list understands, with what an empty one looks like. */
 function crm_list_filter_keys(): array
 {
-    return ['q', 'stage', 'sub', 'state', 'owner', 'team', 'source', 'platform', 'campaign', 'project', 'unit', 'dtype', 'qual',
+    return ['q', 'stage', 'sub', 'state', 'owner', 'team', 'source', 'via', 'platform', 'campaign', 'adset', 'aseq', 'ad', 'project', 'unit', 'dtype', 'qual',
             'heat', 'status', 'due', 'added', 'from', 'to', 'idle', 'noans', 'mfrom', 'mto', 'mcamp', 'mad', 'ceq', 'sort', 'dir'];
 }
 
@@ -25,6 +25,8 @@ function crm_list_filters(array $get): array
         $v = $get[$k] ?? '';
         $f[$k] = is_array($v) ? '' : trim((string) $v);
     }
+    // Someone who may not see where leads come from may not sort them by it either.
+    if (function_exists('crm_origin_visible') && !crm_origin_visible()) foreach (['via', 'campaign', 'adset', 'aseq', 'ad', 'ceq', 'mcamp', 'mad'] as $k) $f[$k] = '';
     foreach ($get as $k => $v) {
         if (is_string($k) && str_starts_with($k, 'cf_') && !is_array($v) && trim((string) $v) !== '') $f[$k] = trim((string) $v);
     }
@@ -83,6 +85,20 @@ function crm_list_where(int $clientId, array $f): array
     if ($g('ceq') !== '' && $has('campaign')) {
         if ($g('ceq') === '__none') $w .= " AND (c.campaign IS NULL OR c.campaign = '')";
         else { $w .= " AND c.campaign = ?"; $p[] = $g('ceq'); }
+    }
+    // Ad set: part of the name, or exactly (reports' drill-downs). Ad: part of the name.
+    if ($g('adset') !== '' && $has('adset')) {
+        if ($g('adset') === '__none') $w .= " AND (c.adset IS NULL OR c.adset = '')";
+        else { $w .= " AND c.adset LIKE ?"; $p[] = '%' . $g('adset') . '%'; }
+    }
+    if ($g('aseq') !== '' && $has('adset')) {
+        if ($g('aseq') === '__none') $w .= " AND (c.adset IS NULL OR c.adset = '')";
+        else { $w .= " AND c.adset = ?"; $p[] = $g('aseq'); }
+    }
+    if ($g('ad') !== '' && $has('ad_name')) { $w .= " AND c.ad_name LIKE ?"; $p[] = '%' . $g('ad') . '%'; }
+    // Straight from Meta (Lead Ads form or click-to-WhatsApp ad), or by any other route.
+    if (in_array($g('via'), ['meta', 'other'], true)) {
+        $w .= " AND " . ($g('via') === 'other' ? 'NOT ' : '') . "(c.source IN ('" . implode("','", crm_meta_direct_sources()) . "'))";
     }
     if ($g('mcamp') !== '' && $has('meta_campaign_id')) { $w .= " AND c.meta_campaign_id = ?"; $p[] = $g('mcamp'); }
     if ($g('mad') !== '' && $has('meta_ad_id'))         { $w .= " AND c.meta_ad_id = ?"; $p[] = $g('mad'); }
@@ -181,12 +197,16 @@ function crm_list_columns(int $clientId): array
         'source'    => ['Source',          'c.source',                    false],
         'platform'  => ['Platform',        'c.platform',                  false],
         'campaign'  => ['Campaign',        'c.campaign',                  false],
+        'adset'     => ['Ad set',          'c.adset',                     false],
+        'ad'        => ['Ad',              'c.ad_name',                   false],
+        'via'       => ['From Meta',       '',                            false],
         'dtype'     => ['Fresh / cold',    'c.data_type',                 false],
         'qual'      => ['Qualified',       'c.qualification',             false],
         'last'      => ['Last activity',   'last_activity',               true],
         'added'     => ['Added',           'added_at',                    false],
     ];
     foreach (crm_fields($clientId) as $cf) $cols['cf_' . $cf['fkey']] = [$cf['label'], '', false];
+    if (function_exists('crm_origin_visible') && !crm_origin_visible()) unset($cols['campaign'], $cols['adset'], $cols['ad'], $cols['via']);
     return $cols;
 }
 
@@ -339,7 +359,7 @@ function crm_list_export_table(int $clientId, array $rows, bool $withPhone = tru
     $head = ['Code', 'Name'];
     if ($withPhone) $head[] = 'Phone';
     $head = array_merge($head, ['Email', 'Stage', 'Sub-status', 'Owner', 'Team', 'Project', 'Unit type', 'Budget', 'Deal value',
-             'Score', 'Next follow-up', 'Source', 'Platform', 'Campaign', 'Ad set', 'Ad', 'Fresh / cold', 'Qualified',
+             'Score', 'Next follow-up', 'Source', 'From Meta directly', 'Platform', 'Campaign', 'Ad set', 'Ad', 'Fresh / cold', 'Qualified',
              'Calls', 'Answered', 'No answer', 'Visits', 'Times moved', 'Lost reason', 'Added', 'Last activity']);
     foreach ($fields as $cf) $head[] = $cf['label'];
     $out = [];
@@ -352,7 +372,7 @@ function crm_list_export_table(int $clientId, array $rows, bool $withPhone = tru
             (string) ($teams[$userTeam[(int) ($r['owner_user_id'] ?? 0)] ?? 0] ?? ''),
             (string) ($pn[(int) ($r['project_id'] ?? 0)] ?? ''), (string) ($r['unit_type'] ?? ''), (string) ($r['budget'] ?? ''),
             $r['deal_value'] !== null ? (float) $r['deal_value'] : '', $r['score'] !== null ? (int) $r['score'] : '',
-            (string) ($r['next_followup_at'] ?? ''), crm_source_label($r['source']), !empty($r['platform']) ? crm_platform_label($r['platform']) : '',
+            (string) ($r['next_followup_at'] ?? ''), crm_source_label($r['source']), crm_is_meta_direct($r['source'] ?? null) ? 'Yes' : 'No', !empty($r['platform']) ? crm_platform_label($r['platform']) : '',
             (string) ($r['campaign'] ?? ''), (string) ($r['adset'] ?? ''), (string) ($r['ad_name'] ?? ''),
             crm_data_types()[(string) ($r['data_type'] ?? '')] ?? '', crm_qualifications()[(string) ($r['qualification'] ?? '')] ?? '',
             $r['n_calls'], $r['n_answered'], $r['n_noanswer'], $r['n_visits'], $r['n_moved'], (string) ($r['lost_reason'] ?? ''),
@@ -360,6 +380,13 @@ function crm_list_export_table(int $clientId, array $rows, bool $withPhone = tru
         ]);
         foreach ($fields as $cf) $line[] = crm_custom_show($cf, $custom[$cf['fkey']] ?? '');
         $out[] = $line;
+    }
+    // Where leads come from stays out of the file for someone who may not see it.
+    if (function_exists('crm_origin_visible') && !crm_origin_visible()) {
+        $drop = array_keys(array_intersect($head, ['From Meta directly', 'Campaign', 'Ad set', 'Ad']));
+        $head = array_values(array_diff_key($head, array_flip($drop)));
+        foreach ($out as &$l) $l = array_values(array_diff_key($l, array_flip($drop)));
+        unset($l);
     }
     return [$head, $out];
 }

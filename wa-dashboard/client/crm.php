@@ -360,6 +360,7 @@ if ($view === 'board') {
             'project' => !empty($l['project_id']), 'unit' => !empty($l['unit_type']), 'budget' => !empty($l['budget']),
             'value' => $l['deal_value'] !== null, 'followup' => !empty($l['next_followup_at']), 'rotations' => $l['n_moved'] > 0,
             'source' => !empty($l['source']), 'platform' => !empty($l['platform']), 'campaign' => !empty($l['campaign']),
+            'adset' => !empty($l['adset']), 'ad' => !empty($l['ad_name']), 'via' => crm_is_meta_direct($l['source'] ?? null),
             'dtype' => !empty($l['data_type']), 'qual' => !empty($l['qualification']),
             default => str_starts_with($k, 'cf_') ? (crm_custom_get($l)[substr($k, 3)] ?? '') !== '' : true,
         };
@@ -420,6 +421,9 @@ $chip = function (string $k, string $v) use ($stageMap, $people, $pnames, $teamN
         $k === 'source'   => 'Source: ' . crm_source_label($v),
         $k === 'platform' => 'Platform: ' . crm_platform_label($v),
         $k === 'campaign' => $v === '__none' ? 'No campaign' : 'Campaign: ' . $v,
+        $k === 'adset', $k === 'aseq' => $v === '__none' ? 'No ad set' : 'Ad set: ' . $v,
+        $k === 'ad'       => 'Ad: ' . $v,
+        $k === 'via'      => $v === 'meta' ? 'Direct from Meta' : 'Not from Meta directly',
         $k === 'project'  => $v === 'none' ? 'No project' : 'Project: ' . ($pnames[(int) $v] ?? '?'),
         $k === 'unit'     => 'Unit: ' . $v,
         $k === 'dtype'    => crm_data_types()[$v] ?? $v,
@@ -498,7 +502,13 @@ foreach ($views as $v_) { parse_str((string) $v_['params'], $vq); if ($vq == $ac
         <?php foreach ($sources as $src): ?><option value="<?= e($src) ?>" <?= $f['source'] === $src ? 'selected' : '' ?>><?= e(crm_source_label($src)) ?></option><?php endforeach; ?></select></label>
       <label>Platform<select name="platform"><option value="">Any platform</option>
         <?php foreach (crm_platforms() as $k => $l): ?><option value="<?= $k ?>" <?= $f['platform'] === $k ? 'selected' : '' ?>><?= e($l) ?></option><?php endforeach; ?></select></label>
+      <?php if (crm_origin_visible()): ?>
+      <label>Came<select name="via"><option value="">Any way</option><option value="meta" <?= $f['via'] === 'meta' ? 'selected' : '' ?>>Direct from Meta (Lead Ads, click-to-WhatsApp)</option>
+        <option value="other" <?= $f['via'] === 'other' ? 'selected' : '' ?>>Not from Meta directly (sheet, import, manual…)</option></select></label>
       <label>Campaign<input name="campaign" value="<?= e($f['campaign']) ?>" placeholder="Part of the name" list="crm-campaigns"></label>
+      <label>Ad set<input name="adset" value="<?= e($f['adset']) ?>" placeholder="Part of the name" list="crm-adsets"></label>
+      <label>Ad<input name="ad" value="<?= e($f['ad']) ?>" placeholder="Part of the name"></label>
+      <?php endif; ?>
       <?php if ($projects): ?>
       <label>Project<select name="project"><option value="">Any project</option><option value="none" <?= $f['project'] === 'none' ? 'selected' : '' ?>>No project</option>
         <?php foreach ($projects as $pj): ?><option value="<?= (int) $pj['id'] ?>" <?= $f['project'] === (string) $pj['id'] ? 'selected' : '' ?>><?= e($pj['name']) ?></option><?php endforeach; ?></select></label>
@@ -535,6 +545,7 @@ foreach ($views as $v_) { parse_str((string) $v_['params'], $vq); if ($vq == $ac
   </div>
 </form>
 <datalist id="crm-campaigns"><?php foreach (db_has_column('contacts', 'campaign') ? array_column(db_all("SELECT DISTINCT campaign FROM contacts WHERE client_id=? AND campaign IS NOT NULL AND campaign<>'' AND stage_id IS NOT NULL ORDER BY campaign LIMIT 200", [$cid]), 'campaign') : [] as $cn): ?><option value="<?= e($cn) ?>"><?php endforeach; ?></datalist>
+<datalist id="crm-adsets"><?php foreach (db_has_column('contacts', 'adset') ? array_column(db_all("SELECT DISTINCT adset FROM contacts WHERE client_id=? AND adset IS NOT NULL AND adset<>'' AND stage_id IS NOT NULL ORDER BY adset LIMIT 200", [$cid]), 'adset') : [] as $an): ?><option value="<?= e($an) ?>"><?php endforeach; ?></datalist>
 
 <?php if ($active): ?>
 <div class="crm-chips" aria-label="Filters in use">
@@ -664,6 +675,9 @@ foreach ($views as $v_) { parse_str((string) $v_['params'], $vq); if ($vq == $ac
               'dtype'    => $sel('dtype', crm_data_types(), $f['dtype']),
               'qual'     => $sel('qual', ['none' => 'Not decided'] + crm_qualifications(), $f['qual']),
               'campaign' => '<input data-f="campaign" value="' . e($f['campaign']) . '" placeholder="Filter…" list="crm-campaigns" aria-label="Filter campaign">',
+              'adset'    => '<input data-f="adset" value="' . e($f['adset']) . '" placeholder="Filter…" list="crm-adsets" aria-label="Filter ad set">',
+              'ad'       => '<input data-f="ad" value="' . e($f['ad']) . '" placeholder="Filter…" aria-label="Filter ad">',
+              'via'      => $sel('via', ['meta' => 'Direct from Meta', 'other' => 'Other routes'], $f['via']),
               'lead'     => '',
               default    => str_starts_with($k, 'cf_') ? (function () use ($k, $cfields, $f, $sel) {
                               $cf = array_values(array_filter($cfields, fn($c) => 'cf_' . $c['fkey'] === $k))[0] ?? null;
@@ -704,9 +718,12 @@ foreach ($views as $v_) { parse_str((string) $v_['params'], $vq); if ($vq == $ac
               <?php break; case 'effort': ?>
                 <span class="crm-effort" title="Calls · answered · no answer · visits"><span title="Calls">📞 <?= $l['n_calls'] ?></span><span class="ok" title="Answered">✓ <?= $l['n_answered'] ?></span><span class="bad" title="No answer">✕ <?= $l['n_noanswer'] ?></span><span title="Site visits">⌂ <?= $l['n_visits'] ?></span></span>
               <?php break; case 'rotations': ?><?= $l['n_moved'] ?: '' ?>
-              <?php break; case 'source': ?><span class="text-muted"><?= e(crm_source_label($l['source'])) ?></span>
+              <?php break; case 'source': ?><span class="text-muted"><?= e(crm_source_label($l['source'])) ?></span><?= crm_origin_visible() && crm_is_meta_direct($l['source'] ?? null) && !in_array('via', $cols, true) ? ' <span class="pill blue" title="Campaign, ad set and ad as Meta reported them">Meta direct</span>' : '' ?>
               <?php break; case 'platform': ?><?= !empty($l['platform']) ? e(crm_platform_label($l['platform'])) : '' ?>
-              <?php break; case 'campaign': ?><?= e((string) ($l['campaign'] ?? '')) ?>
+              <?php break; case 'campaign': ?><?= e((string) ($l['campaign'] ?? '')) ?><?= !empty($l['adset']) && !in_array('adset', $cols, true) ? '<span class="crm-sub-line">' . e((string) $l['adset']) . '</span>' : '' ?>
+              <?php break; case 'adset': ?><?= e((string) ($l['adset'] ?? '')) ?>
+              <?php break; case 'ad': ?><?= e((string) ($l['ad_name'] ?? '')) ?>
+              <?php break; case 'via': ?><?= crm_is_meta_direct($l['source'] ?? null) ? '<span class="pill blue" title="' . e(crm_arrival_label($l)) . '">Meta direct</span>' : '<span class="text-muted">' . e(crm_source_label($l['source'])) . '</span>' ?>
               <?php break; case 'dtype': ?><?= !empty($l['data_type']) ? '<span class="pill ' . ($l['data_type'] === 'fresh' ? 'green' : 'gray') . '">' . e(crm_data_types()[$l['data_type']] ?? '') . '</span>' : '' ?>
               <?php break; case 'qual': ?><?= !empty($l['qualification']) ? e(crm_qualifications()[$l['qualification']] ?? '') : '' ?>
               <?php break; case 'last': ?><span class="text-muted"><?= e(crm_ago((string) $l['last_activity'])) ?></span>

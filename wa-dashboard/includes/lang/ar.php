@@ -262,4 +262,18 @@ return [
     'Template for alerts' => 'قالب التنبيهات',
     'Save alerts' => 'حفظ التنبيهات',
     'custom' => 'مخصص',
+    // Lead origin: campaign, ad set, Meta direct
+    'Ad set' => 'المجموعة الإعلانية',
+    'From Meta' => 'من ميتا',
+    'Meta direct' => 'ميتا مباشر',
+    'Direct from Meta' => 'مباشر من ميتا',
+    'Direct from Meta — Lead Ads form' => 'مباشر من ميتا — نموذج إعلانات العملاء',
+    'Direct from Meta — click-to-WhatsApp ad' => 'مباشر من ميتا — إعلان النقر إلى واتساب',
+    'Other routes' => 'طرق أخرى',
+    'Leads by campaign and ad set' => 'العملاء حسب الحملة والمجموعة الإعلانية',
+    'No ad set' => 'بدون مجموعة إعلانية',
+    'See where leads come from: campaign, ad set, ad, direct from Meta' => 'رؤية مصدر العملاء: الحملة، المجموعة الإعلانية، الإعلان، مباشر من ميتا',
+    'From Meta directly' => 'مباشر من ميتا',
+    'Any way' => 'أي طريقة',
+    'Not from Meta directly' => 'ليس مباشرة من ميتا',
 ];

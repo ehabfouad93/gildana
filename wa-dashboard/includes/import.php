@@ -30,7 +30,10 @@ function import_fields(?int $clientId = null): array
         'project'  => ['label' => 'Project',          'guess' => ['project', 'compound', 'development', 'المشروع', 'مشروع', 'الكمبوند']],
         'unit_type'=> ['label' => 'Unit type',        'guess' => ['unit type', 'unit_type', 'property type', 'نوع الوحدة', 'الوحدة']],
         'substatus'=> ['label' => 'Sub-status',       'guess' => ['sub status', 'substatus', 'sub-status', 'الحالة الفرعية']],
-        'campaign' => ['label' => 'Campaign',         'guess' => ['campaign', 'الحملة', 'حملة']],
+        'campaign' => ['label' => 'Campaign',         'guess' => ['campaign_name', 'campaign name', 'campaign', 'الحملة', 'حملة']],
+        'adset'    => ['label' => 'Ad set',           'guess' => ['adset_name', 'ad set name', 'adset', 'ad set', 'ad_set', 'مجموعة الإعلانات', 'المجموعة الإعلانية']],
+        'ad'       => ['label' => 'Ad',               'guess' => ['ad_name', 'ad name', 'الإعلان']],
+        'platform' => ['label' => 'Platform (facebook / instagram…)', 'guess' => ['platform', 'المنصة']],
         'qualification' => ['label' => 'Qualified (yes/no)', 'guess' => ['qualified', 'qualification', 'مؤهل']],
     ];
     // The account's own fields can be filled from a column too.
@@ -172,17 +175,38 @@ function import_read_xlsx(string $path): ?array
 function import_guess_mapping(array $header, ?int $clientId = null): array
 {
     $map = [];
+    $hs = array_map(fn($h) => mb_strtolower(trim((string) $h)), $header);
+    // Exact header names first, so "campaign_name" wins over "campaign_id" in a Meta export.
     foreach (import_fields($clientId) as $field => $f) {
-        foreach ($header as $i => $h) {
-            $h = mb_strtolower(trim((string) $h));
+        foreach ($f['guess'] as $g) {
+            foreach ($hs as $i => $h) if ($h === $g && !in_array($i, $map, true)) { $map[$field] = $i; continue 3; }
+        }
+    }
+    foreach (import_fields($clientId) as $field => $f) {
+        if (isset($map[$field])) continue;
+        foreach ($hs as $i => $h) {
             if ($h === '' || in_array($i, $map, true)) continue;
+            // An id column ("campaign_id", "ad id") is never the name a person reads.
+            if ($field !== 'phone' && preg_match('/(^|[ _])id$/', $h)) continue;
             foreach ($f['guess'] as $g) {
-                if ($h === $g || str_contains($h, $g)) { $map[$field] = $i; continue 3; }
+                if (str_contains($h, $g)) { $map[$field] = $i; continue 3; }
             }
         }
     }
     if (!isset($map['phone'])) $map['phone'] = 0;         // same fallback the old importer used
     return $map;
+}
+
+/** Campaign, ad set, ad and platform from a row, for crm_set_origin(). Meta's short platform codes (fb, ig) are understood. */
+function import_origin(callable $col, array $r): array
+{
+    $pl = mb_strtolower(trim((string) $col($r, 'platform')));
+    $platform = $pl === '' ? '' : (function_exists('crm_platform_from_meta') ? (crm_platform_from_meta($pl) ?? '') : '');
+    if ($platform === '' && $pl !== '' && function_exists('crm_platforms')) {
+        foreach (crm_platforms() as $k => $l) if ($pl === $k || $pl === mb_strtolower($l)) $platform = $k;
+    }
+    return array_filter(['campaign' => (string) $col($r, 'campaign'), 'adset' => (string) $col($r, 'adset'),
+                         'ad_name' => (string) $col($r, 'ad'), 'platform' => $platform], 'strlen');
 }
 
 /** An Excel date serial (45560) or a written date, as a DATETIME — or null. */
@@ -277,6 +301,9 @@ function import_contacts(array $client, array $header, array $rows, array $map, 
             }
             if (($uv = $col($r, 'unit_type')) !== '') db_run("UPDATE contacts SET unit_type=? WHERE id=?", [mb_substr($uv, 0, 80), $id]);
             if (($cv = $col($r, 'campaign')) !== '' && db_has_column('contacts', 'campaign')) db_run("UPDATE contacts SET campaign=? WHERE id=?", [mb_substr($cv, 0, 160), $id]);
+            if (db_has_column('contacts', 'adset')) foreach (['adset' => 'adset', 'ad' => 'ad_name'] as $fk => $colName) {
+                if (($av = $col($r, $fk)) !== '') db_run("UPDATE contacts SET $colName=? WHERE id=?", [mb_substr($av, 0, 160), $id]);
+            }
             if (($sv2 = $col($r, 'substatus')) !== '' && !crm_set_substatus($client, $id, $sv2, $by)) $problem($line, "\"{$sv2}\" is not a sub-status of the lead's stage.");
             if (($qv = mb_strtolower($col($r, 'qualification'))) !== '') {
                 $ql = in_array($qv, ['yes', 'y', '1', 'true', 'qualified', 'نعم', 'مؤهل'], true) ? 'qualified'
@@ -384,7 +411,7 @@ function import_contacts(array $client, array $header, array $rows, array $map, 
         if ($isNew && isset($opts['data_type']) && isset(crm_data_types()[$opts['data_type']])) {
             db_run("UPDATE contacts SET data_type=? WHERE id=?", [$opts['data_type'], $contactId]);
         }
-        if (($cv = $col($r, 'campaign')) !== '') crm_set_origin($contactId, ['campaign' => $cv]);
+        crm_set_origin($contactId, import_origin($col, $r));
         if (($sv2 = $col($r, 'substatus')) !== '' && !crm_set_substatus($client, $contactId, $sv2, $by)) {
             $problem($line, "\"{$sv2}\" is not a sub-status of the lead's stage — left empty.");
         }

@@ -31,7 +31,15 @@ function perm_crm_actions(): array
         'export' => 'Export leads to Excel',
         'phones' => 'See phone numbers',
         'delete' => 'Delete leads (without asking a manager)',
+        'origin' => 'See where leads come from: campaign, ad set, ad, direct from Meta',
     ];
+}
+
+/** May the signed-in person see a lead's campaign, ad set, ad and whether it came straight from Meta? Admins always; others when ticked. */
+function crm_origin_visible(): bool
+{
+    static $cache = null;
+    return $cache ??= function_exists('perm_context') && perm_context()[0] ? can_crm_action('origin') : true;
 }
 
 function can_crm_action(string $key): bool

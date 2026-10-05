@@ -58,7 +58,8 @@ function crm_int_lead(int $contactId): ?array
         'stage' => $c['stage_name'], 'stage_id' => $c['stage_id'] !== null ? (int) $c['stage_id'] : null, 'stage_type' => $c['stage_kind'],
         'substatus' => $c['substatus'] ?? null, 'lost_reason' => $c['lost_reason'] ?? null,
         'owner' => $c['owner_user_id'] !== null ? ['id' => (int) $c['owner_user_id'], 'name' => $c['owner_name'], 'email' => $c['owner_email']] : null,
-        'source' => $c['source'], 'platform' => $c['platform'] ?? null, 'campaign' => $c['campaign'] ?? null, 'ad_name' => $c['ad_name'] ?? null,
+        'source' => $c['source'], 'platform' => $c['platform'] ?? null, 'campaign' => $c['campaign'] ?? null, 'adset' => $c['adset'] ?? null, 'ad_name' => $c['ad_name'] ?? null,
+        'from_meta_directly' => function_exists('crm_is_meta_direct') ? crm_is_meta_direct($c['source'] ?? null) : null,
         'project' => $c['project_name'], 'unit_type' => $c['unit_type'] ?? null, 'budget' => $c['budget'] ?? null,
         'deal_value' => $c['deal_value'] !== null ? (float) $c['deal_value'] : null, 'qualification' => $c['qualification'] ?? null,
         'data_type' => $c['data_type'] ?? null, 'score' => isset($c['score']) && $c['score'] !== null ? (int) $c['score'] : null,
@@ -205,7 +206,7 @@ function crm_int_fields(): array
     return ['external_id' => 'Their id for the lead', 'name' => 'Full name', 'first_name' => 'First name', 'last_name' => 'Last name',
             'phone' => 'Phone (required for a new lead)', 'email' => 'Email', 'stage' => 'Stage (name)', 'substatus' => 'Sub-status',
             'lost_reason' => 'Lost reason', 'owner_email' => 'Salesperson (email)', 'source' => 'Source', 'platform' => 'Platform',
-            'campaign' => 'Campaign', 'ad_name' => 'Ad', 'project' => 'Project (name)', 'unit_type' => 'Unit type', 'budget' => 'Budget',
+            'campaign' => 'Campaign', 'adset' => 'Ad set', 'ad_name' => 'Ad', 'project' => 'Project (name)', 'unit_type' => 'Unit type', 'budget' => 'Budget',
             'deal_value' => 'Deal value', 'qualification' => 'Qualified (qualified / not_qualified)', 'data_type' => 'Fresh or cold (fresh / cold)',
             'followup_at' => 'Next follow-up (date and time)', 'note' => 'A comment to add'];
 }
@@ -220,7 +221,7 @@ function crm_int_synonyms(): array
             'email' => ['email', 'email_address', 'mail'], 'stage' => ['stage', 'status', 'lead_status', 'pipeline_stage'],
             'substatus' => ['substatus', 'sub_status'], 'lost_reason' => ['lost_reason'], 'owner_email' => ['owner_email', 'agent_email', 'sales_email', 'assigned_to_email'],
             'source' => ['source', 'lead_source', 'utm_source'], 'platform' => ['platform'], 'campaign' => ['campaign', 'campaign_name', 'utm_campaign'],
-            'ad_name' => ['ad_name', 'ad', 'utm_content'], 'project' => ['project', 'project_name', 'property', 'compound'],
+            'adset' => ['adset', 'adset_name', 'ad_set', 'ad_set_name'], 'ad_name' => ['ad_name', 'ad', 'utm_content'], 'project' => ['project', 'project_name', 'property', 'compound'],
             'unit_type' => ['unit_type', 'unit', 'property_type'], 'budget' => ['budget'], 'deal_value' => ['deal_value', 'value', 'amount'],
             'qualification' => ['qualification'], 'data_type' => ['data_type', 'lead_type'], 'followup_at' => ['followup_at', 'follow_up', 'next_followup'],
             'note' => ['note', 'notes', 'comment', 'comments', 'message', 'description']];
@@ -335,7 +336,7 @@ function crm_int_upsert(array $client, array $d, array $o = []): array
         if (isset(crm_data_types()[$s('data_type')])) $put('data_type', $s('data_type'));
         if (!$created && $s('source', 30) !== '') $put('source', $s('source', 30));
         if ($set) db_run("UPDATE contacts SET " . implode(',', $set) . " WHERE id=? AND client_id=?", array_merge($p, [$id, $cid]));
-        crm_set_origin($id, ['campaign' => $s('campaign', 160), 'platform' => $s('platform', 16), 'ad_name' => $s('ad_name', 160)]);
+        crm_set_origin($id, ['campaign' => $s('campaign', 160), 'platform' => $s('platform', 16), 'adset' => $s('adset', 160), 'ad_name' => $s('ad_name', 160)]);
         if (!empty($d['custom']) && is_array($d['custom']) && function_exists('crm_custom_save')) crm_custom_save($cid, $id, $d['custom']);
 
         // Moves that have their own rules: stage, sub-status, owner, follow-up, a comment.

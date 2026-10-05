@@ -508,12 +508,14 @@ $ownerName = crm_user_name($lead['owner_user_id'] !== null ? (int) $lead['owner_
         <h3 class="lead-sec">Lead details</h3>
         <dl class="lead-dl lead-meta">
           <dt>Assigned to</dt><dd><span class="lead-tag"><?= e($ownerName) ?></span></dd>
-          <dt>Lead source</dt><dd><span class="lead-tag"><?= e(crm_source_label($lead['source'])) ?></span></dd>
+          <dt>Lead source</dt><dd><span class="lead-tag"><?= e(crm_source_label($lead['source'])) ?></span><?= crm_origin_visible() && crm_is_meta_direct($lead['source'] ?? null) ? ' <span class="pill blue">Meta direct</span>' : '' ?></dd>
+          <?php if (crm_origin_visible()): ?><dt>Came</dt><dd><?= e(crm_arrival_label($lead)) ?></dd><?php endif; ?>
           <dt>Data</dt><dd><?= e(crm_data_types()[$lead['data_type'] ?? ''] ?? '—') ?></dd>
           <dt>Qualification</dt><dd><?= e(crm_qualifications()[$lead['qualification'] ?? ''] ?? 'Not set') ?></dd>
           <?php if (!empty($lead['platform'])): ?><dt>Platform</dt><dd><?= e(crm_platform_label($lead['platform'])) ?></dd><?php endif; ?>
-          <?php if (!empty($lead['campaign'])): ?><dt>Campaign</dt><dd><span class="lead-box"><?= e((string) $lead['campaign']) ?></span></dd><?php endif; ?>
-          <?php if (!empty($lead['ad_name'])): ?><dt>Ad</dt><dd><?= e((string) $lead['ad_name']) ?></dd><?php endif; ?>
+          <?php if (crm_origin_visible() && !empty($lead['campaign'])): ?><dt>Campaign</dt><dd><span class="lead-box"><?= e((string) $lead['campaign']) ?></span></dd><?php endif; ?>
+          <?php if (crm_origin_visible() && !empty($lead['adset'])): ?><dt>Ad set</dt><dd><?= e((string) $lead['adset']) ?></dd><?php endif; ?>
+          <?php if (crm_origin_visible() && !empty($lead['ad_name'])): ?><dt>Ad</dt><dd><?= e((string) $lead['ad_name']) ?></dd><?php endif; ?>
           <dt>Preferred project</dt><dd><?= !empty($lead['project_id']) ? e((string) ($pnames[(int) $lead['project_id']] ?? '—')) : '<span class="text-muted">—</span>' ?></dd>
           <dt>Preferred type</dt><dd><?= !empty($lead['unit_type']) ? e((string) $lead['unit_type']) : '<span class="text-muted">—</span>' ?></dd>
           <dt>Budget</dt><dd><?= !empty($lead['budget']) ? e((string) $lead['budget']) : '<span class="text-muted">—</span>' ?></dd>

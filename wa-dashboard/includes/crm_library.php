@@ -52,6 +52,7 @@ function crm_lib_filters(array $get): array
         $v = $get[$k] ?? '';
         $f[$k] = is_array($v) ? '' : trim((string) $v);
     }
+    if (function_exists('crm_origin_visible') && !crm_origin_visible()) $f['campaign'] = '';
     // A salesperson's reports are about their own leads (the WHERE applies that anyway).
     if (function_exists('is_sales') && is_sales() && !(function_exists('crm_is_team_leader') && crm_is_team_leader())) $f['owner'] = '';
     return $f;
@@ -85,7 +86,7 @@ function crm_lib_drill_closed(array $f, string $kind): array
  */
 function crm_lib_catalog(): array
 {
-    return [
+    $cat = [
         'overview'   => ['Overview',       'Overview',                    'Leads, contact, visits and sales for the period, week by week.', 'crm_lib_overview'],
         'status'     => ['Sales & status', 'Leads by stage',              'Where the leads that arrived in the period stand now.', 'crm_lib_status'],
         'funnel'     => ['Sales & status', 'How far leads got',           'How many reached each stage, and where they drop off.', 'crm_lib_funnel'],
@@ -113,6 +114,7 @@ function crm_lib_catalog(): array
         'quality_campaign' => ['Marketing', 'Lead quality by campaign',   'The same, per campaign: which campaigns bring real buyers.', 'crm_lib_quality_campaign'],
         'platform_status' => ['Marketing', 'Platform × stage × sales',   'Facebook, Instagram, WhatsApp… and where their leads stand now.', 'crm_lib_platform_status'],
         'project_status'  => ['Sales & status', 'Project × stage',       'Each project\'s leads, stage by stage.', 'crm_lib_project_status'],
+        'campaign_adset'  => ['Marketing', 'Leads by campaign and ad set', 'Each campaign split by ad set: leads, how many came straight from Meta, sales.', 'crm_lib_campaign_adset'],
         'campaign_sales'  => ['Marketing', 'Campaign × salesperson',     'Who sells each campaign\'s leads best.', 'crm_lib_campaign_sales'],
         'profile'    => ['Analysis',       'Salesperson profile',         'One person against the team: speed, calls, answer rate, visits, sales, best project and source.', 'crm_lib_profile'],
         'golden'     => ['Analysis',       'Golden hours',                'When calls get answered: weekday by hour.', 'crm_lib_golden'],
@@ -126,6 +128,11 @@ function crm_lib_catalog(): array
         'meetings_ahead' => ['Forecast',   'Visits and meetings ahead',   'What is booked for the next 7 and 30 days, and how many are likely to show up.', 'crm_lib_meetings_ahead'],
         'events'     => ['Team',           'Events',                      'Each event: invited, said yes, came, and who bought afterwards.', 'crm_lib_events'],
     ];
+    // Reports that are about campaigns, ad sets and ads: only for someone who may see where leads come from.
+    if (function_exists('crm_origin_visible') && !crm_origin_visible()) {
+        foreach (['campaigns', 'campaign_adset', 'roi', 'roi_ads', 'quality_campaign', 'campaign_sales', 'ads'] as $k) unset($cat[$k]);
+    }
+    return $cat;
 }
 
 /** Run one report. */
@@ -767,6 +774,53 @@ function crm_lib_by_stage(int $cid, array $f, string $dim): array
 }
 function crm_lib_platform_status(int $cid, array $f): array { return crm_lib_by_stage($cid, $f, 'platform'); }
 function crm_lib_project_status(int $cid, array $f): array  { return crm_lib_by_stage($cid, $f, 'project'); }
+
+/**
+ * Each campaign, ad set by ad set: how many leads, how many came straight from Meta (Lead Ads
+ * form, click-to-WhatsApp ad) and how many by another route (a sheet, an import, another system),
+ * and how many were sold.
+ */
+function crm_lib_campaign_adset(int $cid, array $f): array
+{
+    if (!db_has_column('contacts', 'adset')) return ['cols' => [], 'rows' => [], 'empty' => true];
+    [$w, $p] = crm_report_where($cid, $f);
+    $won = crm_stage_kinds($cid)['won'] ?: [0]; $ph = implode(',', array_fill(0, count($won), '?'));
+    $direct = "c.source IN ('" . implode("','", crm_meta_direct_sources()) . "')";
+    $rows = db_all("SELECT COALESCE(NULLIF(c.campaign,''), '') camp, COALESCE(NULLIF(c.adset,''), '') adset, COUNT(*) leads,
+                           SUM($direct) meta, SUM(c.stage_id IN ($ph)) won,
+                           SUM(CASE WHEN c.stage_id IN ($ph) THEN COALESCE(c.deal_value,0) ELSE 0 END) won_value
+                      FROM contacts c WHERE c.crm_added_at BETWEEN ? AND ? AND {$w}
+                     GROUP BY camp, adset ORDER BY camp = '', camp, adset = '', leads DESC LIMIT 400",
+                   array_merge($won, $won, [$f['from'] . ' 00:00:00', $f['to'] . ' 23:59:59'], $p));
+    $out = []; $last = null;
+    foreach ($rows as $r) {
+        $camp = (string) $r['camp'];
+        $n = (int) $r['leads'];
+        $out[] = ['label' => $camp !== $last ? ($camp !== '' ? $camp : 'No campaign') : '', 'camp' => $camp, 'aset' => (string) $r['adset'],
+                  'adset' => (string) $r['adset'] !== '' ? (string) $r['adset'] : 'No ad set', 'leads' => $n,
+                  'meta' => (int) $r['meta'], 'other' => $n - (int) $r['meta'], 'won' => (int) $r['won'],
+                  'rate' => $n ? round(100 * $r['won'] / $n, 1) : null, 'won_value' => (float) $r['won_value'] ?: null];
+        $last = $camp;
+    }
+    $t = ['label' => 'Total', 'adset' => '', 'leads' => array_sum(array_column($out, 'leads')), 'meta' => array_sum(array_column($out, 'meta')),
+          'other' => array_sum(array_column($out, 'other')), 'won' => array_sum(array_column($out, 'won')),
+          'won_value' => array_sum(array_map(fn($r) => (float) $r['won_value'], $out)) ?: null];
+    $t['rate'] = $t['leads'] ? round(100 * $t['won'] / $t['leads'], 1) : null;
+    return ['cols' => ['label' => ['Campaign', 'text'], 'adset' => ['Ad set', 'text'], 'leads' => ['Leads', 'num'],
+                       'meta' => ['Direct from Meta', 'num'], 'other' => ['Other routes', 'num'], 'won' => ['Won', 'num'],
+                       'rate' => ['Won ÷ leads', 'pct'], 'won_value' => ['Won value', 'money']],
+            'rows' => $out, 'total' => $t,
+            'drill' => function ($r, $c) use ($f) {
+                if (!in_array($c, ['leads', 'meta', 'other', 'won'], true)) return null;
+                $d = crm_lib_drill_base($f);
+                if ($r['label'] !== 'Total') $d += ['ceq' => $r['camp'] !== '' ? $r['camp'] : '__none', 'aseq' => $r['aset'] !== '' ? $r['aset'] : '__none'];
+                return $d + ($c === 'meta' ? ['via' => 'meta'] : []) + ($c === 'other' ? ['via' => 'other'] : []) + ($c === 'won' ? ['state' => 'won'] : []);
+            },
+            'empty' => !$out,
+            'note' => 'Leads that arrived in the period. "Direct from Meta" came through the Lead Ads connection or a click-to-WhatsApp ad, '
+                    . 'so Meta itself named the campaign and ad set; "other routes" got theirs from a sheet, an import or another system.'];
+}
+
 
 /** Each campaign's leads, split by who they went to, and how each person did with them. */
 function crm_lib_campaign_sales(int $cid, array $f): array

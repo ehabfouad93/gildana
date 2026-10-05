@@ -219,7 +219,7 @@ function crm_set_origin(int $contactId, array $o): void
             // A platform only guessed from the source ("a Meta form, so Facebook") gives way to
             // the real one when Meta says it was Instagram.
             $guess = [];
-            foreach (['meta_form', 'inbound', 'ctwa', 'manual'] as $src) { $guess[] = "(source=? AND platform=?)"; array_push($p, $src, crm_platform_for_source($src)); }
+            foreach (['meta_form', 'inbound', 'ctwa', 'manual', 'import', 'sheet', 'qualifier'] as $src) { $guess[] = "(source=? AND platform=?)"; array_push($p, $src, crm_platform_for_source($src)); }
             $set[] = "platform = IF(platform IS NULL OR platform='' OR " . implode(' OR ', $guess) . ", ?, platform)";
             $p[] = mb_substr($v, 0, $len);
             continue;

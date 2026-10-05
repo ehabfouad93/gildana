@@ -422,6 +422,24 @@ function crm_source_label(?string $source): string
     ][(string) $source] ?? ($source ? ucfirst((string) $source) : '—');
 }
 
+/**
+ * Did the lead come straight from Meta — a Lead Ads form read by the connector, or a click-to-WhatsApp
+ * ad — rather than through a sheet, an import, another system or by hand? Then Meta itself told us
+ * the campaign, ad set and ad, and they can be trusted as given.
+ */
+function crm_meta_direct_sources(): array { return ['meta_form', 'ctwa']; }
+function crm_is_meta_direct(?string $source): bool { return in_array((string) $source, crm_meta_direct_sources(), true); }
+
+/** How a lead reached the CRM, in a few words, for the list and the lead page. */
+function crm_arrival_label(array $c): string
+{
+    return match ((string) ($c['source'] ?? '')) {
+        'meta_form' => 'Direct from Meta — Lead Ads form',
+        'ctwa'      => 'Direct from Meta — click-to-WhatsApp ad',
+        default     => crm_source_label($c['source'] ?? null) . (!empty($c['campaign']) ? ' (campaign given by the ' . (in_array($c['source'] ?? '', ['sheet', 'import', 'qualifier'], true) ? 'sheet' : 'sender') . ')' : ''),
+    };
+}
+
 // Messages the CRM sends by itself. Loaded last: it needs the inbox, which loads this file.
 require_once __DIR__ . '/crm_automation.php';
 require_once __DIR__ . '/crm_visits.php';
