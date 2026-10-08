@@ -307,3 +307,34 @@ function stats_active_clients(string $start, string $end): int
 {
     return (int) db_val("SELECT COUNT(DISTINCT m.client_id) FROM messages m JOIN clients cl ON cl.id=m.client_id WHERE m.direction='out' AND m.created_at BETWEEN ? AND ?", [$start, $end]);
 }
+
+/** SMS in [start, end]: totals, and (with $p) per-bucket sent / failed. Null client = every client. */
+function stats_sms(?int $clientId, string $start, string $end, ?array $p = null): array
+{
+    if (!db_has_column('clients', 'sms_rate')) return ['sent' => 0, 'delivered' => 0, 'failed' => 0, 'parts' => 0, 'credits' => 0, 'waiting' => 0];
+    [$cw, $cp] = stats_client($clientId, 'm');
+    $r = db_row("SELECT SUM(m.status IN ('sent','delivered')) sent, SUM(m.status='delivered') delivered, SUM(m.status IN ('failed','undelivered')) failed,
+                        SUM(IF(m.status IN ('sent','delivered'), m.parts, 0)) parts, SUM(IF(m.status IN ('sent','delivered'), m.credits, 0)) credits,
+                        SUM(m.status IN ('queued','sending')) waiting
+                   FROM sms_messages m WHERE $cw AND m.created_at BETWEEN ? AND ?", array_merge($cp, [$start, $end])) ?: [];
+    $out = array_map('intval', $r);
+    if ($p) {
+        $b = viz_buckets($p);
+        $rows = db_all("SELECT " . viz_bucket_sql('m.created_at', $p['bucket']) . " b, SUM(m.status IN ('sent','delivered')) ok, SUM(m.status IN ('failed','undelivered')) bad
+                          FROM sms_messages m WHERE $cw AND m.created_at BETWEEN ? AND ? GROUP BY b", array_merge($cp, [$p['start'], $p['end']]));
+        $out['sent_series'] = viz_fill($b, $rows, 'ok');
+        $out['failed_series'] = viz_fill($b, $rows, 'bad');
+        $out['labels'] = array_values($b);
+    }
+    return $out;
+}
+
+/** SMS grouped by a column (source, sender, error_title) in the period. */
+function stats_sms_by(int $clientId, string $start, string $end, string $col): array
+{
+    if (!in_array($col, ['source', 'sender', 'error_title'], true)) return [];
+    $cond = $col === 'error_title' ? " AND m.status IN ('failed','undelivered')" : '';
+    return db_all("SELECT COALESCE(NULLIF(m.$col,''), '—') label, COUNT(*) n, SUM(m.status IN ('sent','delivered')) ok, SUM(m.status='delivered') dl,
+                          SUM(IF(m.status IN ('sent','delivered'), m.credits, 0)) credits
+                     FROM sms_messages m WHERE m.client_id=? AND m.created_at BETWEEN ? AND ?$cond GROUP BY label ORDER BY n DESC LIMIT 12", [$clientId, $start, $end]);
+}

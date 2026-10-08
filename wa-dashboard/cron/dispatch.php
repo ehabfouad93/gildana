@@ -32,6 +32,8 @@ require_once __DIR__ . '/../includes/meta_leads.php';
 require_once __DIR__ . '/../includes/crm_auto.php';
 require_once __DIR__ . '/../includes/push.php';
 require_once __DIR__ . '/../includes/social_campaigns.php';
+require_once __DIR__ . '/../includes/sms.php';
+require_once __DIR__ . '/../includes/crm_integrations.php';
 
 if (PHP_SAPI !== 'cli') {
     /* Prefer the header. The ?token= form still works for one release so an existing cron
@@ -120,9 +122,15 @@ try {
     if ($promoted) out("Promoted {$promoted} scheduled campaign(s).");
 
     // Messenger / Instagram campaigns go through the Page's Send API, not the WhatsApp senders below.
-    $waOnly = db_has_column('campaigns', 'channel') ? " AND c.channel='whatsapp'" : '';
+    $waOnly = db_has_column('campaigns', 'channel') ? " AND c.channel='whatsapp'" : '';   // social and SMS campaigns send above
     [$sSent, $sFailed] = social_campaign_dispatch($workerId);
     if ($sSent || $sFailed) out("Messenger/Instagram campaigns: {$sSent} sent, {$sFailed} failed.");
+    // SMS: campaigns, API batches and anything queued for later, through each client's gateway.
+    if (sms_ready()) {
+        sms_campaigns_promote();
+        [$mSent, $mFailed] = sms_dispatch($workerId);
+        if ($mSent || $mFailed) out("SMS: {$mSent} sent, {$mFailed} failed.");
+    }
 
     $perClientCap = (int) config('send_batch_per_run', 300);
     $globalCap    = (int) config('send_batch_global', 1000);

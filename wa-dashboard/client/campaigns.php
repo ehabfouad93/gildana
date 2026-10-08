@@ -39,6 +39,7 @@ $campaigns = db_all(
 );
 
 $actions = '<a class="btn btn-primary btn-sm" href="campaign_new.php">+ New Campaign</a>';
+if (can_use('sms')) $actions = '<a class="btn btn-ghost btn-sm" href="sms.php">+ SMS</a>' . $actions;
 if (client_has_channel($CLIENT, 'messenger') || client_has_channel($CLIENT, 'instagram')) {
     $actions = '<a class="btn btn-ghost btn-sm" href="campaign_social.php">+ Messenger / Instagram</a>' . $actions;
 }
@@ -77,7 +78,7 @@ $pc = fn(int $n, int $of) => $of > 0 ? round(100 * $n / $of) . '%' : '—';
       ?>
         <tr>
           <td><strong><?= e((string) $c['name']) ?></strong></td>
-          <td class="text-muted"><?php if (in_array($c['channel'] ?? 'whatsapp', ['messenger', 'instagram'], true)): ?><span class="pill <?= $c['channel'] === 'instagram' ? 'gold' : 'blue' ?>"><?= $c['channel'] === 'instagram' ? 'Instagram' : 'Messenger' ?></span> <?= $c['audience_kind'] === 'optin' ? 'Offers opt-in' : 'Last 24h' ?><?php else: ?><?= e((string) ($c['template_name'] ?? '—')) ?><?php endif; ?></td>
+          <td class="text-muted"><?php if (($c['channel'] ?? '') === 'sms'): ?><span class="pill gray">SMS</span> <?= e(mb_strimwidth((string) $c['body_text'], 0, 40, '…')) ?><?php elseif (in_array($c['channel'] ?? 'whatsapp', ['messenger', 'instagram'], true)): ?><span class="pill <?= $c['channel'] === 'instagram' ? 'gold' : 'blue' ?>"><?= $c['channel'] === 'instagram' ? 'Instagram' : 'Messenger' ?></span> <?= $c['audience_kind'] === 'optin' ? 'Offers opt-in' : 'Last 24h' ?><?php else: ?><?= e((string) ($c['template_name'] ?? '—')) ?><?php endif; ?></td>
           <td><?= status_pill((string) $c['status']) ?></td>
           <td style="min-width:150px">
             <div class="progress" title="<?= (int) $c['sent_count'] ?> sent / <?= (int) $c['total_count'] ?>">

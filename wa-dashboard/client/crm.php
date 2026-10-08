@@ -378,6 +378,8 @@ $actions = '';
 if ($canEdit) $actions .= '<button class="btn btn-primary btn-sm" onclick="crmAdd()">+ Add lead</button>';
 if ($canEdit && can_crm('import')) $actions .= '<a class="btn btn-ghost btn-sm" href="crm_import.php">Import</a>';
 if ($canExport) $actions .= '<a class="btn btn-ghost btn-sm" id="crm-export" href="crm.php?' . e(http_build_query($active + ['export' => 'xlsx'])) . '">Export Excel</a>';
+// SMS to everyone the filters show (the SMS page counts them and the cost before sending).
+if (can_write() && can_use('sms') && crm_sms_available($CLIENT)) $actions .= '<a class="btn btn-ghost btn-sm" id="crm-sms" href="sms.php?' . e(http_build_query(['src' => 'crm'] + $active)) . '">Send SMS</a>';
 if ($isAdmin) $actions .= '<button class="btn btn-ghost btn-sm" onclick="crmStages()">Stages</button>';
 
 client_header('CRM', 'crm', $CLIENT);

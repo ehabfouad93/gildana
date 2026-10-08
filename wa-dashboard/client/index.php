@@ -95,6 +95,12 @@ if ($gs['done'] < $gs['total'] && is_client_admin()): ?>
     <?= viz_kpi('Deals won', $leads['won'], $leadsW['won'], ['spark' => $leads['won_series'], 'compare' => $cmp,
          'sub' => $leads['leads'] ? round(100 * $leads['won'] / $leads['leads'], 1) . '% of new leads' : '', 'href' => 'crm_dashboard.php?tab=reports']) ?>
   <?php endif; ?>
+  <?php if (can_use('sms') && db_has_column('clients', 'sms_rate') && !is_sales()): $smN = stats_sms($cid, $P['start'], $P['end'], $P); $smW = stats_sms($cid, $P['prev_start'], $P['prev_end']); ?>
+    <?php if ($smN['sent'] || $smW['sent'] || $smN['failed']): ?>
+      <?= viz_kpi('SMS sent', $smN['sent'], $smW['sent'], ['compare' => $cmp, 'spark' => $smN['sent_series'], 'slot' => 4, 'href' => 'reports.php?tab=sms',
+           'sub' => ($smN['failed'] ? number_format($smN['failed']) . ' failed · ' : '') . number_format($smN['parts']) . ' parts']) ?>
+    <?php endif; ?>
+  <?php endif; ?>
   <?php if ($seeMoney): ?>
     <?= viz_kpi('Credits used', $cr['used'], $crW['used'], ['up_good' => false, 'compare' => $cmp, 'href' => 'billing.php',
          'sub' => number_format((int) $CLIENT['credits_balance']) . ' left' . ($daysLeft !== null ? ' · about ' . number_format($daysLeft) . ' days at this pace' : '')]) ?>

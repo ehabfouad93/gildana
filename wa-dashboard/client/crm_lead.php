@@ -202,6 +202,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (crm_merge($CLIENT, $id, $other, $me)) { flash('Merged. Everything from the other contact is now on this lead.'); $back(); }
         $err = 'Those two could not be merged.';
     }
+    if ($a === 'send_sms' && can_write() && crm_sms_available($CLIENT)) {
+        require_once __DIR__ . '/../includes/sms.php';
+        require_once __DIR__ . '/../includes/crm_automation.php';
+        $text = trim((string) ($_POST['message'] ?? ''));
+        if ($text === '') $err = 'Write the SMS first.';
+        elseif (empty($lead['phone_e164'])) $err = 'This lead has no phone number.';
+        elseif (!empty($lead['sms_opt_out_at'])) $err = 'This person asked not to receive SMS.';
+        else {
+            $r = sms_send_now($CLIENT, (string) $lead['phone_e164'], sms_render($text, $lead), ['source' => 'crm', 'render' => false, 'user_id' => $me], $id);
+            if ($r['ok']) { crm_log_activity($CLIENT, $id, 'sms', null, $text, $me); flash('SMS sent.'); $back('#timeline'); }
+            $err = 'The SMS was not sent: ' . $r['error'];
+        }
+    }
+    if ($a === 'sms_optout' && can_write()) {
+        require_once __DIR__ . '/../includes/sms.php';
+        db_run("UPDATE contacts SET sms_opt_out_at=" . (!empty($_POST['out']) ? 'NOW()' : 'NULL') . " WHERE id=? AND client_id=?", [$id, $cid]);
+        flash(!empty($_POST['out']) ? 'They will not receive SMS.' : 'SMS allowed again.');
+        $back();
+    }
     if ($a === 'send') {
         // Out through whatever this person's admin chose for them — see sender_for().
         $r = inbox_send($CLIENT, $id, (string) ($_POST['message'] ?? ''));
@@ -686,6 +705,7 @@ $ownerName = crm_user_name($lead['owner_user_id'] !== null ? (int) $lead['owner_
       <?php elseif ($hidePh): ?><button type="button" class="la la-green" data-reveal="whatsapp">WhatsApp app</button>
       <?php else: ?><a class="la la-green" href="https://wa.me/<?= e($phone) ?>" target="_blank" rel="noopener">WhatsApp app</a><?php endif; ?>
       <?php if ($canW && can_use('inbox')): ?><button type="button" class="la la-teal" data-dlg="send-dlg">Send message</button><?php endif; ?>
+      <?php if ($canW && !empty($lead['phone_e164']) && crm_sms_available($CLIENT)): ?><button type="button" class="la" data-dlg="sms-dlg">Send SMS</button><?php endif; ?>
       <?php if (can_use('inbox')): ?><a class="la la-outline" href="inbox.php?contact=<?= $id ?>">Conversation</a><?php endif; ?>
       <?php if ($canW): ?><button type="button" class="la la-cyan" data-dlg="fu-dlg">Follow-up</button><?php endif; ?>
       <?php if ($canW && can_crm('visits')): ?>
@@ -927,6 +947,29 @@ $ownerName = crm_user_name($lead['owner_user_id'] !== null ? (int) $lead['owner_
         <span class="text-muted" style="font-size:12px">Goes out from <?= e($viaText) ?></span>
       </div>
     </form>
+  <?php endif; ?>
+  <div class="dlg-btns"><button type="button" class="btn btn-ghost" data-close>Close</button></div>
+</dialog>
+<?php endif; ?>
+
+<?php if ($canW && !empty($lead['phone_e164']) && crm_sms_available($CLIENT)): require_once __DIR__ . '/../includes/sms.php'; ?>
+<dialog class="lead-dlg lead-send" id="sms-dlg" aria-labelledby="sms-title" <?= $err && ($_POST['action'] ?? '') === 'send_sms' ? 'open' : '' ?>>
+  <h2 id="sms-title" style="margin-top:0">Send SMS</h2>
+  <?php if (!empty($lead['sms_opt_out_at'])): ?>
+    <div class="note warn">This person asked not to receive SMS (since <?= e(date('j M Y', strtotime((string) $lead['sms_opt_out_at']))) ?>).</div>
+    <form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="sms_optout"><input type="hidden" name="id" value="<?= $id ?>"><button class="btn btn-ghost btn-sm">Allow SMS again</button></form>
+  <?php else: ?>
+  <form method="post" id="lead-sms">
+    <?= csrf_field() ?><input type="hidden" name="action" value="send_sms"><input type="hidden" name="id" value="<?= $id ?>">
+    <textarea name="message" id="sms-msg" rows="4" maxlength="1530" required placeholder="SMS to <?= e((string) ($lead['name'] ?: 'this lead')) ?>… — {{first_name}}, {{owner_name}} work here too"></textarea>
+    <div class="sms-counter"><span><b id="lsms-n">0</b> characters</span><span><b id="lsms-p">1</b> part(s)</span><span><?= sms_rate($CLIENT) ?> credit(s) per part</span></div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap" class="mt10"><button class="btn btn-primary btn-sm">Send SMS</button>
+      <span class="text-muted" style="font-size:12px">To +<?= e(crm_phone_show((string) $lead['phone_e164'])) ?><?php $snds = sms_client_senders($CLIENT); ?><?= $snds ? ' from ' . e($snds[0]) : '' ?></span></div>
+  </form>
+  <form method="post" style="margin-top:8px"><?= csrf_field() ?><input type="hidden" name="action" value="sms_optout"><input type="hidden" name="id" value="<?= $id ?>"><input type="hidden" name="out" value="1">
+    <button class="btn-link" style="font-size:12px">They asked not to get SMS</button></form>
+  <script>(function(){var t=document.getElementById('sms-msg');t.addEventListener('input',function(){var u=/[^\x00-\x7F€£¥èéùìòÇØøÅåÄÖÑÜäöñüà§¿¡ΔΦΓΛΩΠΨΣΘΞÆæßÉ]/.test(t.value),n=Array.from(t.value).length,one=u?70:160,many=u?67:153;
+    document.getElementById('lsms-n').textContent=n;document.getElementById('lsms-p').textContent=n<=one?1:Math.ceil(n/many);});})();</script>
   <?php endif; ?>
   <div class="dlg-btns"><button type="button" class="btn btn-ghost" data-close>Close</button></div>
 </dialog>

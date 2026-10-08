@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/_init.php';
+require_once __DIR__ . '/../includes/sms_providers.php';
 require_once __DIR__ . '/../includes/billing.php';
 require_once __DIR__ . '/../includes/channel.php';
 require_once __DIR__ . '/../includes/permissions.php';
@@ -170,6 +171,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             flash('Channels updated.');
             redirect('client.php?id=' . $id . '#channels');
         }
+    }
+
+    if ($action === 'save_sms' && db_has_column('clients', 'sms_rate')) {
+        // SMS: which platform gateway, the sender names approved for them, may they bring their own provider, and the price per part.
+        $gwId = (int) ($_POST['sms_gateway_id'] ?? 0);
+        if ($gwId && !db_val("SELECT 1 FROM sms_gateways WHERE id=? AND client_id IS NULL", [$gwId])) $gwId = 0;
+        $senders = implode(',', array_slice(array_values(array_unique(array_filter(array_map(fn($x) => mb_substr(trim($x), 0, 40), explode(',', (string) ($_POST['sms_senders'] ?? '')))))), 0, 20));
+        db_run("UPDATE clients SET sms_mode=?, sms_gateway_id=?, sms_senders=?, sms_rate=? WHERE id=?",
+               [($_POST['sms_mode'] ?? '') === 'own' ? 'own' : 'platform', $gwId ?: null, $senders !== '' ? $senders : null, max(0, min(100, (int) ($_POST['sms_rate'] ?? 1))), $id]);
+        flash('SMS settings saved.');
+        redirect('client.php?id=' . $id . '#sms');
     }
 
     if ($action === 'set_threshold') {
@@ -376,6 +388,36 @@ $use      = db_row("SELECT * FROM usage_periods WHERE client_id=? AND period_sta
     <button type="submit" class="btn btn-primary mt10">Save channels</button>
   </form>
 </div>
+
+<!-- ── SMS ── -->
+<?php if (db_has_column('clients', 'sms_rate')):
+  $smsGws = db_all("SELECT id, name, provider, is_default, default_sender FROM sms_gateways WHERE client_id IS NULL AND active=1 ORDER BY is_default DESC, name");
+  $smsOwn = db_row("SELECT name, provider, active FROM sms_gateways WHERE client_id=? ORDER BY is_default DESC, id LIMIT 1", [(int) $client['id']]);
+  $smsOn = in_array('sms', client_modules($client), true); ?>
+<div class="card" id="sms">
+  <h2>SMS</h2>
+  <p class="text-muted" style="font-size:12.5px;margin:-6px 0 14px">
+    <?= $smsOn ? 'The SMS module is on for this account (Modules above).' : '<strong>The SMS module is off</strong> — tick it under Modules above to let them send SMS.' ?>
+    Gateways are managed in <a href="sms.php">SMS gateways</a>. Each SMS part (160 English / 70 Arabic characters) costs the credits set here.
+  </p>
+  <form method="post">
+    <?= csrf_field() ?><input type="hidden" name="action" value="save_sms">
+    <div class="grid2">
+      <div class="field"><span class="lbl">Send through</span><select name="sms_gateway_id">
+        <option value="0">The default gateway<?= $smsGws && (int) $smsGws[0]['is_default'] ? ' (' . e($smsGws[0]['name']) . ')' : '' ?></option>
+        <?php foreach ($smsGws as $g): ?><option value="<?= (int) $g['id'] ?>" <?= (int) ($client['sms_gateway_id'] ?? 0) === (int) $g['id'] ? 'selected' : '' ?>><?= e($g['name']) ?> — <?= e(sms_provider_label((string) $g['provider'])) ?></option><?php endforeach; ?>
+      </select><?php if (!$smsGws): ?><span class="hint" style="color:var(--danger)">No platform gateway yet — add one in SMS gateways.</span><?php endif; ?></div>
+      <div class="field"><span class="lbl">Credits per SMS part</span><input type="number" name="sms_rate" min="0" max="100" value="<?= (int) ($client['sms_rate'] ?? 1) ?>"></div>
+    </div>
+    <div class="field"><span class="lbl">Sender names approved for them</span><input type="text" name="sms_senders" maxlength="500" value="<?= e((string) ($client['sms_senders'] ?? '')) ?>" placeholder="Comma separated — empty uses the gateway's default sender">
+      <span class="hint">Only names registered with the provider for this client. They pick from this list when sending.</span></div>
+    <label class="mod-opt"><input type="checkbox" name="sms_mode" value="own" <?= ($client['sms_mode'] ?? 'platform') === 'own' ? 'checked' : '' ?>>
+      Let them use their own SMS provider account (SMS → Settings). Credits are still charged per part as above — set 0 to not charge for SMS on their own account</label>
+    <?php if ($smsOwn): ?><p class="hint">Their own provider: <strong><?= e($smsOwn['name']) ?></strong> (<?= e(sms_provider_label((string) $smsOwn['provider'])) ?>)<?= (int) $smsOwn['active'] ? '' : ' — off' ?>.</p><?php endif; ?>
+    <button type="submit" class="btn btn-primary mt10">Save SMS</button>
+  </form>
+</div>
+<?php endif; ?>
 
 <!-- ── Sending channel ── -->
 <?php $isPersonal = ($client['channel'] ?? 'cloud') === 'personal'; ?>

@@ -10,7 +10,8 @@ require_once __DIR__ . '/../includes/ads.php';
  */
 $cid = (int) $CLIENT['id'];
 $P   = viz_period($_GET, '90d');
-$tab = in_array($_GET['tab'] ?? '', ['campaigns', 'templates', 'automations', 'ads'], true) ? (string) $_GET['tab'] : 'campaigns';
+$smsTab = can_use('sms') && db_has_column('clients', 'sms_rate');
+$tab = in_array($_GET['tab'] ?? '', array_merge(['campaigns', 'templates', 'automations', 'ads'], $smsTab ? ['sms'] : []), true) ? (string) $_GET['tab'] : 'campaigns';
 $cmp = viz_prev_words($P);
 $pct = fn($n, $d) => (float) $d > 0 ? round(100 * (float) $n / (float) $d, 1) : null;
 
@@ -47,6 +48,12 @@ if ($tab === 'campaigns') {
     $flowsW = stats_flows($cid, $P['prev_start'], $P['prev_end']);
     $fs = stats_flow_series($cid, $P);
     $sumF = fn($rows, $k) => array_sum(array_map(fn($r) => (int) $r[$k], $rows));
+} elseif ($tab === 'sms') {
+    $sm = stats_sms($cid, $P['start'], $P['end'], $P);
+    $smW = stats_sms($cid, $P['prev_start'], $P['prev_end']);
+    $bySrc = stats_sms_by($cid, $P['start'], $P['end'], 'source');
+    $bySender = stats_sms_by($cid, $P['start'], $P['end'], 'sender');
+    $smsFails = stats_sms_by($cid, $P['start'], $P['end'], 'error_title');
 } else {
     $ads = ads_list($cid);
 }
@@ -55,7 +62,7 @@ client_header('Reports', 'reports', $CLIENT);
 page_head('Reports', $tab === 'campaigns' ? '<a class="btn btn-ghost btn-sm" href="?' . e(http_build_query(['tab' => 'campaigns', 'export' => 'csv', 'p' => $P['key'], 'from' => $P['from'], 'to' => $P['to']])) . '">Export CSV</a>' : '');
 ?>
 <nav class="dv-tabs" aria-label="Report sections">
-  <?php foreach (['campaigns' => 'Campaigns', 'templates' => 'Templates', 'automations' => 'Automations', 'ads' => 'Ads'] as $k => $l): ?>
+  <?php foreach (['campaigns' => 'Campaigns', 'templates' => 'Templates', 'automations' => 'Automations'] + ($smsTab ? ['sms' => 'SMS'] : []) + ['ads' => 'Ads'] as $k => $l): ?>
     <a href="?<?= e(http_build_query(['tab' => $k, 'p' => $P['key'], 'from' => $P['key'] === 'custom' ? $P['from'] : '', 'to' => $P['key'] === 'custom' ? $P['to'] : ''])) ?>" class="<?= $tab === $k ? 'on' : '' ?>"<?= $tab === $k ? ' aria-current="page"' : '' ?>><?= $l ?></a>
   <?php endforeach; ?>
 </nav>
@@ -155,6 +162,27 @@ page_head('Reports', $tab === 'campaigns' ? '<a class="btn btn-ghost btn-sm" hre
         [['runs', 'Started', 1], ['done', 'Finished', 3]], ['sub' => 'note', 'max_rows' => 20, 'empty' => 'No automation runs in this period.']),
       'Open one for its step-by-step report.', 'flow-bars') ?>
   </div>
+
+<?php elseif ($tab === 'sms'):
+  $srcName = ['campaign' => 'Campaigns', 'api' => 'API', 'crm' => 'CRM', 'automation' => 'Automations', 'alert' => 'Alerts to the team', 'test' => 'Tests', 'manual' => 'Typed']; ?>
+  <div class="viz-kpis">
+    <?= viz_kpi('SMS sent', $sm['sent'], $smW['sent'], ['compare' => $cmp, 'spark' => $sm['sent_series']]) ?>
+    <?= viz_kpi('Delivered', $pct($sm['delivered'], $sm['sent']), $pct($smW['delivered'], $smW['sent']), ['fmt' => 'pct', 'compare' => $cmp, 'sub' => number_format($sm['delivered']) . ' confirmed by the provider']) ?>
+    <?= viz_kpi('Failed', $sm['failed'], $smW['failed'], ['compare' => $cmp, 'up_good' => false, 'href' => 'sms.php?tab=log&status=failed']) ?>
+    <?= viz_kpi('Parts', $sm['parts'], $smW['parts'], ['compare' => $cmp, 'sub' => $sm['sent'] ? round($sm['parts'] / $sm['sent'], 1) . ' per SMS' : '']) ?>
+    <?= viz_kpi('Credits', $sm['credits'], $smW['credits'], ['compare' => $cmp, 'up_good' => false]) ?>
+  </div>
+  <?= viz_card('SMS over time', viz_trend($sm['labels'], [['label' => 'Sent', 'values' => $sm['sent_series'], 'slot' => 1], ['label' => 'Failed', 'values' => $sm['failed_series'], 'slot' => 2]],
+        ['type' => 'columns', 'aria' => 'SMS sent and failed', 'x_label' => ucfirst($P['bucket']), 'empty' => 'No SMS in this period.']), 'By the ' . $P['bucket'] . ' they were sent.', 'sms-trend') ?>
+  <div class="viz-grid3" style="margin-top:16px">
+    <?= viz_card('Sent by', viz_bars(array_map(fn($r) => ['label' => $srcName[$r['label']] ?? $r['label'], 'n' => (int) $r['ok'], 'note' => number_format((int) $r['credits']) . ' credits'], $bySrc),
+          [['n', 'Sent', 1]], ['sub' => 'note', 'empty' => 'No SMS in this period.']), 'Campaigns, your systems (API), the CRM, automations and team alerts.', 'sms-src') ?>
+    <?= viz_card('By sender name', viz_bars(array_map(fn($r) => ['label' => (string) $r['label'], 'n' => (int) $r['ok'], 'dl' => (int) $r['dl']], $bySender),
+          [['n', 'Sent', 1], ['dl', 'Delivered', 3]], ['empty' => 'No SMS in this period.']), '', 'sms-sender') ?>
+    <?= viz_card('Why SMS failed', viz_bars(array_map(fn($r) => ['label' => (string) $r['label'], 'n' => (int) $r['n']], $smsFails), [['n', 'SMS', 2]],
+          ['empty' => 'Nothing failed in this period.']), 'Failed SMS are refunded.', 'sms-fails') ?>
+  </div>
+  <p class="text-muted" style="font-size:12.5px;margin-top:10px">Every SMS is listed in <a href="sms.php?tab=log">SMS → Log</a>, with CSV and Excel export.</p>
 
 <?php else: ?>
   <?php if (!$ads): ?>

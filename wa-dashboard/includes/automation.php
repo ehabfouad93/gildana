@@ -549,6 +549,23 @@ function automation_run_steps(array $client, array $contact, array $run, array $
                 break;
             }
             $run['current_step_id'] = $step['next_step_id'];
+        } elseif ($type === 'sms') {
+            /* An SMS to their phone. Not reachable — no number, opted out of SMS, or no SMS on the
+               account — takes the "Not reachable" exit when wired, else carries on. */
+            if (!function_exists('crm_sms_available')) require_once __DIR__ . '/crm_notify.php';
+            $text = auto_render((string) ($cfg['body'] ?? ''), $contact, $ctx);
+            $reach = $text !== '' && !empty($contact['phone_e164']) && empty($contact['sms_opt_out_at']) && crm_sms_available($client);
+            if (!$reach) { $run['current_step_id'] = !empty($cfg['unreachable_next']) ? (int) $cfg['unreachable_next'] : $step['next_step_id']; continue; }
+            if (auto_dry_run()) {
+                $log = &auto_preview_log();
+                $log[] = ['step_id' => (int) $step['id'], 'type' => 'text', 'body' => '📱 SMS: ' . $text];
+            } else {
+                require_once __DIR__ . '/sms.php';
+                $r = sms_send_now($client, (string) $contact['phone_e164'], sms_render($text, $contact),
+                                  ['source' => 'automation', 'render' => false, 'sender' => (string) ($cfg['sender'] ?? '')], (int) $contact['id']);
+                if (!$r['ok']) auto_step_event($run, $stepId, 'stalled', 'sms_failed');
+            }
+            $run['current_step_id'] = $step['next_step_id'];
         } elseif ($type === 'export') {
             auto_export_data($client, $flow, $run, $step, $contact, $ctx, $cfg);
             // Saving to the CRM can give the person a number, or join them to their WhatsApp contact:

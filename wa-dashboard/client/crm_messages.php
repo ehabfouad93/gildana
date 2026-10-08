@@ -18,6 +18,7 @@ if (!is_client_admin()) {
 $stages = crm_stages($cid);
 $stageMap = crm_stage_map($cid);
 $tpls = crm_tpl_choices($cid);
+$smsOk = crm_sms_available($CLIENT);   // "Send by: WhatsApp / SMS" appears only when the account can send SMS
 $err = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -27,15 +28,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($a === 'stage_msg') {
         $sid = (int) ($_POST['stage_id'] ?? 0);
         $tid = (int) ($_POST['template_id'] ?? 0);
+        $by = $smsOk && isset(crm_send_by_choices(false)[$_POST['send_by'] ?? '']) ? (string) $_POST['send_by'] : 'whatsapp';
+        $smsText = mb_substr(trim((string) ($_POST['sms_text'] ?? '')), 0, 1530);
+        if ($by === 'sms') $tid = 0;                     // an SMS-only message has no template
         if (!isset($stageMap[$sid])) $err = 'Choose a stage.';
-        elseif (!isset($tpls[$tid])) $err = 'Choose an approved template.';
-        elseif ($tpls[$tid]['media'] && trim((string) ($_POST['media'] ?? '')) === '') $err = 'This template needs a ' . $tpls[$tid]['media'] . ' — paste its link.';
+        elseif ($by !== 'whatsapp' && $smsText === '') $err = 'Write the SMS text.';
+        elseif ($by !== 'sms' && !isset($tpls[$tid])) $err = 'Choose an approved template.';
+        elseif ($tid && $tpls[$tid]['media'] && trim((string) ($_POST['media'] ?? '')) === '') $err = 'This template needs a ' . $tpls[$tid]['media'] . ' — paste its link.';
         else {
-            db_run("INSERT INTO crm_stage_msgs (client_id,stage_id,template_id,vars,header_media,delay_minutes,on_arrival,active,created_at)
-                    VALUES (?,?,?,?,?,?,?,1,NOW())
-                    ON DUPLICATE KEY UPDATE template_id=VALUES(template_id), vars=VALUES(vars), header_media=VALUES(header_media),
+            db_run("INSERT INTO crm_stage_msgs (client_id,stage_id,template_id,send_by,sms_text,vars,header_media,delay_minutes,on_arrival,active,created_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,1,NOW())
+                    ON DUPLICATE KEY UPDATE template_id=VALUES(template_id), send_by=VALUES(send_by), sms_text=VALUES(sms_text), vars=VALUES(vars), header_media=VALUES(header_media),
                                             delay_minutes=VALUES(delay_minutes), on_arrival=VALUES(on_arrival), active=1",
-                   [$cid, $sid, $tid, json_encode(crm_tokens_from_post('vars', $_POST), JSON_UNESCAPED_UNICODE),
+                   [$cid, $sid, $tid ?: null, $by, $smsText !== '' ? $smsText : null, json_encode($tid ? crm_tokens_from_post('vars', $_POST) : [], JSON_UNESCAPED_UNICODE),
                     trim((string) ($_POST['media'] ?? '')) ?: null, max(0, min(10080, (int) ($_POST['delay'] ?? 0))),
                     !empty($_POST['on_arrival']) ? 1 : 0]);
             flash('Saved. Leads moved to ' . $stageMap[$sid]['name'] . ' will get it.');
@@ -78,18 +83,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $steps = [];
         foreach ((array) ($_POST['steps'] ?? []) as $st) {
             $tid = (int) ($st['template'] ?? 0);
-            if (!$tid) continue;
+            $by = $smsOk && isset(crm_send_by_choices(false)[$st['send_by'] ?? '']) ? (string) $st['send_by'] : 'whatsapp';
+            $smsText = mb_substr(trim((string) ($st['sms'] ?? '')), 0, 1530);
+            if (!$tid && !($by === 'sms' && $smsText !== '')) continue;
             $delay = max(0, (int) ($st['delay'] ?? 0)) * (($st['unit'] ?? 'h') === 'd' ? 24 : 1);
-            $steps[] = ['template_id' => $tid, 'delay_hours' => min(24 * 90, $delay),
-                        'vars' => crm_tokens_from_post('vars', $st), 'media' => trim((string) ($st['media'] ?? ''))];
+            $steps[] = ['template_id' => $tid, 'delay_hours' => min(24 * 90, $delay), 'send_by' => $by, 'sms' => $smsText,
+                        'vars' => $tid ? crm_tokens_from_post('vars', $st) : [], 'media' => trim((string) ($st['media'] ?? ''))];
         }
         if ($name === '') $err = 'Give the sequence a name, like "No answer follow-up".';
         elseif (!isset(crm_seq_triggers()[$trig])) $err = 'Choose when a lead joins.';
         elseif (in_array($trig, ['no_answer', 'stale'], true) && $n < 1) $err = 'Say how many ' . ($trig === 'stale' ? 'days' : 'no-answers') . '.';
         elseif ($trig === 'stage' && !isset($stageMap[$n])) $err = 'Choose the stage.';
         elseif (!$steps) $err = 'Add at least one message.';
-        elseif ($bad = array_filter($steps, fn($s) => !isset($tpls[$s['template_id']]))) $err = 'Every message needs an approved template.';
-        elseif ($bad = array_filter($steps, fn($s) => $tpls[$s['template_id']]['media'] && $s['media'] === '')) $err = 'A template with a picture or file needs its link.';
+        elseif ($bad = array_filter($steps, fn($s) => $s['send_by'] !== 'sms' && !isset($tpls[$s['template_id']]))) $err = 'Every WhatsApp message needs an approved template.';
+        elseif ($bad = array_filter($steps, fn($s) => $s['send_by'] !== 'whatsapp' && $s['sms'] === '')) $err = 'Write the SMS text for every message sent by SMS.';
+        elseif ($bad = array_filter($steps, fn($s) => $s['template_id'] && isset($tpls[$s['template_id']]) && $tpls[$s['template_id']]['media'] && $s['media'] === '')) $err = 'A template with a picture or file needs its link.';
         else {
             if ($id && db_val("SELECT COUNT(*) FROM crm_sequences WHERE id=? AND client_id=?", [$id, $cid])) {
                 db_run("UPDATE crm_sequences SET name=?, trigger_kind=?, trigger_n=? WHERE id=?", [mb_substr($name, 0, 120), $trig, $n, $id]);
@@ -99,8 +107,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 [$cid, mb_substr($name, 0, 120), $trig, $n]);
             }
             foreach ($steps as $i => $s) {
-                db_insert("INSERT INTO crm_seq_steps (sequence_id,sort,delay_hours,template_id,vars,header_media) VALUES (?,?,?,?,?,?)",
-                          [$id, $i, $s['delay_hours'], $s['template_id'], json_encode($s['vars'], JSON_UNESCAPED_UNICODE), $s['media'] ?: null]);
+                db_insert("INSERT INTO crm_seq_steps (sequence_id,sort,delay_hours,template_id,send_by,sms_text,vars,header_media) VALUES (?,?,?,?,?,?,?,?)",
+                          [$id, $i, $s['delay_hours'], $s['template_id'] ?: null, $s['send_by'], $s['sms'] !== '' ? $s['sms'] : null,
+                           json_encode($s['vars'], JSON_UNESCAPED_UNICODE), $s['media'] ?: null]);
             }
             flash('Sequence saved.');
             redirect('crm_messages.php#sequences');
@@ -171,7 +180,9 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
       <tr class="<?= $m && !(int) $m['active'] ? 'muted-row' : '' ?>">
         <td><strong><?= e($st['name']) ?></strong></td>
         <td><?php if ($m): ?>
-            <?= e($t ? $t['name'] : 'A template that is no longer approved') ?>
+            <?php $mby = (string) ($m['send_by'] ?? 'whatsapp'); ?>
+            <?= $mby === 'sms' ? '<span class="pill gray">SMS</span> ' . e(mb_strimwidth((string) $m['sms_text'], 0, 60, '…')) : e($t ? $t['name'] : 'A template that is no longer approved') ?>
+            <?= $mby === 'wa_then_sms' ? ' <span class="pill gray">then SMS if it fails</span>' : '' ?>
             <span class="text-muted" style="display:block;font-size:12px"><?= (int) $m['delay_minutes'] ? 'After ' . (int) $m['delay_minutes'] . ' minutes' : 'Straight away' ?>
               <?= (int) $m['on_arrival'] ? ' · also for new leads arriving here' : '' ?>
               <?php $vv = json_decode((string) $m['vars'], true) ?: []; if ($vv): ?> · <?= e(implode(', ', array_map(fn($i, $v) => '{{' . ($i + 1) . '}} ' . $tokenWord($v), array_keys($vv), $vv))) ?><?php endif; ?>
@@ -180,7 +191,8 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
         <td style="text-align: end;white-space:nowrap">
           <button type="button" class="btn btn-ghost btn-sm" onclick='smEdit(<?= json_encode(['stage' => (int) $st['id'], 'name' => $st['name'],
              'template' => $m ? (int) $m['template_id'] : 0, 'vars' => $m ? (json_decode((string) $m['vars'], true) ?: []) : [],
-             'media' => $m['header_media'] ?? '', 'delay' => $m ? (int) $m['delay_minutes'] : 0, 'arrival' => $m ? (int) $m['on_arrival'] : 0], JSON_HEX_APOS | JSON_HEX_QUOT) ?>)'><?= $m ? 'Edit' : 'Set a message' ?></button>
+             'media' => $m['header_media'] ?? '', 'delay' => $m ? (int) $m['delay_minutes'] : 0, 'arrival' => $m ? (int) $m['on_arrival'] : 0,
+             'send_by' => $m['send_by'] ?? 'whatsapp', 'sms' => $m['sms_text'] ?? ''], JSON_HEX_APOS | JSON_HEX_QUOT) ?>)'><?= $m ? 'Edit' : 'Set a message' ?></button>
           <?php if ($m): ?>
             <form method="post" style="display:inline"><?= csrf_field() ?><input type="hidden" name="action" value="stage_msg_toggle"><input type="hidden" name="id" value="<?= (int) $m['id'] ?>">
               <button class="btn-link"><?= (int) $m['active'] ? 'Turn off' : 'Turn on' ?></button></form>
@@ -194,11 +206,15 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
   <h2 id="sm-title">Message for a stage</h2>
   <form method="post">
     <?= csrf_field() ?><input type="hidden" name="action" value="stage_msg"><input type="hidden" name="stage_id" id="sm-stage">
-    <div class="field" style="max-width:480px"><span class="lbl">Template</span>
+    <?php if ($smsOk): ?><div class="field" style="max-width:320px"><span class="lbl">Send by</span><select name="send_by" id="sm-by">
+      <?php foreach (crm_send_by_choices(false) as $bv => $bl): ?><option value="<?= $bv ?>"><?= e($bl) ?></option><?php endforeach; ?></select></div><?php endif; ?>
+    <div class="field sm-wa" style="max-width:480px"><span class="lbl">Template</span>
       <select name="template_id" id="sm-tpl" class="tpl-pick" data-vars="sm-vars" data-media="sm-media-wrap"><option value="">Choose…</option>
         <?php foreach ($tpls as $t): ?><option value="<?= $t['id'] ?>"><?= e($t['name'] . ' (' . $t['lang'] . ')') ?></option><?php endforeach; ?></select>
       <div class="tpl-preview text-muted" id="sm-tpl-prev"></div></div>
-    <div class="tpl-vars" id="sm-vars" data-prefix="vars"></div>
+    <div class="tpl-vars sm-wa" id="sm-vars" data-prefix="vars"></div>
+    <?php if ($smsOk): ?><div class="field sm-sms" style="max-width:640px"><span class="lbl">SMS text <span class="text-muted">— the same fields work: {{first_name}}, {{owner_name}}, {{project}}…</span></span>
+      <textarea name="sms_text" id="sm-sms" rows="3" maxlength="1530"></textarea></div><?php endif; ?>
     <div class="field" id="sm-media-wrap" hidden style="max-width:480px"><span class="lbl">Picture or file link</span><input type="url" name="media" id="sm-media" placeholder="https://…"></div>
     <div class="grid2" style="max-width:640px">
       <div class="field"><span class="lbl">Send</span><select name="delay" id="sm-delay">
@@ -366,10 +382,16 @@ function smEdit(d){
   $('sm-stage').value = d.stage; $('sm-tpl').value = d.template || ''; $('sm-media').value = d.media || '';
   $('sm-delay').value = String(d.delay); if (!$('sm-delay').value) $('sm-delay').value = '0';
   $('sm-arrival').checked = !!d.arrival;
+  if ($('sm-by')) { $('sm-by').value = d.send_by || 'whatsapp'; $('sm-sms').value = d.sms || ''; smBy(); }
   tplPicked($('sm-tpl'), $('sm-vars'), $('sm-media-wrap'), $('sm-tpl-prev'), d.vars, 'vars');
   $('sm-form').scrollIntoView({behavior: 'smooth'});
 }
 $('sm-tpl').onchange = e => tplPicked(e.target, $('sm-vars'), $('sm-media-wrap'), $('sm-tpl-prev'), [], 'vars');
+/* WhatsApp needs a template; SMS needs its text; "SMS if it fails" needs both. */
+function smBy(){ const b = $('sm-by') ? $('sm-by').value : 'whatsapp';
+  document.querySelectorAll('#sm-form .sm-wa').forEach(x => x.hidden = b === 'sms'); document.querySelectorAll('#sm-form .sm-sms').forEach(x => x.hidden = b === 'whatsapp'); }
+if ($('sm-by')) $('sm-by').onchange = smBy;
+const SMS_OK = <?= $smsOk ? 'true' : 'false' ?>;
 /* Visit messages default to the visit's own details. */
 const VISIT_DEFAULT = ['first_name', 'visit_date', 'visit_time', 'visit_place', 'owner_name', 'owner_phone'];
 [['vc', 'cvars', <?= json_encode(json_decode((string) ($vs['visit_confirm_vars'] ?? ''), true) ?: []) ?>],
@@ -392,6 +414,10 @@ function seqStep(s){
       <select name="steps[${i}][unit]"><option value="h" ${days ? '' : 'selected'}>hours</option><option value="d" ${days ? 'selected' : ''}>days</option></select>
       <span class="seq-after">after ${i === 0 ? 'joining' : 'the message before'}</span></span>
       <button type="button" class="btn-link" style="color:var(--danger)" onclick="this.closest('.seq-step').remove(); seqLabels()">Remove</button></div>
+    ${SMS_OK ? `<select name="steps[${i}][send_by]" class="seq-by" style="width:auto;margin-bottom:6px">
+      <option value="whatsapp" ${(s.send_by||'whatsapp')==='whatsapp'?'selected':''}>WhatsApp</option><option value="sms" ${s.send_by==='sms'?'selected':''}>SMS</option>
+      <option value="wa_then_sms" ${s.send_by==='wa_then_sms'?'selected':''}>WhatsApp, SMS if it fails</option></select>
+      <textarea name="steps[${i}][sms]" class="seq-sms" rows="2" maxlength="1530" placeholder="SMS text — {{first_name}}, {{owner_name}}…">${esc(s.sms_text || '')}</textarea>` : ''}
     <select name="steps[${i}][template]" class="seq-tpl"><option value="">Choose a template…</option>
       ${Object.values(TPLS).map(t => `<option value="${t.id}" ${s.template_id == t.id ? 'selected' : ''}>${esc(t.name + ' (' + t.lang + ')')}</option>`).join('')}</select>
     <div class="tpl-preview text-muted"></div>
@@ -401,6 +427,10 @@ function seqStep(s){
   const sel = div.querySelector('.seq-tpl'), pick = tok => tplPicked(sel, div.querySelector('.tpl-vars'), div.querySelector('.field'), div.querySelector('.tpl-preview'), tok, `steps[${i}][vars]`);
   sel.onchange = () => pick([]);
   if (s.template_id) pick(s.vars || []);
+  const by = div.querySelector('.seq-by');
+  if (by) { const sync = () => { const b = by.value; div.querySelector('.seq-sms').hidden = b === 'whatsapp';
+      [sel, div.querySelector('.tpl-preview'), div.querySelector('.tpl-vars')].forEach(x => x.hidden = b === 'sms'); };
+    by.onchange = sync; sync(); }
   seqLabels();
 }
 function seqLabels(){ document.querySelectorAll('#seq-steps .seq-after').forEach((el, k) => el.textContent = 'after ' + (k === 0 ? 'joining' : 'the message before')); }
@@ -413,6 +443,7 @@ if ($('seq-f')) {
   $('seq-trig').onchange = seqTrig; seqTrig();
   $('seq-f').addEventListener('submit', () => { if ($('seq-trig').value === 'stage') $('seq-n').value = $('seq-stage').value; if ($('seq-trig').value === 'new_lead') $('seq-n').value = 0; });
   const existing = <?= json_encode(array_map(fn($st) => ['template_id' => (int) $st['template_id'], 'delay_hours' => (int) $st['delay_hours'],
+                     'send_by' => $st['send_by'] ?? 'whatsapp', 'sms_text' => $st['sms_text'] ?? '',
                      'vars' => json_decode((string) $st['vars'], true) ?: [], 'header_media' => $st['header_media']], $editSteps)) ?>;
   existing.length ? existing.forEach(seqStep) : seqStep();
 }

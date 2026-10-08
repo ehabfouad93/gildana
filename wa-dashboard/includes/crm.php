@@ -241,7 +241,7 @@ function crm_deal_value(string $raw, string $phone): ?float
 /** The kinds of thing a salesperson logs against a lead. */
 function crm_activity_kinds(): array
 {
-    return ['call' => 'Call', 'whatsapp' => 'WhatsApp', 'meeting' => 'Meeting', 'visit' => 'Site visit',
+    return ['call' => 'Call', 'whatsapp' => 'WhatsApp', 'sms' => 'SMS', 'meeting' => 'Meeting', 'visit' => 'Site visit',
             'email' => 'Email', 'note' => 'Comment'];
 }
 

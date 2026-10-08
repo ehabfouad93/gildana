@@ -48,6 +48,9 @@ page_head('Overview', '<a class="btn btn-ghost btn-sm" href="reports.php?' . e(h
   <?= viz_kpi('Credits used', $cr['used'], $crW['used'], ['compare' => $cmp, 'spark' => $credSeries, 'slot' => 4]) ?>
   <?= viz_kpi('Credits added', $cr['added'], $crW['added'], ['compare' => $cmp, 'sub' => 'top-ups and plan grants']) ?>
   <?= viz_kpi('New clients', $newC, $newCW, ['compare' => $cmp]) ?>
+  <?php $smA = stats_sms(null, $P['start'], $P['end']); $smAW = stats_sms(null, $P['prev_start'], $P['prev_end']); if ($smA['sent'] || $smAW['sent']): ?>
+    <?= viz_kpi('SMS sent', $smA['sent'], $smAW['sent'], ['compare' => $cmp, 'sub' => number_format($smA['failed']) . ' failed · ' . number_format($smA['parts']) . ' parts', 'href' => 'sms.php']) ?>
+  <?php endif; ?>
   <?= viz_kpi('Running low', count($runningOut), null, ['up_good' => false, 'sub' => 'under 2 weeks of credits, or under 100', 'href' => '#running-out']) ?>
 </div>
 

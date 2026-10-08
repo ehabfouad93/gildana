@@ -6,6 +6,7 @@ require_once __DIR__ . '/../includes/campaign.php';
 require_once __DIR__ . '/../includes/inbox.php';
 require_once __DIR__ . '/../includes/ai.php';
 require_once __DIR__ . '/../includes/automation.php';
+require_once __DIR__ . '/../includes/crm_notify.php';   // crm_sms_available: the Send SMS step
 
 $cid = (int) $CLIENT['id'];
 $id  = (int) ($_GET['id'] ?? 0);
@@ -209,6 +210,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save'
                 case 'comment_dm':
                     $cfg = ['body' => (string) ($c['body'] ?? ''), 'wait_reply' => !empty($c['wait_reply']), 'save_as' => (string) ($c['save_as'] ?? '')];
                     $next = $R($out['next'] ?? null); break;
+                case 'sms':
+                    // An SMS to their phone; "Not reachable" when they have no number, opted out of SMS, or the account has no SMS.
+                    $cfg = ['body' => mb_substr((string) ($c['body'] ?? ''), 0, 1530), 'sender' => (string) ($c['sender'] ?? '')];
+                    if (($u = $R($out['unreachable'] ?? null)) !== null) $cfg['unreachable_next'] = $u;
+                    $next = $R($out['next'] ?? null); break;
                 case 'export':
                     $cfg = ['fields' => array_values(array_map('strval', (array) ($c['fields'] ?? []))),
                             'to_sheet' => !empty($c['to_sheet']), 'sheet_id' => trim((string) ($c['sheet_id'] ?? '')), 'sheet_name' => (string) ($c['sheet_name'] ?? ''),
@@ -397,6 +403,7 @@ function automation_graph_for_editor(int $id): array
             case 'collect':  $node['config'] = ['sheet_name' => $c['sheet_name'] ?? 'Leads', 'fields' => $c['fields'] ?? ['phone','name','last_reply','score','tags']]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
             case 'comment_reply':
             case 'comment_dm': $node['config'] = ['body' => $c['body'] ?? '', 'wait_reply' => !empty($c['wait_reply']), 'save_as' => $c['save_as'] ?? '']; $node['outputs']['next'] = $tid($s['next_step_id']); break;
+            case 'sms': $node['config'] = ['body' => $c['body'] ?? '', 'sender' => $c['sender'] ?? '']; $node['outputs']['next'] = $tid($s['next_step_id']); break;
             case 'export': $node['config'] = ['fields' => $c['fields'] ?? ['date','name','phone','channel','last_reply','all_answers'], 'to_sheet' => !empty($c['to_sheet']),
                     'sheet_id' => $c['sheet_id'] ?? '', 'sheet_name' => $c['sheet_name'] ?? '', 'sheet_tab' => $c['sheet_tab'] ?? '', 'to_crm' => !empty($c['to_crm']),
                     'webhook_url' => $c['webhook_url'] ?? '', 'emails' => $c['emails'] ?? '', 'secret' => $c['secret'] ?? ''];
@@ -667,6 +674,7 @@ client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
           <option value="buttons">Reply buttons</option>
           <option value="list_msg">Menu list (up to 10)</option>
         </optgroup>
+        <?php if (function_exists('crm_sms_available') && crm_sms_available($CLIENT)): ?><optgroup label="SMS"><option value="sms">Send SMS</option></optgroup><?php endif; ?>
         <optgroup label="Comments (Facebook / Instagram)">
           <option value="comment_reply">Reply to the comment</option>
           <option value="comment_dm">Reply privately (message)</option>
@@ -756,6 +764,7 @@ const RECENT_POSTS = <?= json_encode(array_map(fn($p) => ['id' => (string) $p['p
 const SEND_CHANNELS = <?= json_encode(array_values(array_intersect(['whatsapp', 'messenger', 'instagram'], client_channels($CLIENT)))) ?>;
 const SENDING_TYPES = <?= json_encode(auto_sending_types()) ?>;
 const EXPORT_FIELDS = <?= json_encode(auto_export_fields(), JSON_UNESCAPED_UNICODE) ?>;
+const SMS_SENDERS = <?= json_encode(function_exists('crm_sms_available') && crm_sms_available($CLIENT) ? (function () use ($CLIENT) { require_once __DIR__ . '/../includes/sms.php'; return sms_client_senders($CLIENT); })() : []) ?>;
 const INIT_START = <?= json_encode($startNode) ?>;
 const esc = s => (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
@@ -1020,7 +1029,7 @@ async function runPreview(){
 
 const TYPE_LABEL = {start:'Trigger',text:'Send text',image:'Send image',template:'Template',buttons:'Buttons',question:'Ask',ai_chat:'AI conversation',ai_branch:'AI branch',ai_score:'AI score',score:'Add points',wait:'Wait',tag:'Tag',list_add:'Add to list',notify:'Notify',collect:'Collect',sheet_export:'Write to Sheet',
   condition:'If / then',split:'Split test',jump:'Go to automation',wait_until:'Wait until',set_field:'Remember',http:'Web service',list_msg:'Menu list',
-  comment_reply:'Reply to comment',comment_dm:'Private reply',export:'Export data'};
+  comment_reply:'Reply to comment',comment_dm:'Private reply',export:'Export data',sms:'Send SMS'};
 const CH_NAME = {whatsapp:'WhatsApp', messenger:'Messenger', instagram:'Instagram'};
 
 let nodes = {};        // id -> {id,type,x,y,config,outputs}
@@ -1081,6 +1090,7 @@ function summary(n){
              (o.length ? '<div class="muted" style="margin-top:4px">'+o.length+' option'+(o.length>1?'s':'')+'</div>' : ''); }
     case 'notify': return '🔔 notify me';
     case 'collect': return '📥 sheet: '+esc(c.sheet_name||'Leads');
+    case 'sms': return '📱 '+(esc(c.body)||'<span class="muted">write the SMS</span>');
     case 'comment_reply': return '💬 '+(esc(c.body)||'<span class="muted">write the public reply</span>');
     case 'comment_dm': return '✉️ '+(esc(c.body)||'<span class="muted">write the private message</span>')+(c.wait_reply?'<div class="muted" style="margin-top:4px">waits for their answer</div>':'');
     case 'export': { const to=[c.to_sheet&&'Sheet',c.to_crm&&'CRM',c.webhook_url&&'webhook',c.emails&&'email'].filter(Boolean);
@@ -1096,6 +1106,7 @@ function outPorts(n){
   if(n.type==='condition') return [{key:'yes',label:'Yes'},{key:'no',label:'No'}];
   if(n.type==='split') return (n.config.paths||[]).map((p,i)=>({key:'p'+i,label:(p.label||String.fromCharCode(65+i))+' ('+(p.weight||1)+')'}));
   if(n.type==='http') return [{key:'next',label:'OK'},{key:'fail',label:'Failed'}];
+  if(n.type==='sms') return [{key:'next',label:''},{key:'unreachable',label:'Not reachable'}];
   if(n.type==='jump') return [];   // a jump hands over and ends this flow
   // A step sending on a named channel: where to go when the person is not reachable there.
   if(SENDING_TYPES.includes(n.type) && n.config && n.config.send_on){
@@ -1453,7 +1464,7 @@ function defaultConfig(type){
     wait_until:{time:'09:00',weekday:''},
     http:{method:'GET',url:'',body:'',save_as:'',pick:''},
     list_msg:{body:'',button:'Choose',header:'',options:[{title:'',description:''}]},
-    comment_reply:{body:''}, comment_dm:{body:'',wait_reply:true,save_as:''},
+    comment_reply:{body:''}, comment_dm:{body:'',wait_reply:true,save_as:''}, sms:{body:'',sender:''},
     export:{fields:['date','name','phone','channel','last_reply','all_answers'],to_sheet:false,sheet_id:'',sheet_name:'',sheet_tab:'',to_crm:true,webhook_url:'',emails:'',secret:''}}[type]||{};
 }
 function addNode(type,data){
@@ -1489,6 +1500,9 @@ function cfgForm(n){ const c=n.config;
           <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('img-file').click()">Upload</button>
         </div><div class="hint" id="img-status"></div></label>
       <label><span class="lbl">Caption</span><input data-k="caption" value="${esc(c.caption)}"></label>`;
+    case 'sms': return `<label><span class="lbl">SMS text</span><textarea data-k="body" rows="4" maxlength="1530" placeholder="Hi {{name}}, your visit is confirmed for…">${esc(c.body)}</textarea></label>
+        ${SMS_SENDERS.length>1?`<label><span class="lbl">Sender</span><select data-k="sender">${SMS_SENDERS.map(x=>`<option ${c.sender===x?'selected':''}>${esc(x)}</option>`).join('')}</select></label>`:''}
+        <div class="hint">Goes to their phone number by SMS (credits per part). <b>Not reachable</b> when they have no number or asked not to get SMS. Answers and fields: {{name}}, {{first_name}}, your saved answers.</div>`;
     case 'comment_reply': return `<label><span class="lbl">Public reply, under their comment</span><textarea data-k="body" rows="3" placeholder="Thanks {{name}}! We sent you the details in a message 📩">${esc(c.body)}</textarea></label>
         <div class="hint">For automations started by a Facebook or Instagram comment. Everyone can see it.</div>`;
     case 'comment_dm': return `<label><span class="lbl">Private message to the person who commented</span><textarea data-k="body" rows="3" placeholder="Hi {{name}}, here are the prices you asked about…">${esc(c.body)}</textarea></label>

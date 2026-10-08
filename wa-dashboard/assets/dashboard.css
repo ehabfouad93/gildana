@@ -1886,3 +1886,27 @@ a.viz-kpi:hover { border-color: var(--brand); }
 }
 @media print { .viz-periods, .viz-table summary { display: none; } .viz-card { break-inside: avoid; } }
 .viz-sub { font-size: 13px; margin: 16px 0 8px; color: var(--ink); }
+
+/* SMS */
+.sms-gw-head { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
+.sms-gw.off { opacity: .7; }
+.sms-gw-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.sms-dlr { margin-top: 10px; font-size: 12.5px; overflow-wrap: anywhere; }
+.sms-dlr code { font-size: 11.5px; background: var(--chip); padding: 2px 6px; border-radius: 5px; }
+.sms-test { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.sms-test input { width: auto; flex: 1 1 160px; }
+.sms-prov-fields { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 8px 0 12px; }
+.sms-wide { grid-column: 1 / -1; }
+.sms-counter { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--slate); margin-top: 4px; font-variant-numeric: tabular-nums; }
+.sms-counter b { color: var(--ink); }
+.sms-src { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.sms-src label { border: 1px solid var(--line); border-radius: 9px; padding: 7px 12px; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--slate); }
+.sms-src label { position: relative; }
+.sms-src input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; pointer-events: none; }   /* hidden but still reachable by keyboard */
+.sms-src label:has(input:focus-visible) { outline: 2px solid var(--brand); outline-offset: 2px; }
+.sms-src label:has(input:checked) { background: var(--brand-tint); color: var(--brand); border-color: transparent; }
+.sms-pane[hidden] { display: none; }
+.sms-code { background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font-size: 12px; overflow-x: auto; white-space: pre; }
+.sw-sendby { display: flex; flex-direction: column; gap: 4px; }
+.sw-kind-row { display: flex; align-items: center; gap: 10px; justify-content: space-between; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding: 3px 0; }
+.sw-kind-row select { padding: 4px 8px; font-size: 12.5px; }

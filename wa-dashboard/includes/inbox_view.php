@@ -30,7 +30,7 @@ $IB_CHANNELS = isset($CLIENT) && function_exists('client_channels')
   .ib-tabs button{border:1px solid var(--line,rgba(var(--ink-rgb,13,19,33),.12));background:var(--surface,#fff);border-radius:999px;padding:3px 10px;font-size:12px;cursor:pointer;color:inherit}
   .ib-tabs button.on{background:var(--brand,#7C3AED);border-color:var(--brand,#7C3AED);color:#fff}
   .ib-chb{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:16px;padding:0 4px;border-radius:5px;font-size:9.5px;font-weight:700;color:#fff;letter-spacing:.02em;vertical-align:1px}
-  .ib-chb.whatsapp{background:#25D366}.ib-chb.messenger{background:#0866FF}.ib-chb.instagram{background:linear-gradient(45deg,#F58529,#DD2A7B 55%,#8134AF)}
+  .ib-chb.sms{background:#64748B}.ib-chb.whatsapp{background:#25D366}.ib-chb.messenger{background:#0866FF}.ib-chb.instagram{background:linear-gradient(45deg,#F58529,#DD2A7B 55%,#8134AF)}
   .ib-chsel{border:1px solid var(--line,rgba(var(--ink-rgb,13,19,33),.12));border-radius:8px;padding:6px 8px;font-size:12.5px;background:var(--surface,#fff);color:inherit;align-self:center}
   .ib-addlead{white-space:nowrap}
   .ib-badge{background:var(--brand,#7C3AED);color:#fff;border-radius:10px;font-size:11px;padding:1px 7px;font-weight:600}
@@ -216,7 +216,7 @@ const IB_SEP = <?= json_encode($IB_SEP) ?>;
 const IB_CSRF = <?= json_encode(csrf_token()) ?>;
 const IB_MULTI = <?= count($IB_CHANNELS) > 1 ? 'true' : 'false' ?>;
 let ibCur = 0, ibLast = 0, ibOpen = false, ibCh = '', ibChPicked = false, ibFilter = '';
-const IB_CH_SHORT = {whatsapp:'WA', messenger:'M', instagram:'IG'}, IB_CH_NAME = {whatsapp:'WhatsApp', messenger:'Messenger', instagram:'Instagram'};
+const IB_CH_SHORT = {whatsapp:'WA', messenger:'M', instagram:'IG', sms:'SMS'}, IB_CH_NAME = {whatsapp:'WhatsApp', messenger:'Messenger', instagram:'Instagram', sms:'SMS'};
 const chBadge = c => `<span class="ib-chb ${c}" title="${IB_CH_NAME[c]||c}">${IB_CH_SHORT[c]||'?'}</span>`;
 /* Who they are when there is no number yet: their Instagram handle, or the channel they wrote on. */
 const whoName = t => t.name || (t.phone_e164 ? '+'+t.phone_e164 : (t.ig_username ? '@'+t.ig_username : (IB_CH_NAME[t.last_channel]||'Contact')+' user'));
@@ -263,6 +263,7 @@ async function pollThread(){
     div.className='ib-b '+(m.direction==='out'?'ib-out':'ib-in');
     let st=''; if(m.direction==='out'){ const t=tick(m.status); if(t) st=`<span class="st ${m.status==='failed'?'failed':''}">${t} ${tfmt(m.created_at)}</span>`; }
     else st=`<span class="st">${tfmt(m.created_at)}</span>`;
+    if (m.channel==='sms') st = '<span class="st" title="Sent by SMS">SMS ·</span> ' + st;   // SMS sits in the same conversation, marked
     /* A failed send now says what went wrong in words the agent can act on, with Meta's own
        wording kept underneath so nothing is hidden. 'never' means a resend buys the same
        error, so the line says so rather than leaving them to try it three times. */

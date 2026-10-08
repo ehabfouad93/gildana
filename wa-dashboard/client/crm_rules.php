@@ -80,10 +80,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $ct = (int) ($c['template'] ?? 0);
             if ($ct && !db_val("SELECT COUNT(*) FROM templates WHERE id=? AND client_id=?", [$ct, $cid])) $ct = 0;
             $row = array_filter(['template' => $ct ?: null, 'vars' => $ct ? crm_tokens_from_post('vars', $c, crm_staff_tokens($cid)) : null,
-                                 'text' => mb_substr(trim((string) ($c['text'] ?? '')), 0, 1000) ?: null]);
+                                 'text' => mb_substr(trim((string) ($c['text'] ?? '')), 0, 1000) ?: null,
+                                 'sms' => mb_substr(trim((string) ($c['sms'] ?? '')), 0, 600) ?: null]);
             if ($row) $custom[$k] = $row;
         }
         $stages = array_map('intval', (array) ($_POST['stages'] ?? []));
+        $sendBy = [];
+        foreach ((array) ($_POST['send_by'] ?? []) as $k => $v) {
+            if (isset(crm_staff_wa_kinds()[$k]) && isset(crm_send_by_choices()[$v]) && $v !== 'whatsapp') $sendBy[$k] = $v;
+        }
+        if (db_has_column('crm_settings', 'staff_send_by')) crm_settings_set($cid, ['staff_send_by' => $sendBy ? json_encode($sendBy) : null]);
         crm_settings_set($cid, ['staff_wa_on' => !empty($_POST['on']) ? 1 : 0, 'staff_wa_template' => $tpl ?: null,
                                 'staff_wa_kinds' => implode(',', $kinds),
                                 'staff_wa_custom' => $custom ? json_encode($custom, JSON_UNESCAPED_UNICODE) : null,
@@ -249,7 +255,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 <?php endif; ?>
 
 <div class="card" id="staff-wa">
-  <h2>WhatsApp alerts to salespeople</h2>
+  <h2><?= crm_sms_available($CLIENT) ? 'WhatsApp and SMS alerts to salespeople' : 'WhatsApp alerts to salespeople' ?></h2>
   <p class="text-muted" style="font-size:12.5px;margin-top:-4px">Besides the bell in the app, send each person the alert on their own WhatsApp.
     <?= $hasPhone ? 'They go out from the company\'s linked phone, as ordinary messages.'
                   : 'Without a linked company phone they go through the WhatsApp Business API, which needs an approved template:
@@ -257,11 +263,16 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
   <form method="post">
     <?= csrf_field() ?><input type="hidden" name="action" value="staff_wa">
     <label class="mod-all"><input type="checkbox" name="on" value="1" <?= (int) $s['staff_wa_on'] ? 'checked' : '' ?>> Send WhatsApp alerts</label>
-    <div class="mod-grid" style="margin:10px 0">
+    <?php $smsOk = crm_sms_available($CLIENT); ?>
+    <div class="<?= $smsOk ? 'sw-sendby' : 'mod-grid' ?>" style="margin:10px 0">
       <?php foreach (crm_staff_wa_kinds() as $k => $l): ?>
-        <label class="mod-opt"><input type="checkbox" name="kinds[]" value="<?= $k ?>" <?= in_array($k, $kindsOn, true) ? 'checked' : '' ?>> <?= e($l) ?></label>
+        <div class="sw-kind-row"><label class="mod-opt"><input type="checkbox" name="kinds[]" value="<?= $k ?>" <?= in_array($k, $kindsOn, true) ? 'checked' : '' ?>> <?= e($l) ?></label>
+        <?php if ($smsOk): $by = crm_staff_send_by($s, $k); ?>
+          <select name="send_by[<?= $k ?>]" aria-label="Send by" style="width:auto"><?php foreach (crm_send_by_choices() as $bv => $bl): ?><option value="<?= $bv ?>" <?= $by === $bv ? 'selected' : '' ?>><?= e($bl) ?></option><?php endforeach; ?></select>
+        <?php endif; ?></div>
       <?php endforeach; ?>
     </div>
+    <?php if ($smsOk): ?><p class="hint" style="margin-top:-4px">SMS goes to the same phone number on their profile and costs credits per part; it uses each alert's SMS wording below.</p><?php endif; ?>
     <div class="field" id="sw-stages"><span class="lbl">Stages that alert the salesperson</span>
       <div class="sw-chips"><?php $stOn = explode(',', (string) ($s['staff_wa_stages'] ?? '')); foreach (crm_stages($cid) as $st): ?>
         <label class="mod-opt"><input type="checkbox" name="stages[]" value="<?= (int) $st['id'] ?>" <?= in_array((string) $st['id'], $stOn, true) ? 'checked' : '' ?>> <?= e($st['name']) ?></label>
@@ -290,6 +301,10 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
             <?php foreach ($approved as $t): ?><option value="<?= (int) $t['id'] ?>" <?= (int) ($own['template'] ?? 0) === (int) $t['id'] ? 'selected' : '' ?>><?= e($t['wa_name'] . ' (' . $t['language'] . ')') ?></option><?php endforeach; ?>
           </select><div class="hint sw-prev" style="white-space:pre-wrap"></div></div>
           <div class="sw-vars" data-prefix="custom[<?= $k ?>][vars]" data-tokens="<?= e(json_encode(array_values((array) ($own['vars'] ?? [])))) ?>"></div>
+        <?php endif; ?>
+        <?php if ($smsOk): ?>
+          <div class="field" style="margin-top:8px"><span class="lbl">SMS wording <span class="text-muted">(when this alert goes by SMS — empty uses the wording above, or the alert and its link)</span></span>
+            <textarea name="custom[<?= $k ?>][sms]" rows="2" maxlength="600" placeholder="{{alert}} {{link}}"><?= e((string) ($own['sms'] ?? '')) ?></textarea></div>
         <?php endif; ?>
       </details>
     <?php endforeach; ?>

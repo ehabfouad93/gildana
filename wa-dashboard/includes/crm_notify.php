@@ -237,10 +237,60 @@ function crm_staff_wa_tick(int $limit = 100): int
         $url = rtrim(app_base_url(), '/') . '/client/' . $t['url'];
         // Claim it first, so a slow send and the next pass can never both send it.
         if (!db_run("UPDATE crm_notices SET wa_status='sending' WHERE id=? AND wa_status IS NULL", [(int) $n['id']])) continue;
-        $r = crm_staff_send($client, (string) $n['phone'], $t['text'], $url, $n, (string) ($n['uname'] ?? ''));
+        $r = crm_staff_deliver($client, (string) $n['phone'], $t['text'], $url, $n, (string) ($n['uname'] ?? ''));
         db_run("UPDATE crm_notices SET wa_status=?, wa_error=? WHERE id=?",
                [$r['ok'] ? 'sent' : 'failed', $r['ok'] ? null : mb_substr($r['error'], 0, 255), (int) $n['id']]);
         if ($r['ok']) $sent++;
     }
     return $sent;
+}
+
+/* ───────────────────────── WhatsApp or SMS ───────────────────────── */
+
+/** The "Send by" choices for alerts, when the account has SMS. */
+function crm_send_by_choices(bool $both = true): array
+{
+    return ['whatsapp' => 'WhatsApp', 'sms' => 'SMS', 'wa_then_sms' => 'WhatsApp, SMS if it fails'] + ($both ? ['both' => 'WhatsApp and SMS'] : []);
+}
+
+/** May this account send SMS (module on and a gateway connected)? */
+function crm_sms_available(array $client): bool
+{
+    if (!db_has_column('clients', 'sms_rate') || !function_exists('client_modules') || !in_array('sms', client_modules($client), true)) return false;
+    require_once __DIR__ . '/sms.php';
+    return sms_client_gateway($client) !== null;
+}
+
+/** How one kind of alert goes out: whatsapp | sms | wa_then_sms | both. */
+function crm_staff_send_by(array $s, string $kind): string
+{
+    $map = json_decode((string) ($s['staff_send_by'] ?? ''), true) ?: [];
+    $v = (string) ($map[$kind] ?? 'whatsapp');
+    return isset(crm_send_by_choices()[$v]) ? $v : 'whatsapp';
+}
+
+/**
+ * Deliver one alert by the channel the account chose for its kind. SMS uses the alert's SMS wording
+ * (or its WhatsApp wording, or "alert + link") with the same fields filled in.
+ * @return array{ok:bool, error:string, how:string}
+ */
+function crm_staff_deliver(array $client, string $phone, string $text, string $url, ?array $notice = null, string $staffName = ''): array
+{
+    $s = crm_settings((int) $client['id']);
+    $kind = $notice ? ((string) $notice['kind'] === 'sla_team' ? 'sla' : (string) $notice['kind']) : '';
+    $by = $kind !== '' ? crm_staff_send_by($s, $kind) : 'whatsapp';
+    if ($by !== 'whatsapp' && !crm_sms_available($client)) $by = 'whatsapp';
+    $sms = function () use ($client, $phone, $text, $url, $notice, $staffName, $s, $kind) {
+        $own = $kind !== '' ? (crm_staff_custom($s)[$kind] ?? []) : [];
+        $wording = trim((string) ($own['sms'] ?? '')) ?: (trim((string) ($own['text'] ?? '')) ?: crm_staff_default_text());
+        $t = ['text' => $text, 'url' => $url];
+        $body = $notice ? crm_staff_render($wording, $notice, $t, $url, $staffName) : $text . "\n" . $url;
+        $r = sms_send_now($client, $phone, $body, ['source' => 'alert', 'render' => false, 'no_contact' => true]);
+        return ['ok' => $r['ok'], 'error' => (string) $r['error'], 'how' => 'sms'];
+    };
+    if ($by === 'sms') return $sms();
+    $wa = crm_staff_send($client, $phone, $text, $url, $notice, $staffName);
+    if ($by === 'both') { $r2 = $sms(); return ['ok' => $wa['ok'] || $r2['ok'], 'error' => trim(($wa['ok'] ? '' : 'WhatsApp: ' . $wa['error']) . ($r2['ok'] ? '' : ' SMS: ' . $r2['error'])), 'how' => 'both']; }
+    if ($by === 'wa_then_sms' && !$wa['ok']) { $r2 = $sms(); return ['ok' => $r2['ok'], 'error' => $r2['ok'] ? '' : 'WhatsApp: ' . $wa['error'] . ' SMS: ' . $r2['error'], 'how' => 'sms_fallback']; }
+    return $wa;
 }

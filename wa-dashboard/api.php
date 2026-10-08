@@ -14,6 +14,12 @@ declare(strict_types=1);
  *   POST   /api.php/v1/leads/{ref}/activities     {kind: call|whatsapp|meeting|visit|email|note, outcome, body}
  *   GET    /api.php/v1/stages | /users | /projects | /fields
  *
+ *   SMS (keys with the SMS scope, accounts with the SMS module):
+ *   POST   /api.php/v1/sms                        {to: "+20…" | [..≤1000], text, sender?, schedule_at?, reference?, callback_url?}
+ *   GET    /api.php/v1/sms/{id}                   one message's status
+ *   GET    /api.php/v1/sms                        ?reference=&status=&since=&page=&per_page=
+ *   GET    /api.php/v1/sms/balance | /sms/senders
+ *
  * The path can also be given as ?path=/v1/leads where the server does not pass PATH_INFO.
  */
 require_once __DIR__ . '/includes/bootstrap.php';
@@ -69,9 +75,84 @@ $find = function (string $ref) use ($cid, $out): array {
 };
 
 $res = $parts[0] ?? '';
+// What the key may do: the CRM, SMS, or both (keys made before SMS existed are CRM keys).
+$scopes = array_filter(explode(',', (string) ($K['scopes'] ?? 'crm')));
+if ($res === 'sms') {
+    if (!in_array('sms', $scopes, true)) $out(403, 'This key cannot send SMS. Make a key with SMS access on the SMS → API page.');
+    if (!in_array('sms', client_modules($CLIENT), true)) $out(403, 'SMS is not part of this account\'s plan.');
+    require_once __DIR__ . '/includes/sms.php';
+    require_once __DIR__ . '/includes/crm_automation.php';
+    if (!sms_ready()) $out(503, 'SMS is not installed yet (migration 064).');
+} elseif ($res !== 'me' && !in_array('crm', $scopes, true)) {
+    $out(403, 'This key is for SMS only. Make a key with CRM access on CRM → Integrations.');
+}
 switch (true) {
+    case $res === 'sms' && ($parts[1] ?? '') === 'balance' && $method === 'GET':
+        $out(200, ['credits' => (int) db_val("SELECT credits_balance FROM clients WHERE id=?", [$cid]), 'credits_per_part' => sms_rate($CLIENT),
+                   'part_size' => ['english' => 160, 'english_split' => 153, 'unicode' => 70, 'unicode_split' => 67]]);
+
+    case $res === 'sms' && ($parts[1] ?? '') === 'senders' && $method === 'GET':
+        $out(200, sms_client_senders($CLIENT));
+
+    case $res === 'sms' && isset($parts[1]) && ctype_digit((string) $parts[1]) && $method === 'GET':
+        $m = db_row("SELECT * FROM sms_messages WHERE id=? AND client_id=?", [(int) $parts[1], $cid]);
+        if (!$m) $out(404, 'No SMS ' . $parts[1] . '.');
+        $out(200, sms_public($m));
+
+    case $res === 'sms' && !isset($parts[1]) && $method === 'GET':
+        $w = "client_id=?"; $p = [$cid];
+        if (($v = trim((string) ($_GET['reference'] ?? ''))) !== '') { $w .= " AND reference=?"; $p[] = $v; }
+        if (($v = trim((string) ($_GET['status'] ?? ''))) !== '') { $w .= " AND status=?"; $p[] = $v; }
+        if (($v = trim((string) ($_GET['since'] ?? ''))) !== '') { if (!strtotime($v)) $out(400, 'since is not a date.'); $w .= " AND created_at >= ?"; $p[] = date('Y-m-d H:i:s', strtotime($v)); }
+        if (($v = trim((string) ($_GET['to'] ?? ''))) !== '') { $w .= " AND to_e164=?"; $p[] = normalize_phone($v, (string) ($CLIENT['default_country'] ?? '')); }
+        $per = max(1, min(500, (int) ($_GET['per_page'] ?? 100))); $page = max(1, (int) ($_GET['page'] ?? 1));
+        $total = (int) db_val("SELECT COUNT(*) FROM sms_messages WHERE $w", $p);
+        $out(200, array_map('sms_public', db_all("SELECT * FROM sms_messages WHERE $w ORDER BY id DESC LIMIT $per OFFSET " . (($page - 1) * $per), $p)),
+             ['page' => $page, 'per_page' => $per, 'total' => $total, 'pages' => (int) ceil($total / $per)]);
+
+    case $res === 'sms' && !isset($parts[1]) && $method === 'POST':
+        $to = $body['to'] ?? null;
+        $list = is_array($to) ? array_values($to) : (is_string($to) && trim($to) !== '' ? [$to] : []);
+        if (!$list) $out(422, '"to" is required: a number, or a list of up to 1,000 numbers.');
+        if (count($list) > 1000) $out(422, 'Up to 1,000 numbers per request — split the list.');
+        $text = trim((string) ($body['text'] ?? ''));
+        if ($text === '') $out(422, '"text" is required.');
+        if (mb_strlen($text) > 1530) $out(422, '"text" is too long (at most 1,530 characters, 10 parts).');
+        $ref = trim((string) ($body['reference'] ?? ''));
+        // The same reference within 24 hours: answer with what was already accepted, send nothing again.
+        if ($ref !== '') {
+            $prev = db_all("SELECT * FROM sms_messages WHERE client_id=? AND reference=? AND created_at > NOW() - INTERVAL 1 DAY ORDER BY id", [$cid, mb_substr($ref, 0, 120)]);
+            if ($prev) $out(200, ['accepted' => count($prev), 'credits' => array_sum(array_column($prev, 'credits')), 'messages' => array_map('sms_public', $prev), 'skipped' => []], ['duplicate' => true]);
+        }
+        $sched = null;
+        if (($v = trim((string) ($body['schedule_at'] ?? ''))) !== '') {
+            if (!strtotime($v)) $out(422, '"schedule_at" is not a date.');
+            $sched = date('Y-m-d H:i:s', strtotime($v));
+            if (strtotime($sched) < time() - 60) $out(422, '"schedule_at" is in the past.');
+        }
+        $cb = trim((string) ($body['callback_url'] ?? ''));
+        if ($cb !== '' && !preg_match('~^https?://~i', $cb)) $out(422, '"callback_url" must be an http(s) address.');
+        $q = sms_queue($CLIENT, array_map(fn($n) => ['phone' => (string) $n], $list), $text, [
+            'sender' => (string) ($body['sender'] ?? ''), 'source' => 'api', 'api_key_id' => (int) $K['id'], 'reference' => $ref,
+            'callback_url' => $cb, 'scheduled_at' => $sched]);
+        if (!$q['ok']) $out(422, $q['error']);
+        if ($q['credits'] > (int) db_val("SELECT credits_balance FROM clients WHERE id=?", [$cid])) {
+            db_run("UPDATE sms_messages SET status='skipped', error_title='Not enough credits' WHERE id IN (" . (implode(',', array_column($q['queued'], 'id')) ?: '0') . ")");
+            $out(402, 'Not enough credits: this needs ' . $q['credits'] . '.');
+        }
+        // One number now is sent while you wait; a batch (or a scheduled message) goes out from the queue in seconds.
+        if (count($q['queued']) === 1 && !$sched) {
+            sms_send_row($CLIENT, db_row("SELECT * FROM sms_messages WHERE id=?", [$q['queued'][0]['id']]));
+        } elseif ($q['queued'] && !$sched && function_exists('trigger_worker')) {
+            trigger_worker();
+        }
+        $ids = array_column($q['queued'], 'id');
+        $msgs = $ids ? db_all("SELECT * FROM sms_messages WHERE id IN (" . implode(',', array_map('intval', $ids)) . ") ORDER BY id") : [];
+        $out(201, ['accepted' => count($msgs), 'credits' => $q['credits'], 'messages' => array_map('sms_public', $msgs),
+                   'skipped' => array_map(fn($x) => ['to' => (string) $x[0], 'reason' => $x[1]], $q['skipped'])]);
+
     case $res === 'me' && $method === 'GET':
-        $out(200, ['key' => ['name' => $K['name'], 'prefix' => $K['prefix'], 'access' => $K['access'], 'system' => $K['system']],
+        $out(200, ['key' => ['name' => $K['name'], 'prefix' => $K['prefix'], 'access' => $K['access'], 'system' => $K['system'], 'scopes' => array_values($scopes)],
                    'account' => ['id' => $cid, 'name' => $CLIENT['name']]]);
 
     case $res === 'stages' && $method === 'GET':

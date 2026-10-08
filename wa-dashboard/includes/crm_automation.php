@@ -177,13 +177,32 @@ function crm_auto_api_ready(array $client): bool
 }
 
 function crm_queue(array $client, int $contactId, int $templateId, array $tokens, string $headerMedia, string $reason,
-                   ?string $dueAt = null, array $context = []): int
+                   ?string $dueAt = null, array $context = [], string $sendBy = 'whatsapp', ?string $smsText = null): int
 {
-    return db_insert("INSERT INTO crm_msg_queue (client_id,contact_id,template_id,vars,header_media,context,reason,due_at,created_at)
-                      VALUES (?,?,?,?,?,?,?,?,NOW())",
-        [(int) $client['id'], $contactId, $templateId, json_encode(array_values($tokens), JSON_UNESCAPED_UNICODE),
+    // "Send by": whatsapp (the template), sms (its own text), or wa_then_sms (the template, and the text by SMS if WhatsApp fails).
+    if (!db_has_column('crm_msg_queue', 'send_by')) $sendBy = 'whatsapp';
+    if ($sendBy === 'whatsapp' || !db_has_column('crm_msg_queue', 'send_by')) {
+        return db_insert("INSERT INTO crm_msg_queue (client_id,contact_id,template_id,vars,header_media,context,reason,due_at,created_at)
+                          VALUES (?,?,?,?,?,?,?,?,NOW())",
+            [(int) $client['id'], $contactId, $templateId, json_encode(array_values($tokens), JSON_UNESCAPED_UNICODE),
+             $headerMedia !== '' ? $headerMedia : null, $context ? json_encode($context, JSON_UNESCAPED_UNICODE) : null,
+             mb_substr($reason, 0, 40), $dueAt ?? date('Y-m-d H:i:s')]);
+    }
+    return db_insert("INSERT INTO crm_msg_queue (client_id,contact_id,template_id,send_by,sms_text,vars,header_media,context,reason,due_at,created_at)
+                      VALUES (?,?,?,?,?,?,?,?,?,?,NOW())",
+        [(int) $client['id'], $contactId, $templateId ?: null, $sendBy, $smsText, json_encode(array_values($tokens), JSON_UNESCAPED_UNICODE),
          $headerMedia !== '' ? $headerMedia : null, $context ? json_encode($context, JSON_UNESCAPED_UNICODE) : null,
          mb_substr($reason, 0, 40), $dueAt ?? date('Y-m-d H:i:s')]);
+}
+
+/** Send a queued message's SMS text to the lead. Returns ['ok', 'error', 'id']. */
+function crm_queue_sms(array $client, array $c, array $q, array $ctx): array
+{
+    if (!function_exists('crm_sms_available') || !crm_sms_available($client)) return ['ok' => false, 'error' => 'SMS is not available on this account.', 'id' => null];
+    if (empty($c['phone_e164'])) return ['ok' => false, 'error' => 'The lead has no phone number.', 'id' => null];
+    require_once __DIR__ . '/sms.php';
+    $text = sms_render((string) $q['sms_text'], $c, $ctx);
+    return sms_send_now($client, (string) $c['phone_e164'], $text, ['source' => 'crm', 'render' => false, 'ctx' => $ctx], (int) $c['id']);
 }
 
 /** The next moment inside working hours, if the account keeps them. */
@@ -231,8 +250,24 @@ function crm_queue_tick(int $limit = 50): int
         }
 
         $ctx = json_decode((string) ($q['context'] ?? ''), true) ?: [];
+        $by = (string) ($q['send_by'] ?? 'whatsapp');
+        if ($by === 'sms') {
+            if (!empty($c['sms_opt_out_at'])) { $done('skipped', 'They opted out of SMS.'); continue; }
+            $r = crm_queue_sms($client, $c, $q, $ctx);
+            $done($r['ok'] ? 'sent' : 'failed', $r['ok'] ? '' : 'SMS: ' . $r['error']);
+            if ($r['ok']) $sent++;
+            continue;
+        }
+        // "WhatsApp, SMS if it fails" — used wherever WhatsApp cannot go out.
+        $fallback = function (string $why) use ($by, $q, $c, $client, $ctx, $done, &$sent): bool {
+            if ($by !== 'wa_then_sms' || trim((string) ($q['sms_text'] ?? '')) === '' || !empty($c['sms_opt_out_at'])) return false;
+            $s2 = crm_queue_sms($client, $c, $q, $ctx);
+            if (!$s2['ok']) { $done('failed', mb_substr($why, 0, 120) . ' · SMS: ' . $s2['error']); return true; }
+            $done('sent', 'WhatsApp could not go (' . mb_substr($why, 0, 120) . '); sent by SMS.'); $sent++;
+            return true;
+        };
         $tpl = db_row("SELECT * FROM templates WHERE id=? AND client_id=?", [(int) $q['template_id'], $cid]);
-        if (!$tpl) { $done('failed', 'The template was deleted.'); continue; }
+        if (!$tpl) { if (!$fallback('The template was deleted.')) $done('failed', 'The template was deleted.'); continue; }
         $shape = crm_tpl_shape($tpl);
         $tokens = json_decode((string) $q['vars'], true) ?: [];
         $vals = [];
@@ -243,9 +278,15 @@ function crm_queue_tick(int $limit = 50): int
         /* Always from the WhatsApp Business API number — a managerial message on the company's
            official number, never from a salesperson's phone or the linked company phone, whatever
            the account's usual channel is. */
-        if (!crm_auto_api_ready($client)) { $done('failed', 'The WhatsApp Business API number is not connected (Settings → WhatsApp API Credentials).'); continue; }
+        if (!crm_auto_api_ready($client)) {
+            $why = 'The WhatsApp Business API number is not connected (Settings → WhatsApp API Credentials).';
+            if (!$fallback($why)) $done('failed', $why);
+            continue;
+        }
         $r = inbox_send_template(array_merge($client, ['channel' => 'cloud']), (int) $c['id'], (int) $tpl['id'], $vals, $hvals, (string) ($q['header_media'] ?? ''),
                                  ['source' => 'crm_auto', 'takeover' => false]);
+        // "WhatsApp, SMS if it fails": the WhatsApp attempt failed for good, so the SMS text goes instead.
+        if (empty($r['ok']) && $fallback((string) ($r['error'] ?? 'WhatsApp failed'))) continue;
         $done(!empty($r['ok']) ? 'sent' : 'failed', !empty($r['ok']) ? '' : (string) ($r['error'] ?? 'Not sent.'), isset($r['id']) ? (int) $r['id'] : null);
         if (!empty($r['ok'])) $sent++;
     }
@@ -282,7 +323,7 @@ function crm_auto_on_stage(array $client, int $contactId, int $stageId, bool $ar
         if ($m && (!$arrival || (int) $m['on_arrival'])) {
             crm_queue($client, $contactId, (int) $m['template_id'], json_decode((string) $m['vars'], true) ?: [],
                       (string) ($m['header_media'] ?? ''), 'stage:' . $stageId,
-                      date('Y-m-d H:i:s', time() + 60 * (int) $m['delay_minutes']));
+                      date('Y-m-d H:i:s', time() + 60 * (int) $m['delay_minutes']), [], (string) ($m['send_by'] ?? 'whatsapp'), $m['sms_text'] ?? null);
         }
         $kind = crm_stage_kind($cid, $stageId);
         if ($kind === 'won' || $kind === 'lost') crm_seq_stop_all($contactId, 'The lead was ' . ($kind === 'won' ? 'won' : 'lost') . '.');
@@ -396,7 +437,8 @@ function crm_seq_tick(): int
         if (!$step) { db_run("UPDATE crm_seq_runs SET status='done', next_at=NULL WHERE id=?", [(int) $r['id']]); continue; }
         $client = db_row("SELECT * FROM clients WHERE id=?", [(int) $r['client_id']]);
         crm_queue($client, (int) $r['contact_id'], (int) $step['template_id'], json_decode((string) $step['vars'], true) ?: [],
-                  (string) ($step['header_media'] ?? ''), 'seq:' . $r['sequence_id'] . ':' . ((int) $r['step_idx'] + 1));
+                  (string) ($step['header_media'] ?? ''), 'seq:' . $r['sequence_id'] . ':' . ((int) $r['step_idx'] + 1), null, [],
+                  (string) ($step['send_by'] ?? 'whatsapp'), $step['sms_text'] ?? null);
         $queued++;
         $nextStep = $steps[(int) $r['step_idx'] + 1] ?? null;
         db_run("UPDATE crm_seq_runs SET step_idx=step_idx+1, next_at=?, status=? WHERE id=?",

@@ -75,7 +75,9 @@ client_header('Report · ' . $camp['name'], 'campaigns', $CLIENT);
 </div>
 
 <p class="text-muted" style="margin:-10px 0 20px;font-size:13px">
-  <?php if ($social): ?>
+  <?php if (($camp['channel'] ?? '') === 'sms'): $vmS = json_decode((string) $camp['variable_map'], true) ?: []; ?>
+  SMS<?= !empty($vmS['sender']) ? ' from <strong>' . e((string) $vmS['sender']) . '</strong>' : '' ?> · “<?= e(mb_strimwidth((string) $camp['body_text'], 0, 80, '…')) ?>” ·
+  <?php elseif ($social): ?>
   <?= $camp['channel'] === 'instagram' ? 'Instagram' : 'Messenger' ?> · <strong><?= $camp['audience_kind'] === 'optin' ? 'People who agreed to receive offers' : 'People who wrote in the last 24 hours' ?></strong> ·
   <?php else: ?>
   Template <strong><?= e((string) ($camp['template_name'] ?? '—')) ?></strong> ·
@@ -109,9 +111,11 @@ if ($t0 && $counts['read']) {
 }
 ?>
 <div class="viz-grid2" style="margin-bottom:16px">
-  <?= viz_card('Who it reached', viz_funnel([['Recipients', $counts['total']], ['Sent', $counts['sent']], ['Delivered', $counts['delivered']],
-        ['Read', $counts['read']], ['Replied', $replied]], ['empty' => 'Nothing sent yet.']),
+  <?php $isSms = ($camp['channel'] ?? '') === 'sms'; ?>
+  <?= viz_card('Who it reached', viz_funnel(array_values(array_filter([['Recipients', $counts['total']], ['Sent', $counts['sent']], ['Delivered', $counts['delivered']],
+        $isSms ? null : ['Read', $counts['read']], ['Replied', $replied]])), ['empty' => 'Nothing sent yet.']),
       'Replied = people who wrote back within 3 days of their message.', 'camp-funnel') ?>
+  <?php if (!$isSms): ?>
   <?= viz_card('How fast it was read', $readCurve
         ? viz_trend(array_keys($readCurve), [['label' => 'Read so far', 'values' => array_values($readCurve), 'slot' => 1]],
                     ['fmt' => 'pct', 'height' => 200, 'aria' => 'Share of sent messages read, hour by hour after sending', 'x_label' => 'Hours after sending'])
@@ -119,6 +123,9 @@ if ($t0 && $counts['read']) {
               ? 'Half of the reads came within <strong>' . ($h50 + 1) . ' hour' . ($h50 ? 's' : '') . '</strong> of sending.' : '') . '</p>'
         : '<div class="viz-empty">No reads yet.</div>',
       'Share of sent messages read, hour by hour over the first 3 days.', 'camp-readcurve') ?>
+  <?php else: ?>
+  <?= viz_card('Delivery', '<p class="text-muted" style="font-size:13px">SMS has no read receipts. Delivered is reported by the SMS provider where it supports delivery reports; otherwise messages stay at Sent.</p>', '', 'camp-sms-note') ?>
+  <?php endif; ?>
 </div>
 
 <?php
