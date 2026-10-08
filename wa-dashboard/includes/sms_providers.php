@@ -39,10 +39,10 @@ function sms_provider_catalog(): array
             'base_url'    => ['API address', 'text', 'Leave empty for https://api.twilio.com'],
         ]],
         'mshastra' => ['label' => 'mShastra (Mobishastra)', 'fields' => [
-            'user'     => ['Username', 'text', ''],
-            'password' => ['Password', 'secret', ''],
-            'country'  => ['Country code', 'text', 'ALL, or a country like 20 — as mShastra set up your account'],
-            'base_url' => ['API address', 'text', 'Leave empty for https://mshastra.com'],
+            'user'     => ['Profile ID', 'text', 'The 8-digit number mShastra gives your account (200XXXXX) — shown when you log in to their panel'],
+            'password' => ['API password', 'secret', 'The password of that profile'],
+            'country'  => ['Country code', 'text', 'Leave empty for ALL (any country). Numbers are always sent with their country code'],
+            'base_url' => ['API address', 'text', 'Leave empty for https://mshastra.com — only change it if mShastra gives you another address (e.g. https://valuesms.ae)'],
         ]],
         'http' => ['label' => 'Any provider (HTTP API)', 'fields' => [
             'url'          => ['Send URL', 'text', 'The full address the provider gives for sending an SMS'],
@@ -175,15 +175,18 @@ function sms_provider_send(array $gw, string $to, string $text, string $sender, 
         }
         case 'mshastra': {
             $base = rtrim((string) ($c['base_url'] ?? '') ?: 'https://mshastra.com', '/');
+            // sendurl.aspx with ShowError=C answers a code (000 = sent) instead of free text — see sms_mshastra_error().
             $q = ['user' => (string) ($c['user'] ?? ''), 'pwd' => (string) ($c['password'] ?? ''), 'senderid' => $sender, 'mobileno' => sms_number($to, 'digits'),
-                  'msgtext' => $text, 'priority' => 'High', 'CountryCode' => (string) ($c['country'] ?? '') ?: 'ALL'];
+                  'msgtext' => $text, 'priority' => 'High', 'CountryCode' => (string) ($c['country'] ?? '') ?: 'ALL', 'ShowError' => 'C'];
             [$http, $body, $err] = sms_http('GET', $base . '/sendurl.aspx?' . http_build_query($q));
             if ($transient($http, $err)) return $fail($err ?: 'mShastra did not answer (HTTP ' . $http . ').', (string) $http, true);
             $t = trim(strip_tags($body));
-            if (stripos($t, 'Send Successful') !== false) {
-                return ['ok' => true, 'id' => preg_match('/(\d{6,})/', $t, $m) ? $m[1] : null, 'code' => 'ok', 'error' => '', 'retry' => false];
+            $code = preg_match('/^\s*(\d{3})\b/', $t, $m) ? $m[1] : '';
+            if ($code === '000' || stripos($t, 'Send Successful') !== false) {
+                return ['ok' => true, 'id' => preg_match('/(\d{6,})/', $t, $m2) ? $m2[1] : null, 'code' => 'ok', 'error' => '', 'retry' => false];
             }
-            return $fail('mShastra: ' . (mb_substr($t, 0, 120) ?: 'refused'), 'refused', stripos($t, 'try again') !== false);
+            [$why, $retry] = sms_mshastra_error($code, $t);
+            return $fail('mShastra: ' . $why, $code !== '' ? $code : 'refused', $retry);
         }
         case 'http': {
             $url = (string) ($c['url'] ?? '');
@@ -247,6 +250,97 @@ function sms_provider_balance(array $gw): ?string
         return $http === 200 && $t !== '' && mb_strlen($t) < 80 ? $t : null;
     }
     return null;
+}
+
+/**
+ * mShastra's answers in plain words: [reason, worth retrying]. Codes come from ShowError=C;
+ * accounts that still answer in text get the same words for the same problems.
+ */
+function sms_mshastra_error(string $code, string $text): array
+{
+    $codes = [
+        '001' => ['the phone number is not valid', false],
+        '003' => ['the message is empty or not valid', false],
+        '005' => ['wrong Profile ID or password', false],
+        '006' => ['this number is on the do-not-disturb list', false],
+        '007' => ['the number has no country code mShastra recognises', false],
+        '008' => ['no phone number was given', false],
+        '009' => ['your mShastra profile is blocked — contact mShastra', false],
+        '010' => ['the Profile ID is not valid', false],
+        '011' => ['your mShastra profile has expired — renew it with mShastra', false],
+        '012' => ['the sender name is longer than 13 characters', false],
+        '013' => ['mShastra had a server error', true],
+    ];
+    if (isset($codes[$code])) return $codes[$code];
+    $words = [
+        'Invalid Mobile'        => ['the phone number is not valid', false],
+        'Invalid Password'      => ['wrong password', false],
+        'Invalid Profile'       => ['the Profile ID is not valid', false],
+        'Profile Id Blocked'    => ['your mShastra profile is blocked — contact mShastra', false],
+        'Submission Stops'      => ['sending is paused on your mShastra account — contact mShastra', false],
+        'No More Credits'       => ['your mShastra account has no SMS credit left — top it up with mShastra', false],
+        'Country not activated' => ['sending to this country is not switched on for your mShastra account', false],
+        'Enter Mobile'          => ['no phone number was given', false],
+        'Enter text'            => ['the message is empty', false],
+    ];
+    foreach ($words as $k => $v) if (stripos($text, $k) !== false) return $v;
+    return [mb_substr($text, 0, 120) ?: 'refused', stripos($text, 'try again') !== false];
+}
+
+/**
+ * Step-by-step setup for each provider, shown next to its settings on the gateway form.
+ * [intro, steps[], notes[], link to the provider]. Written for the person filling the form.
+ */
+function sms_provider_guide(string $provider): ?array
+{
+    return [
+        'mshastra' => [
+            'Connect an mShastra (Mobishastra) account in four steps.',
+            ['Log in to your mShastra panel. Your <strong>Profile ID</strong> is the 8-digit number starting with 200 (for example 20061628) — put it in <em>Profile ID</em>.',
+             'Put that profile\'s password in <em>API password</em>. If you change it in the mShastra panel later, update it here too.',
+             'Ask mShastra to approve your <strong>Sender ID</strong> (the name people see, up to 13 characters, e.g. <em>GILDANA</em>) with the operators, and to switch on every country you will send to. Put the approved name in <em>Default sender name</em>; others go in <em>Other sender names</em>.',
+             'Save. On the gateway card, type your own number and press <strong>Send test</strong>; press <strong>Balance</strong> to see the SMS credit left on your mShastra account.'],
+            ['Leave <em>Country code</em> empty (ALL): Revenect always sends numbers in full international form, e.g. 2010XXXXXXXX or 9715XXXXXXXX.',
+             'A sender name that is not approved is replaced by your account\'s default sender — or refused, depending on the country.',
+             'Message length: 160 English / 70 Arabic characters per SMS. Longer messages are split — mShastra counts parts of 153 English / 63 Arabic characters, so a long Arabic message can use one part more on your mShastra account than Revenect counts (Revenect uses the usual 67).',
+             'Common refusals and what they mean: <em>No More Credits</em> — top up with mShastra; <em>Country not activated</em> — ask mShastra to enable the country; <em>Invalid Profile Id / Password</em> — check the two fields above; <em>DND Number</em> — that person blocked promotional SMS.',
+             'mShastra\'s send API does not return delivery reports, so messages show as <em>Sent</em> unless mShastra agrees to post reports to the <em>Delivery reports URL</em> on the gateway card.'],
+            'https://mshastra.com',
+        ],
+        'smsmisr' => [
+            'Connect an SMS Misr account.',
+            ['In the SMS Misr dashboard, open <em>API</em> and copy your API username and password.',
+             'Copy the <strong>sender token</strong> of your approved sender name (each approved name has its own token).',
+             'Choose <em>Live</em> (Test does not deliver), save, then <strong>Send test</strong>.'],
+            ['Sender names must be approved by SMS Misr and the NTRA before they work.'],
+            'https://smsmisr.com',
+        ],
+        'victorylink' => [
+            'Connect a Victory Link account.',
+            ['Ask Victory Link for your API username and password (the SMS reseller API).',
+             'Put your approved sender name in <em>Default sender name</em>, save, then <strong>Send test</strong>.'],
+            ['Arabic and English are detected automatically.'],
+            'https://www.victorylink.com',
+        ],
+        'twilio' => [
+            'Connect a Twilio account.',
+            ['In the Twilio Console, copy the <strong>Account SID</strong> and <strong>Auth Token</strong>.',
+             'Use either a Twilio phone number / alphanumeric sender in <em>Default sender name</em>, or a Messaging Service SID.',
+             'Save, then <strong>Send test</strong>. Delivery reports come back automatically.'],
+            ['Some countries (including Egypt) need the sender registered with Twilio first.'],
+            'https://console.twilio.com',
+        ],
+        'http' => [
+            'Any provider with an HTTP API — fill in what their API document says.',
+            ['<em>Send URL</em> and <em>Method</em>: the address and GET/POST from the provider\'s "send SMS" example.',
+             'Field names: copy the parameter names for the phone number, the message and the sender (e.g. <code>mobileno</code>, <code>msgtext</code>, <code>senderid</code>).',
+             'Fixed fields such as the username and password go in <em>Extra fixed fields</em>, one <code>name=value</code> per line.',
+             '<em>Success if the answer contains</em>: a word the provider answers on success (e.g. <code>Send Successful</code>) — or a JSON field and value.',
+             'Save, then <strong>Send test</strong> and check the answer shown.'],
+            ['Example (mShastra by hand): URL <code>https://mshastra.com/sendurl.aspx</code>, GET, sent <em>In the URL</em>; phone <code>mobileno</code>, message <code>msgtext</code>, sender <code>senderid</code>; extra fields <code>user=…</code>, <code>pwd=…</code>, <code>CountryCode=ALL</code>; success if the answer contains <code>Send Successful</code>.'],
+            '',
+        ],
+    ][$provider] ?? null;
 }
 
 /**

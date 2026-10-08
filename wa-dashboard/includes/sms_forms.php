@@ -98,7 +98,7 @@ function sms_gateway_form(?array $gw, bool $showDefault = true): string
             if (is_string($opt) && $opt !== '') $h .= '<span class="hint">' . e($opt) . '</span>';
             $h .= '</div>';
         }
-        $h .= '</div></fieldset>';
+        $h .= '</div>' . sms_provider_guide_html($k) . '</fieldset>';
     }
     $h .= '<div class="grid2"><div class="field"><span class="lbl">Default sender name</span><input type="text" name="default_sender" maxlength="40" value="' . e((string) ($gw['default_sender'] ?? '')) . '" placeholder="As approved by the provider"></div>'
         . '<div class="field"><span class="lbl">Other sender names on this account</span><input type="text" name="senders" maxlength="500" value="' . e((string) ($gw['senders'] ?? '')) . '" placeholder="Comma separated"></div></div>'
@@ -135,4 +135,19 @@ function sms_gateway_card(array $gw, string $editUrl): string
         . '<input type="text" name="test_text" placeholder="Message (optional)">'
         . '<button class="btn btn-ghost btn-sm">Send test</button></form></div>';
     return $h;
+}
+
+/** The provider's setup guide as a collapsible box under its fields — open while the gateway is new. */
+function sms_provider_guide_html(string $provider, bool $open = false): string
+{
+    $g = sms_provider_guide($provider);
+    if (!$g) return '';
+    [$intro, $steps, $notes, $link] = $g;
+    $h = '<details class="sms-guide"' . ($open ? ' open' : '') . '><summary>How to connect ' . e(sms_provider_catalog()[$provider]['label'] ?? $provider) . '</summary>'
+       . '<p>' . e($intro) . '</p><ol>';
+    foreach ($steps as $st) $h .= '<li>' . $st . '</li>';          // guide text is ours (sms_provider_guide), not user input
+    $h .= '</ol>';
+    if ($notes) { $h .= '<p class="sms-guide-h">Good to know</p><ul>'; foreach ($notes as $n) $h .= '<li>' . $n . '</li>'; $h .= '</ul>'; }
+    if ($link !== '') $h .= '<p class="sms-guide-link"><a href="' . e($link) . '" target="_blank" rel="noopener noreferrer">' . e(parse_url($link, PHP_URL_HOST) ?: $link) . ' ↗</a></p>';
+    return $h . '</details>';
 }
