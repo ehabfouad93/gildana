@@ -3,6 +3,7 @@ declare(strict_types=1);
 require __DIR__ . '/_init.php';
 require_once __DIR__ . '/../includes/crm.php';
 require_once __DIR__ . '/../includes/crm_dashboard.php';
+require_once __DIR__ . '/../includes/charts.php';
 
 /**
  * The sales dashboard.
@@ -188,12 +189,19 @@ function dv_legend(array $series): string
     <button class="btn btn-ghost btn-sm">Apply</button>
   </form>
 
-  <div class="dv-kpis">
-    <div class="dv-kpi"><span class="dv-kpi-n"><?= number_format($tot['leads']) ?></span><span class="dv-kpi-l">Leads</span></div>
-    <div class="dv-kpi"><span class="dv-kpi-n"><?= number_format($tot['won']) ?></span><span class="dv-kpi-l">Won</span></div>
-    <div class="dv-kpi"><span class="dv-kpi-n"><?= number_format($tot['lost']) ?></span><span class="dv-kpi-l">Lost</span></div>
-    <div class="dv-kpi"><span class="dv-kpi-n"><?= $tot['leads'] ? round(100 * $tot['won'] / $tot['leads'], 1) . '%' : '—' ?></span><span class="dv-kpi-l">Won ÷ leads</span></div>
+  <?php // The same filters, over the same number of days just before — so every number says whether it is going up.
+    $span = (int) round((strtotime($f['to']) - strtotime($f['from'])) / 86400) + 1;
+    $fPrev = ['from' => date('Y-m-d', strtotime($f['from'] . ' -' . $span . ' days')), 'to' => date('Y-m-d', strtotime($f['from'] . ' -1 day'))] + $f;
+    $prevS = crm_series($cid, $fPrev, $bucket);
+    $was = ['leads' => array_sum(array_column($prevS, 'leads')), 'won' => array_sum(array_column($prevS, 'won')), 'lost' => array_sum(array_column($prevS, 'lost'))];
+    $cmpW = 'vs the ' . $span . ' days before'; ?>
+  <div class="viz-kpis">
+    <?= viz_kpi('Leads', $tot['leads'], $was['leads'], ['compare' => $cmpW, 'spark' => array_column($series, 'leads'), 'slot' => 3]) ?>
+    <?= viz_kpi('Won', $tot['won'], $was['won'], ['compare' => $cmpW, 'spark' => array_column($series, 'won')]) ?>
+    <?= viz_kpi('Lost', $tot['lost'], $was['lost'], ['compare' => $cmpW, 'up_good' => false, 'spark' => array_column($series, 'lost'), 'slot' => 2]) ?>
+    <?= viz_kpi('Won ÷ leads', $tot['leads'] ? round(100 * $tot['won'] / $tot['leads'], 1) : null, $was['leads'] ? round(100 * $was['won'] / $was['leads'], 1) : null, ['fmt' => 'pct', 'compare' => $cmpW]) ?>
   </div>
+
 
   <div class="card dv" id="leads-vs-sales">
     <h2>Leads vs sales, by <?= $bucket ?></h2>

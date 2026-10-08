@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/_init.php';
+require_once __DIR__ . '/../includes/charts.php';
 
 $cid = (int) $CLIENT['id'];
 $id  = (int) ($_GET['id'] ?? 0);
@@ -90,6 +91,34 @@ client_header('Report · ' . $camp['name'], 'campaigns', $CLIENT);
   <a class="stat-tile" href="report.php?id=<?= $id ?>&status=read"><span class="lbl">Read</span><span class="val accent" id="s-read"><?= $counts['read'] ?></span><span class="sub" id="p-read"><?= $pct($counts['read'], $counts['sent']) ?> of sent</span></a>
   <a class="stat-tile" href="report.php?id=<?= $id ?>&status=unread"><span class="lbl">Unread</span><span class="val" id="s-unread"><?= $counts['unread'] ?></span><span class="sub" id="p-unread"><?= $pct($counts['unread'], $counts['sent']) ?> of sent</span></a>
   <a class="stat-tile" href="report.php?id=<?= $id ?>&status=failed"><span class="lbl">Failed</span><span class="val danger" id="s-failed"><?= $counts['failed'] ?></span><span class="sub" id="p-failed"><?= $pct($counts['failed'], $counts['total']) ?> of all</span></a>
+</div>
+
+<?php
+/* How the campaign landed: who it reached step by step, and how fast it was read. */
+$replied = (int) db_val("SELECT COUNT(DISTINCT cm.contact_id) FROM campaign_messages cm WHERE cm.campaign_id=? AND cm.sent_at IS NOT NULL
+                          AND EXISTS (SELECT 1 FROM messages i WHERE i.contact_id=cm.contact_id AND i.direction='in'
+                                        AND i.created_at BETWEEN cm.sent_at AND cm.sent_at + INTERVAL 3 DAY)", [$id]);
+$t0 = db_val("SELECT MIN(sent_at) FROM campaign_messages WHERE campaign_id=?", [$id]);
+$readCurve = []; $hours = 72;
+if ($t0 && $counts['read']) {
+    $byH = [];
+    foreach (db_all("SELECT LEAST(?, GREATEST(0, TIMESTAMPDIFF(HOUR, ?, read_at))) h, COUNT(*) n FROM campaign_messages
+                      WHERE campaign_id=? AND read_at IS NOT NULL GROUP BY h", [$hours, $t0, $id]) as $r) $byH[(int) $r['h']] = (int) $r['n'];
+    $run = 0;
+    for ($h = 0; $h < $hours; $h++) { $run += $byH[$h] ?? 0; $readCurve['+' . ($h + 1) . 'h'] = $counts['sent'] ? round(100 * $run / $counts['sent'], 1) : 0; }
+}
+?>
+<div class="viz-grid2" style="margin-bottom:16px">
+  <?= viz_card('Who it reached', viz_funnel([['Recipients', $counts['total']], ['Sent', $counts['sent']], ['Delivered', $counts['delivered']],
+        ['Read', $counts['read']], ['Replied', $replied]], ['empty' => 'Nothing sent yet.']),
+      'Replied = people who wrote back within 3 days of their message.', 'camp-funnel') ?>
+  <?= viz_card('How fast it was read', $readCurve
+        ? viz_trend(array_keys($readCurve), [['label' => 'Read so far', 'values' => array_values($readCurve), 'slot' => 1]],
+                    ['fmt' => 'pct', 'height' => 200, 'aria' => 'Share of sent messages read, hour by hour after sending', 'x_label' => 'Hours after sending'])
+          . '<p class="viz-note">' . (($h50 = array_search(true, array_map(fn($v) => $v >= 50 * $counts['read'] / max(1, $counts['sent']), array_values($readCurve)), true)) !== false
+              ? 'Half of the reads came within <strong>' . ($h50 + 1) . ' hour' . ($h50 ? 's' : '') . '</strong> of sending.' : '') . '</p>'
+        : '<div class="viz-empty">No reads yet.</div>',
+      'Share of sent messages read, hour by hour over the first 3 days.', 'camp-readcurve') ?>
 </div>
 
 <?php
