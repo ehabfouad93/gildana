@@ -99,14 +99,52 @@ function sms_gateway(int $id): ?array
     return sms_gateway_load(db_row("SELECT * FROM sms_gateways WHERE id=?", [$id]) ?: null);
 }
 
+/** The platform gateway ids a client may pick from: what the platform admin allowed, plus their default. */
+function sms_client_allowed_ids(array $client): array
+{
+    $ids = array_values(array_filter(array_map('intval', explode(',', (string) ($client['sms_allowed_gateways'] ?? '')))));
+    if (!empty($client['sms_gateway_id'])) $ids[] = (int) $client['sms_gateway_id'];
+    return array_values(array_unique($ids));
+}
+
+/**
+ * What the client's admin can choose between in SMS → Settings: each allowed platform gateway
+ * (active ones only) and, when the platform admin allows it, their own provider account.
+ * Keys are what sms_choice stores. Never carries credentials — names and providers only.
+ */
+function sms_client_options(array $client): array
+{
+    $out = [];
+    $def = db_row("SELECT * FROM sms_gateways WHERE client_id IS NULL AND active=1 ORDER BY is_default DESC, id LIMIT 1");
+    $ids = sms_client_allowed_ids($client);
+    if (empty($client['sms_gateway_id']) && $def) array_unshift($ids, (int) $def['id']);
+    if ($ids) {
+        $rows = db_all("SELECT id, name, provider, is_default, default_sender FROM sms_gateways WHERE client_id IS NULL AND active=1 AND id IN (" . implode(',', array_map('intval', array_unique($ids))) . ") ORDER BY is_default DESC, name");
+        foreach ($rows as $g) $out[(string) $g['id']] = ['kind' => 'platform', 'name' => (string) $g['name'], 'provider' => (string) $g['provider'], 'ready' => true];
+    }
+    if (($client['sms_mode'] ?? 'platform') === 'own') {
+        $own = db_row("SELECT name, provider, active FROM sms_gateways WHERE client_id=? ORDER BY is_default DESC, id LIMIT 1", [(int) $client['id']]);
+        $out['own'] = ['kind' => 'own', 'name' => $own ? (string) $own['name'] : 'Your own provider account', 'provider' => (string) ($own['provider'] ?? ''),
+                       'ready' => $own && (int) $own['active'] === 1];
+    }
+    return $out;
+}
+
 /** The gateway this client sends through, or null when none is set up. */
 function sms_client_gateway(array $client): ?array
 {
     $cid = (int) $client['id'];
-    if (($client['sms_mode'] ?? 'platform') === 'own') {
-        $own = db_row("SELECT * FROM sms_gateways WHERE client_id=? AND active=1 ORDER BY is_default DESC, id LIMIT 1", [$cid]);
-        if ($own) return sms_gateway_load($own);
+    $choice = (string) ($client['sms_choice'] ?? '');
+    $own = fn() => ($client['sms_mode'] ?? 'platform') === 'own'
+        ? db_row("SELECT * FROM sms_gateways WHERE client_id=? AND active=1 ORDER BY is_default DESC, id LIMIT 1", [$cid]) : null;
+    // 1. What the client's admin chose — only while it is still allowed and switched on.
+    if ($choice === 'own' && ($g = $own())) return sms_gateway_load($g);
+    if (ctype_digit($choice) && in_array((int) $choice, sms_client_allowed_ids($client), true)) {
+        $g = db_row("SELECT * FROM sms_gateways WHERE id=? AND client_id IS NULL AND active=1", [(int) $choice]);
+        if ($g) return sms_gateway_load($g);
     }
+    // 2. Otherwise as the platform admin set it: their own account when allowed and set up, else their gateway, else the default.
+    if ($choice !== 'own' && ($g = $own())) return sms_gateway_load($g);
     if (!empty($client['sms_gateway_id'])) {
         $g = db_row("SELECT * FROM sms_gateways WHERE id=? AND client_id IS NULL AND active=1", [(int) $client['sms_gateway_id']]);
         if ($g) return sms_gateway_load($g);

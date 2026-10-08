@@ -448,4 +448,9 @@ return [
     'Working' => 'يعمل',
     'Partly on' => 'مفعّل جزئيًا',
     'Not connected' => 'غير مربوط',
+    'Send SMS through' => 'إرسال الرسائل عبر',
+    'Use this gateway' => 'استخدم هذه البوابة',
+    'In use' => 'مستخدمة',
+    'Gateways their admin can choose from' => 'البوابات التي يمكن لمسؤول العميل الاختيار منها',
+    'Default gateway' => 'البوابة الافتراضية',
 ];

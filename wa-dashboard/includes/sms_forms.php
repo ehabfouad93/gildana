@@ -31,6 +31,15 @@ function sms_gateway_handle(?int $clientId, array $post): ?array
     if ($act === 'delete') {
         if (db_val("SELECT 1 FROM clients WHERE sms_gateway_id=? LIMIT 1", [(int) $gw['id']])) return ['Some clients send through this gateway — move them to another one first.', 'error'];
         db_run("DELETE FROM sms_gateways WHERE id=?", [(int) $gw['id']]);
+        if ($gw['client_id'] === null && db_has_column('clients', 'sms_allowed_gateways')) {
+            // Clients who chose it go back to their default; it leaves every "may choose" list.
+            $gid = (string) (int) $gw['id'];
+            db_run("UPDATE clients SET sms_choice=NULL WHERE sms_choice=?", [$gid]);
+            foreach (db_all("SELECT id, sms_allowed_gateways a FROM clients WHERE FIND_IN_SET(?, sms_allowed_gateways)", [$gid]) as $c) {
+                $left = array_diff(explode(',', (string) $c['a']), [$gid]);
+                db_run("UPDATE clients SET sms_allowed_gateways=? WHERE id=?", [$left ? implode(',', $left) : null, (int) $c['id']]);
+            }
+        }
         return ['Gateway deleted.', 'success'];
     }
     if ($act === 'toggle') {

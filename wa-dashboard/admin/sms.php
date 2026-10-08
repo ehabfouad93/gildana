@@ -20,7 +20,12 @@ $gws = array_map('sms_gateway_load', db_all("SELECT * FROM sms_gateways WHERE cl
 $edit = isset($_GET['edit']) ? sms_gateway_load(db_row("SELECT * FROM sms_gateways WHERE id=? AND client_id IS NULL", [(int) $_GET['edit']]) ?: null) : null;
 $adding = isset($_GET['new']) || !$gws;
 $use = [];
-foreach (db_all("SELECT COALESCE(c.sms_gateway_id, 0) g, COUNT(*) n FROM clients c WHERE c.sms_mode='platform' GROUP BY g") as $r) $use[(int) $r['g']] = (int) $r['n'];
+// Who actually sends through each gateway — the client admin's own choice included.
+foreach (db_all("SELECT * FROM clients WHERE status='active'") as $c) {
+    if (!in_array('sms', client_modules($c), true)) continue;
+    $g = sms_client_gateway($c);
+    if ($g && $g['client_id'] === null) $use[(int) $g['id']] = ($use[(int) $g['id']] ?? 0) + 1;
+}
 $own = (int) db_val("SELECT COUNT(DISTINCT client_id) FROM sms_gateways WHERE client_id IS NOT NULL");
 $P = viz_period(['p' => '30d']);
 $sent30 = db_row("SELECT COUNT(*) n, SUM(status IN ('sent','delivered')) ok, SUM(status IN ('failed','undelivered')) bad, SUM(parts) parts, SUM(IF(status IN ('sent','delivered'), credits, 0)) cr
@@ -43,7 +48,7 @@ page_head('SMS gateways', $gws && !$adding && !$edit ? '<a class="btn btn-primar
 <?php foreach ($gws as $gw): ?>
   <div class="card" id="gw<?= (int) $gw['id'] ?>">
     <?= sms_gateway_card($gw, 'sms.php?edit=' . (int) $gw['id'] . '#form') ?>
-    <p class="text-muted" style="font-size:12px;margin:8px 0 0"><?= (int) ($use[(int) $gw['id']] ?? 0) + ((int) $gw['is_default'] ? (int) ($use[0] ?? 0) : 0) ?> client(s) send through it.</p>
+    <p class="text-muted" style="font-size:12px;margin:8px 0 0"><?= (int) ($use[(int) $gw['id']] ?? 0) ?> client(s) with SMS send through it.</p>
   </div>
 <?php endforeach; ?>
 

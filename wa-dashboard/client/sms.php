@@ -135,6 +135,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
     }
+    if ($act === 'sms_choose') {
+        // The account Admin picks the gateway, from what the platform admin allowed for them.
+        if (!$admin) { flash('Only an account Admin can choose the SMS gateway.', 'error'); redirect('sms.php?tab=settings'); }
+        $pick = (string) ($_POST['gateway'] ?? '');
+        $opts = sms_client_options($CLIENT);
+        if (!isset($opts[$pick])) { flash('That gateway is not available to your account.', 'error'); redirect('sms.php?tab=settings#gateway'); }
+        if (!$opts[$pick]['ready']) { flash('Connect your provider account below first, then choose it.', 'error'); redirect('sms.php?tab=settings#own'); }
+        db_run("UPDATE clients SET sms_choice=? WHERE id=?", [$pick, $cid]);
+        flash('SMS now goes out through ' . $opts[$pick]['name'] . '.');
+        redirect('sms.php?tab=settings#gateway');
+    }
     if ($act === 'optout' && $write) {
         $n = 0;
         foreach (preg_split('/[\s,;]+/', (string) ($_POST['numbers'] ?? '')) as $raw) {
@@ -335,11 +346,32 @@ page_head('SMS');
 <?php elseif ($tab === 'settings' && $admin):
   $ownGw = sms_gateway_load(db_row("SELECT * FROM sms_gateways WHERE client_id=? ORDER BY id LIMIT 1", [$cid]) ?: null);
   $outs = db_all("SELECT phone_e164, name, sms_opt_out_at FROM contacts WHERE client_id=? AND sms_opt_out_at IS NOT NULL ORDER BY sms_opt_out_at DESC LIMIT 200", [$cid]); ?>
+  <?php $gwOpts = db_has_column('clients', 'sms_allowed_gateways') ? sms_client_options($CLIENT) : []; $curGw = sms_client_gateway($CLIENT);
+        $curKey = $curGw ? ($curGw['client_id'] !== null ? 'own' : (string) $curGw['id']) : ''; ?>
+  <?php if (count($gwOpts) > 1): ?>
+  <div class="card" id="gateway">
+    <h2>Send SMS through</h2>
+    <p class="text-muted" style="font-size:13px;margin-top:-6px">Choose which SMS gateway your messages go out on — campaigns, the API, the CRM and automations all use it. Sender names must be registered on the gateway you choose.</p>
+    <form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="sms_choose">
+      <div class="sms-gw-pick" role="radiogroup" aria-label="SMS gateway">
+        <?php foreach ($gwOpts as $k => $o): ?>
+          <label class="sms-gw-opt<?= $curKey === (string) $k ? ' on' : '' ?><?= $o['ready'] ? '' : ' off' ?>">
+            <input type="radio" name="gateway" value="<?= e((string) $k) ?>" <?= $curKey === (string) $k ? 'checked' : '' ?> <?= $o['ready'] ? '' : 'disabled' ?>>
+            <span><strong><?= e($o['name']) ?></strong>
+              <small class="text-muted"><?= $o['kind'] === 'own' ? ($o['ready'] ? 'Your own provider account' . ($o['provider'] ? ' · ' . e(sms_provider_label($o['provider'])) : '') : 'Your own account — connect it below first') : e(sms_provider_label($o['provider'])) . ' · ' . e(BRAND_PARENT) ?></small></span>
+            <?php if ($curKey === (string) $k): ?><span class="pill green">In use</span><?php endif; ?>
+          </label>
+        <?php endforeach; ?>
+      </div>
+      <button class="btn btn-primary btn-sm mt10">Use this gateway</button>
+    </form>
+  </div>
+  <?php endif; ?>
   <div class="card">
     <h2>Sending</h2>
     <p>Sender names you can use: <?= $senders ? implode(' ', array_map(fn($s) => '<span class="pill gray">' . e($s) . '</span>', $senders)) : '<span class="text-muted">the provider\'s default</span>' ?></p>
     <p class="text-muted" style="font-size:13px">Each SMS part (160 English or 70 Arabic characters; 153 / 67 when a message is split) costs <strong><?= $rate ?></strong> credit<?= $rate === 1 ? '' : 's' ?>.
-      <?= ($CLIENT['sms_mode'] ?? 'platform') === 'own' ? 'You send through your own provider account (below).' : 'Sent through ' . e(BRAND_PARENT) . '\'s SMS provider. To add a sender name, ask us — it must be registered with the provider.' ?></p>
+      <?= $curKey === 'own' ? 'You send through your own provider account (below).' : 'Sent through ' . e(BRAND_PARENT) . '\'s SMS gateway' . ($curGw ? ' <strong>' . e((string) $curGw['name']) . '</strong>' : '') . '. To add a sender name, ask us — it must be registered with the provider.' ?></p>
   </div>
   <?php if (($CLIENT['sms_mode'] ?? 'platform') === 'own'): ?>
     <div class="card" id="own">

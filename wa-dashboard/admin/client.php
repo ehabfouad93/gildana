@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/_init.php';
-require_once __DIR__ . '/../includes/sms_providers.php';
+require_once __DIR__ . '/../includes/sms.php';
 require_once __DIR__ . '/../includes/billing.php';
 require_once __DIR__ . '/../includes/channel.php';
 require_once __DIR__ . '/../includes/permissions.php';
@@ -188,6 +188,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $senders = implode(',', array_slice(array_values(array_unique(array_filter(array_map(fn($x) => mb_substr(trim($x), 0, 40), explode(',', (string) ($_POST['sms_senders'] ?? '')))))), 0, 20));
         db_run("UPDATE clients SET sms_mode=?, sms_gateway_id=?, sms_senders=?, sms_rate=? WHERE id=?",
                [($_POST['sms_mode'] ?? '') === 'own' ? 'own' : 'platform', $gwId ?: null, $senders !== '' ? $senders : null, max(0, min(100, (int) ($_POST['sms_rate'] ?? 1))), $id]);
+        // The other platform gateways their own admin may switch to (SMS → Settings). Only real platform gateways.
+        if (db_has_column('clients', 'sms_allowed_gateways')) {
+            $allowed = array_values(array_unique(array_filter(array_map('intval', (array) ($_POST['sms_allowed'] ?? [])))));
+            if ($allowed) $allowed = array_map('intval', array_column(db_all("SELECT id FROM sms_gateways WHERE client_id IS NULL AND id IN (" . implode(',', $allowed) . ")"), 'id'));
+            db_run("UPDATE clients SET sms_allowed_gateways=? WHERE id=?", [$allowed ? implode(',', $allowed) : null, $id]);
+        }
         flash('SMS settings saved.');
         redirect('client.php?id=' . $id . '#sms');
     }
@@ -437,12 +443,22 @@ $use      = db_row("SELECT * FROM usage_periods WHERE client_id=? AND period_sta
   <form method="post">
     <?= csrf_field() ?><input type="hidden" name="action" value="save_sms">
     <div class="grid2">
-      <div class="field"><span class="lbl">Send through</span><select name="sms_gateway_id">
+      <div class="field"><span class="lbl">Default gateway</span><select name="sms_gateway_id">
         <option value="0">The default gateway<?= $smsGws && (int) $smsGws[0]['is_default'] ? ' (' . e($smsGws[0]['name']) . ')' : '' ?></option>
         <?php foreach ($smsGws as $g): ?><option value="<?= (int) $g['id'] ?>" <?= (int) ($client['sms_gateway_id'] ?? 0) === (int) $g['id'] ? 'selected' : '' ?>><?= e($g['name']) ?> — <?= e(sms_provider_label((string) $g['provider'])) ?></option><?php endforeach; ?>
       </select><?php if (!$smsGws): ?><span class="hint" style="color:var(--danger)">No platform gateway yet — add one in SMS gateways.</span><?php endif; ?></div>
       <div class="field"><span class="lbl">Credits per SMS part</span><input type="number" name="sms_rate" min="0" max="100" value="<?= (int) ($client['sms_rate'] ?? 1) ?>"></div>
     </div>
+    <?php if (count($smsGws) > 1 && db_has_column('clients', 'sms_allowed_gateways')): $smsAllowed = sms_client_allowed_ids($client);
+          $smsChoiceOpts = sms_client_options($client); $smsChoice = (string) ($client['sms_choice'] ?? ''); ?>
+    <div class="field"><span class="lbl">Gateways their admin can choose from</span>
+      <div class="mod-grid">
+        <?php foreach ($smsGws as $g): ?><label class="mod-opt"><input type="checkbox" name="sms_allowed[]" value="<?= (int) $g['id'] ?>" <?= in_array((int) $g['id'], $smsAllowed, true) ? 'checked' : '' ?>>
+          <?= e($g['name']) ?> <span class="text-muted">— <?= e(sms_provider_label((string) $g['provider'])) ?></span></label><?php endforeach; ?>
+      </div>
+      <span class="hint">Their account Admin picks one of these in SMS → Settings. The gateway above is always allowed and used until they choose.
+        <?php if ($smsChoice !== '' && isset($smsChoiceOpts[$smsChoice])): ?><br>They chose: <strong><?= e($smsChoiceOpts[$smsChoice]['name']) ?></strong>.<?php endif; ?></span></div>
+    <?php endif; ?>
     <div class="field"><span class="lbl">Sender names approved for them</span><input type="text" name="sms_senders" maxlength="500" value="<?= e((string) ($client['sms_senders'] ?? '')) ?>" placeholder="Comma separated — empty uses the gateway's default sender">
       <span class="hint">Only names registered with the provider for this client. They pick from this list when sending.</span></div>
     <label class="mod-opt"><input type="checkbox" name="sms_mode" value="own" <?= ($client['sms_mode'] ?? 'platform') === 'own' ? 'checked' : '' ?>>
