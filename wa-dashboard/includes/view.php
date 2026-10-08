@@ -99,6 +99,7 @@ function nav_items(string $role): array
     $nav = [
         'dashboard' => ['label' => 'Dashboard', 'url' => 'index.php',     'icon' => 'grid'],
         'inbox'     => ['label' => 'Inbox',     'url' => 'inbox.php',     'icon' => 'chat'],
+        'comments'  => ['label' => 'Comments',  'url' => 'comments.php',  'icon' => 'chat'],
         'crm'       => ['label' => 'CRM',       'url' => 'crm.php',       'icon' => 'pipe', 'children' => 'crm'],
         'contacts'  => ['label' => 'Contacts',  'url' => 'contacts.php',  'icon' => 'users'],
         'lists'     => ['label' => 'Lists',     'url' => 'lists.php',     'icon' => 'list'],
@@ -113,6 +114,12 @@ function nav_items(string $role): array
         'settings'  => ['label' => 'Settings',  'url' => 'settings.php',  'icon' => 'gear'],
     ];
 
+    // Comments only for clients offered Facebook or Instagram comments.
+    $cl = $GLOBALS['CLIENT'] ?? null;
+    if (!is_array($cl) || !function_exists('client_has_channel') || (!client_has_channel($cl, 'fb_comments') && !client_has_channel($cl, 'ig_comments'))) {
+        unset($nav['comments']);
+    }
+
     // Only appears when something is actually waiting — a permanent zero is just noise.
     if (($n = nav_attention_count()) > 0) {
         $item = ['label' => 'Needs attention', 'url' => 'failed.php', 'icon' => 'alert', 'badge' => $n];
@@ -123,7 +130,7 @@ function nav_items(string $role): array
        hiding it here is what keeps the sidebar from being a list of doors that say no. Items
        whose nav key is not a module (the dashboard) always stay. */
     if (function_exists('can_use') && function_exists('perm_modules')) {
-        $navToModule = ['attention' => 'campaigns'];
+        $navToModule = ['attention' => 'campaigns', 'comments' => 'inbox'];
         foreach ($nav as $key => $_) {
             $mod = $navToModule[$key] ?? $key;
             if (isset(perm_modules()[$mod]) && !can_use($mod)) unset($nav[$key]);
@@ -157,7 +164,7 @@ function nav_children(string $group): array
         foreach ([['Team & transfer',  'crm_team.php',  'crm_team.php'],
                   ['Assignment rules', 'crm_rules.php', 'crm_rules.php'],
                   ['Automatic messages', 'crm_messages.php', 'crm_messages.php'],
-                  ['Lead forms',       'meta_leads.php', 'meta_leads.php'],
+                  ['Facebook & Instagram', 'meta_leads.php', 'meta_leads.php'],
                   ['Projects & lists', 'crm_setup.php', 'crm_setup.php'],
                   ['Integrations',     'crm_integrations.php', 'crm_integrations.php'],
                   ['Stages',           'crm.php?stages=1', 'crm.php?stages'],

@@ -252,6 +252,16 @@ function crm_queue_tick(int $limit = 50): int
     return $sent;
 }
 
+/** Start automations waiting for a CRM event, loading the engine only when some flow waits for it. */
+function social_flow_event(array $client, int $contactId, string $kind, array $data): void
+{
+    try {
+        if (!db_has_column('flow_runs', 'channel') || !db_val("SELECT 1 FROM flow_triggers WHERE client_id=? AND kind=? AND active=1 LIMIT 1", [(int) $client['id'], $kind])) return;
+        require_once __DIR__ . '/automation.php';
+        automation_handle_crm_event($client, $contactId, $kind, $data);
+    } catch (Throwable $e) { error_log('flow event ' . $kind . ': ' . $e->getMessage()); }
+}
+
 /* ───────────────────────── stage messages ───────────────────────── */
 
 /**
@@ -266,6 +276,7 @@ function crm_auto_on_stage(array $client, int $contactId, int $stageId, bool $ar
     $cid = (int) $client['id'];
     if (function_exists('crm_capi_on_stage')) crm_capi_on_stage($client, $contactId, $stageId);   // tell Meta, for form leads
     if (function_exists('crm_staff_stage_alert')) crm_staff_stage_alert($cid, $contactId, $stageId);   // tell the salesperson, when chosen
+    if (function_exists('social_flow_event')) social_flow_event($client, $contactId, 'crm_stage', ['stage_id' => $stageId]);   // automations waiting for this stage
     try {
         $m = db_row("SELECT * FROM crm_stage_msgs WHERE client_id=? AND stage_id=? AND active=1", [$cid, $stageId]);
         if ($m && (!$arrival || (int) $m['on_arrival'])) {

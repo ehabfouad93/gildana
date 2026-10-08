@@ -18,6 +18,10 @@ require_once __DIR__ . '/includes/helpers.php';
 require_once __DIR__ . '/includes/crypto.php';
 require_once __DIR__ . '/includes/db.php';
 require_once __DIR__ . '/includes/meta_leads.php';
+require_once __DIR__ . '/includes/push.php';
+require_once __DIR__ . '/includes/social.php';     // Messenger, Instagram Direct, comments
+require_once __DIR__ . '/includes/automation.php';
+require_once __DIR__ . '/includes/social_campaigns.php';   // Marketing Messages opt-ins
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     $mode  = (string) ($_GET['hub_mode'] ?? '');
@@ -41,10 +45,32 @@ if ($secret === '' || $sig === '' || !hash_equals('sha256=' . hash_hmac('sha256'
 }
 
 $data = json_decode($raw, true);
-if (!is_array($data) || ($data['object'] ?? '') !== 'page') { http_response_code(200); exit('ignored'); }
+$object = is_array($data) ? (string) ($data['object'] ?? '') : '';
+if (!in_array($object, ['page', 'instagram'], true)) { http_response_code(200); exit('ignored'); }
 
 $handled = 0;
+/* Messages (Messenger on the Page object, Instagram Direct on the instagram object) and comments.
+   The entry id is the Page id, or the Instagram account id. The same Page can be connected by more
+   than one account (an agency and its client): each gets its own copy. */
+$platform = $object === 'instagram' ? 'instagram' : 'messenger';
 foreach ((array) ($data['entry'] ?? []) as $entry) {
+    $owner = (string) ($entry['id'] ?? '');
+    foreach ((array) ($entry['messaging'] ?? []) as $ev) {
+        if (!is_array($ev)) continue;
+        foreach (social_pages_for($owner, $platform) as $page) { social_inbound_event($page, $platform, $ev); $handled++; }
+    }
+    foreach ((array) ($entry['changes'] ?? []) as $change) {
+        $f = (string) ($change['field'] ?? '');
+        if (($object === 'page' && $f === 'feed') || ($object === 'instagram' && in_array($f, ['comments', 'live_comments'], true))) {
+            foreach (social_pages_for($owner, $platform) as $page) {
+                if (function_exists('social_comment_event')) { social_comment_event($page, $object === 'instagram' ? 'ig' : 'fb', (array) ($change['value'] ?? [])); $handled++; }
+            }
+        }
+    }
+}
+
+foreach ((array) ($data['entry'] ?? []) as $entry) {
+    if ($object !== 'page') break;
     foreach ((array) ($entry['changes'] ?? []) as $change) {
         if (($change['field'] ?? '') !== 'leadgen') continue;
         $v = (array) ($change['value'] ?? []);

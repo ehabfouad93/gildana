@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/includes/bootstrap.php';
 require_once __DIR__ . '/includes/meta_leads.php';
+require_once __DIR__ . '/includes/social.php';     // link each Page's Instagram account on connect
 
 $row = meta_take_state((string) ($_GET['state'] ?? ''));    // single use: a replayed callback finds nothing
 

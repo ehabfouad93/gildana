@@ -17,7 +17,7 @@ $IB_UPLOAD   = 'upload_media.php';   // lets the template picker upload a header
 $IB_OPEN = null;
 if (($openId = (int) ($_GET['contact'] ?? 0)) > 0) {
     $oc = db_row("SELECT id, name, phone_e164, owner_user_id FROM contacts WHERE id=? AND client_id=?", [$openId, (int) $CLIENT['id']]);
-    if ($oc && crm_can_see($oc)) $IB_OPEN = ['id' => (int) $oc['id'], 'name' => (string) $oc['name'], 'phone' => function_exists('crm_phone_hidden') && crm_phone_hidden() ? ltrim(crm_phone_mask((string) $oc['phone_e164']), '+') : (string) $oc['phone_e164']];
+    if ($oc && crm_can_see($oc)) $IB_OPEN = ['id' => (int) $oc['id'], 'name' => (string) $oc['name'], 'phone' => (string) $oc['phone_e164'] === '' ? '' : (function_exists('crm_phone_hidden') && crm_phone_hidden() ? ltrim(crm_phone_mask((string) $oc['phone_e164']), '+') : (string) $oc['phone_e164'])];
 }
 require_once __DIR__ . '/../includes/inbox_view.php';
 layout_footer();

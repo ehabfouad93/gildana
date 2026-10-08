@@ -411,7 +411,9 @@ $ago = function (?string $t): string {
     return (int) ($d / 86400) . ' days ago';
 };
 
-$title = (string) ($lead['name'] ?: '+' . $phone);
+$title = (string) ($lead['name'] ?: ($phone !== '' ? '+' . $phone : (!empty($lead['ig_username']) ? '@' . $lead['ig_username'] : 'Contact #' . $id)));
+// Messenger / Instagram people have no number until they give one: no Call or WhatsApp buttons for them.
+$socialOnly = $phone === '';
 client_header($title, 'crm', $CLIENT);
 $ownerName = crm_user_name($lead['owner_user_id'] !== null ? (int) $lead['owner_user_id'] : null);
 ?>
@@ -495,7 +497,8 @@ $ownerName = crm_user_name($lead['owner_user_id'] !== null ? (int) $lead['owner_
       <section>
         <h3 class="lead-sec">Contact information</h3>
         <dl class="lead-dl">
-          <dt>Phone</dt><dd><?php if ($hidePh): ?><button type="button" class="btn-link ltr lead-phone" data-reveal="call" title="Call — opening the number is recorded"><?= e(crm_phone_mask($phone)) ?></button>
+          <dt>Phone</dt><dd><?php if ($socialOnly): ?><span class="text-muted"><?= !empty($lead['fb_psid']) ? 'Messenger' : '' ?><?= !empty($lead['fb_psid']) && !empty($lead['ig_sid']) ? ' · ' : '' ?><?= !empty($lead['ig_sid']) ? 'Instagram' . (!empty($lead['ig_username']) ? ' @' . e((string) $lead['ig_username']) : '') : '' ?> — no number yet</span>
+            <?php elseif ($hidePh): ?><button type="button" class="btn-link ltr lead-phone" data-reveal="call" title="Call — opening the number is recorded"><?= e(crm_phone_mask($phone)) ?></button>
             <?php else: ?><a class="ltr lead-phone" href="tel:+<?= e($phone) ?>">+<?= e($phone) ?></a><?php endif; ?></dd>
           <dt>Email</dt><dd><?= !empty($lead['email']) ? '<a href="mailto:' . e((string) $lead['email']) . '">' . e((string) $lead['email']) . '</a>' : '<span class="text-muted">—</span>' ?></dd>
           <dt>Contact status</dt><dd><span class="pill <?= $contacted ? 'green' : 'gold' ?>"><?= $contacted ? 'Contacted' : 'Not contacted' ?></span></dd>
@@ -676,9 +679,11 @@ $ownerName = crm_user_name($lead['owner_user_id'] !== null ? (int) $lead['owner_
         <button type="button" class="la la-orange" data-dlg="act-dlg" data-kind="call"><span aria-hidden="true">＋</span> New activity</button>
         <button type="button" class="la la-outline" data-dlg="act-dlg" data-kind="note">Add note</button>
       <?php endif; ?>
-      <?php if ($hidePh): ?><button type="button" class="la la-outline" data-reveal="call">Call</button>
+      <?php if ($socialOnly): ?>
+      <?php elseif ($hidePh): ?><button type="button" class="la la-outline" data-reveal="call">Call</button>
       <?php else: ?><a class="la la-outline" href="tel:+<?= e($phone) ?>">Call</a><?php endif; ?>
-      <?php if ($hidePh): ?><button type="button" class="la la-green" data-reveal="whatsapp">WhatsApp app</button>
+      <?php if ($socialOnly): ?>
+      <?php elseif ($hidePh): ?><button type="button" class="la la-green" data-reveal="whatsapp">WhatsApp app</button>
       <?php else: ?><a class="la la-green" href="https://wa.me/<?= e($phone) ?>" target="_blank" rel="noopener">WhatsApp app</a><?php endif; ?>
       <?php if ($canW && can_use('inbox')): ?><button type="button" class="la la-teal" data-dlg="send-dlg">Send message</button><?php endif; ?>
       <?php if (can_use('inbox')): ?><a class="la la-outline" href="inbox.php?contact=<?= $id ?>">Conversation</a><?php endif; ?>

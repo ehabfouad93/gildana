@@ -60,6 +60,10 @@ function auto_save_run(array $run, array $ctx): void
 /** Within the 24h customer-service window? */
 function auto_in_window(array $contact, array $client = []): bool
 {
+    // Messenger / Instagram: their own 24-hour window, from their last message on that channel.
+    if (function_exists('channel_route') && ($r = channel_route()) && function_exists('social_window_open')) {
+        return social_window_open($contact, (string) $r['channel']);
+    }
     // The 24-hour customer-service window is a Meta Cloud API rule. A personal number
     // sends ordinary messages and has no such window, so it is never gated by it.
     if ($client && function_exists('channel_is_personal') && channel_is_personal($client)) return true;
@@ -151,7 +155,9 @@ function auto_send(array $client, array &$run, array $step, array $contact, stri
     // outreach. Out of budget → leave the run waiting; the next worker run picks it up rather
     // than burning the slot or dropping the message. Conversational replies are exempt: see
     // auto_replying().
-    if (channel_is_personal($client) && !auto_replying() && slot_budget($client) <= 0) {
+    // Messenger / Instagram (a routed step): one credit, no WhatsApp pacing or Meta pricing.
+    $routed = function_exists('channel_route') && channel_route() !== null;
+    if (!$routed && channel_is_personal($client) && !auto_replying() && slot_budget($client) <= 0) {
         $run['status'] = 'waiting_timer';
         $run['wait_until'] = date('Y-m-d H:i:s', time() + max(1, (int) ($client['slot_pause_sec'] ?: 180)));
         return false;
@@ -161,7 +167,7 @@ function auto_send(array $client, array &$run, array $step, array $contact, stri
        ours is priced from the rate table. A reply inside the 24-hour window is a service
        message, which Meta does not charge for at all. */
     $category = auto_in_window($contact, $client) && $kind !== 'template' ? 'service' : 'utility';
-    $cost = function_exists('billing_message_credits')
+    $cost = !$routed && function_exists('billing_message_credits')
           ? billing_message_credits($client, (string) $contact['phone_e164'], $category) : 1;
 
     $bal = credits_adjust((int) $client['id'], -$cost, 'automation', null);
@@ -170,11 +176,11 @@ function auto_send(array $client, array &$run, array $step, array $contact, stri
         return false;
     }
     $res = $sender();  // ['ok','wamid','error_title']
-    slot_consume($client, 1);
+    if (!$routed) slot_consume($client, 1);
     $status = $res['ok'] ? 'sent' : 'failed';
     if (!$res['ok']) {
         credits_adjust((int) $client['id'], $cost, 'automation_refund', null);
-    } elseif (function_exists('billing_record_messages')) {
+    } elseif (!$routed && function_exists('billing_record_messages')) {
         billing_record_messages($client, (string) $contact['phone_e164'], $category, 1,
             billing_message_cost($client, (string) $contact['phone_e164'], $category), $cost);
     }
@@ -291,9 +297,23 @@ function automation_run_steps(array $client, array $contact, array $run, array $
         $prevStep = $stepId;
         $cfg  = auto_cfg($step);
         $type = (string) $step['type'];
-        $to   = (string) $contact['phone_e164'];
+        $to   = (string) ($contact['phone_e164'] ?? '');
 
         auto_step_event($run, $stepId, 'reached');
+
+        /* Which channel this step talks on: where the conversation started, or the one the step
+           names ("Send on"). A person with no address there takes the step's "Not reachable" exit,
+           or the run stops — never a message sent to nobody. Comment replies address the comment. */
+        if (function_exists('auto_route_for') && !auto_dry_run()) {
+            $route = auto_route_for($client, $run, $cfg, $contact);
+            if ($route === false && in_array($type, auto_sending_types(), true)) {
+                auto_step_event($run, $stepId, 'stalled', 'not_reachable');
+                $un = $cfg['unreachable_next'] ?? null;
+                if ($un) { $run['current_step_id'] = $un; continue; }
+                $run['status'] = 'stopped';
+                break;
+            }
+        }
 
         // Free-form sends require the 24h window; templates are always allowed.
         $freeForm = in_array($type, ['text', 'image', 'buttons', 'question', 'ai_chat', 'list_msg'], true)
@@ -507,6 +527,37 @@ function automation_run_steps(array $client, array $contact, array $run, array $
         } elseif ($type === 'collect') {
             auto_collect($client, $run, $step, $contact, $ctx, $cfg);
             $run['current_step_id'] = $step['next_step_id'];
+        } elseif ($type === 'comment_reply' || $type === 'comment_dm') {
+            /* Answer the comment this run started from: publicly under it, or privately in their
+               inbox (Meta allows one private reply per comment, within 7 days). A private reply can
+               wait for their answer, which then opens the normal conversation. */
+            $cm = auto_run_comment($run);
+            $text = auto_render((string) ($cfg['body'] ?? ''), $contact, $ctx);
+            if (!$cm || $text === '') { $run['current_step_id'] = $step['next_step_id']; continue; }
+            if (auto_dry_run()) {
+                $log = &auto_preview_log();
+                $log[] = ['step_id' => (int) $step['id'], 'type' => $type === 'comment_reply' ? 'comment' : 'text', 'body' => ($type === 'comment_reply' ? '💬 ' : '✉️ ') . $text];
+                $ok = true;
+            } else {
+                $ok = $type === 'comment_reply' ? social_comment_reply($client, $cm, $text, 'public', 'flow:' . $flow['id'])['ok']
+                                                : social_comment_reply($client, $cm, $text, 'private', 'flow:' . $flow['id'])['ok'];
+            }
+            auto_log($ctx, 'assistant', $text);
+            if (!$ok) { auto_step_event($run, $stepId, 'stalled', $type === 'comment_dm' ? 'private_reply_failed' : 'comment_reply_failed'); }
+            if ($ok && $type === 'comment_dm' && !empty($cfg['wait_reply'])) {
+                $run['status'] = 'waiting_input';     // their answer resumes at the next step
+                break;
+            }
+            $run['current_step_id'] = $step['next_step_id'];
+        } elseif ($type === 'export') {
+            auto_export_data($client, $flow, $run, $step, $contact, $ctx, $cfg);
+            // Saving to the CRM can give the person a number, or join them to their WhatsApp contact:
+            // the steps after this one must see who they are now.
+            if (!auto_dry_run()) {
+                $nowId = (int) db_val("SELECT contact_id FROM flow_runs WHERE id=?", [(int) $run['id']]);
+                if ($nowId) { $run['contact_id'] = $nowId; $contact = db_row("SELECT * FROM contacts WHERE id=?", [$nowId]) ?: $contact; }
+            }
+            $run['current_step_id'] = $step['next_step_id'];
         } elseif ($type === 'sheet_export') {
             // Write this lead straight into the client's own spreadsheet. A failure here must
             // not strand the conversation — the row is recoverable from Leads, the chat is not.
@@ -518,6 +569,7 @@ function automation_run_steps(array $client, array $contact, array $run, array $
         }
     }
 
+    if (function_exists('channel_route')) channel_route(null, true);
     // Broke out of the loop while still 'active' → a send failed or the step cap
     // was hit; mark blocked rather than completing. Natural End sets 'completed'
     // via the top-of-loop finalize.
@@ -711,16 +763,26 @@ function auto_bot_paused(array $contact): bool
  *        seeding here is the whole mechanism behind {{ad_headline}} — the renderer needs no
  *        knowledge of ads at all.
  */
-function auto_start(array $client, array $contact, array $flow, string $inboundText = '', array $seedFields = []): void
+function auto_start(array $client, array $contact, array $flow, string $inboundText = '', array $seedFields = [],
+                    string $channel = 'whatsapp', array $extra = []): void
 {
     $ctx = ['fields' => $seedFields, 'transcript' => []];
     if ($inboundText !== '') auto_log($ctx, 'user', $inboundText);
-    $runId = db_insert(
-        "INSERT INTO flow_runs (flow_id,client_id,contact_id,current_step_id,status,score,context,created_at)
-         VALUES (?,?,?,?, 'active', 0, ?, NOW())",
-        [(int) $flow['id'], (int) $client['id'], (int) $contact['id'], $flow['first_step_id'],
-         json_encode($ctx, JSON_UNESCAPED_UNICODE)]
-    );
+    if (db_has_column('flow_runs', 'channel')) {
+        $runId = db_insert(
+            "INSERT INTO flow_runs (flow_id,client_id,contact_id,current_step_id,status,channel,trigger_kind,comment_id,score,context,created_at)
+             VALUES (?,?,?,?, 'active', ?, ?, ?, 0, ?, NOW())",
+            [(int) $flow['id'], (int) $client['id'], (int) $contact['id'], $flow['first_step_id'], $channel,
+             $extra['trigger_kind'] ?? null, $extra['comment_id'] ?? null, json_encode($ctx, JSON_UNESCAPED_UNICODE)]
+        );
+    } else {
+        $runId = db_insert(
+            "INSERT INTO flow_runs (flow_id,client_id,contact_id,current_step_id,status,score,context,created_at)
+             VALUES (?,?,?,?, 'active', 0, ?, NOW())",
+            [(int) $flow['id'], (int) $client['id'], (int) $contact['id'], $flow['first_step_id'],
+             json_encode($ctx, JSON_UNESCAPED_UNICODE)]
+        );
+    }
     db_run("UPDATE flows SET runs_count=runs_count+1 WHERE id=?", [(int) $flow['id']]);
     $run = db_row("SELECT * FROM flow_runs WHERE id=?", [$runId]);
     automation_run_steps($client, $contact, $run, $ctx);
@@ -781,7 +843,8 @@ function automation_handle_inbound(array $client, array $contact, array $message
  * Decide what to do with an inbound and do it. Returns a short reason code (optionally
  * "code|detail") so the caller can record why — including for the paths that send nothing.
  */
-function auto_inbound_decide(array $client, array $contact, array $message): string
+function auto_inbound_decide(array $client, array $contact, array $message, string $channel = 'whatsapp',
+                             string $socialTrigger = 'message', string $socialAd = ''): string
 {
     $text     = (string) ($message['text'] ?? '');
     $buttonId = (string) ($message['button_id'] ?? '');
@@ -797,6 +860,11 @@ function auto_inbound_decide(array $client, array $contact, array $message): str
     if (auto_bot_paused($contact)) return 'bot_paused|A human took over this chat from the Inbox';
 
     $run = auto_active_run((int) $contact['id']);
+    // They answered on another channel than the conversation started on: carry on there.
+    if ($run && isset($run['channel']) && $run['channel'] !== $channel && $run['status'] === 'waiting_input') {
+        db_run("UPDATE flow_runs SET channel=? WHERE id=?", [$channel, (int) $run['id']]);
+        $run['channel'] = $channel;
+    }
     if ($run && $run['status'] === 'waiting_input') {
         $ctx  = auto_ctx($run);
         auto_log($ctx, 'user', $text !== '' ? $text : $buttonId);
@@ -824,6 +892,10 @@ function auto_inbound_decide(array $client, array $contact, array $message): str
         if ($type === 'question') {
             $saveAs = trim((string) ($cfg['save_as'] ?? ''));
             if ($saveAs !== '') $ctx['fields'][$saveAs] = $text;
+        } elseif ($type === 'comment_dm') {
+            // The answer to a private reply: kept, and the conversation carries on at the next step.
+            $saveAs = trim((string) ($cfg['save_as'] ?? '')) ?: 'dm_reply';
+            $ctx['fields'][$saveAs] = $text;
         } elseif ($type === 'buttons') {
             $btns = (array) ($cfg['buttons'] ?? []);
             $idx  = ($buttonId !== '' && preg_match('/^b(\d+)$/', $buttonId, $m)) ? (int) $m[1] : -1;
@@ -860,12 +932,26 @@ function auto_inbound_decide(array $client, array $contact, array $message): str
         return 'resumed|step type: ' . $type;
     }
 
+    // Messenger / Instagram: their own triggers, from flow_triggers.
+    if ($channel !== 'whatsapp') {
+        $prior = (int) db_val("SELECT COUNT(*) FROM flow_runs WHERE contact_id=?", [(int) $contact['id']]);
+        $flow = auto_match_social((int) $client['id'], $channel, $text !== '' ? $text : $buttonId, $socialTrigger, $socialAd, $prior === 0);
+        if (!$flow) return 'no_flow|No ' . $channel . ' trigger matched this message';
+        auto_start($client, $contact, $flow, $text, [], $channel, ['trigger_kind' => (string) ($flow['trig_kind'] ?? '')]);
+        return 'started|' . ($flow['trig_kind'] ?? $channel) . ': ' . (string) $flow['name'];
+    }
+
     // No waiting run → try to start one (text triggers only).
     if ($text === '') {
         return 'no_text|Nothing to match on: a photo or voice note with no caption';
     }
     $flow = auto_match_keyword((int) $client['id'], $text);
     $how  = $flow ? 'keyword' : '';
+    // A flow can also have WhatsApp keywords as an extra trigger ("also start when…").
+    if (!$flow && function_exists('auto_trigger_flow')) {
+        $flow = auto_trigger_flow((int) $client['id'], ['wa_keyword'], fn($k, $c) => !empty($c['keywords']) && auto_keywords_match($c, $text));
+        if ($flow) $how = 'keyword';
+    }
 
     /* Click-to-WhatsApp, below keyword and above welcome.
          below keyword — a keyword is what the person actually TYPED; the referral is only
@@ -878,16 +964,27 @@ function auto_inbound_decide(array $client, array $contact, array $message): str
        ever fire once per conversation. */
     if (!$flow && $adSource !== '') {
         $flow = auto_match_ad((int) $client['id'], $adSource);
+        if (!$flow && function_exists('auto_trigger_flow')) {
+            $flow = auto_trigger_flow((int) $client['id'], ['wa_ad'], fn($k, $c) => empty($c['ad_ids']) || in_array($adSource, (array) $c['ad_ids'], true));
+        }
         if ($flow) $how = 'ad';
     }
 
     if (!$flow) {
         // welcome: first inbound and no prior run for this contact
         $prior = (int) db_val("SELECT COUNT(*) FROM flow_runs WHERE contact_id=?", [(int) $contact['id']]);
-        if ($prior === 0) { $flow = auto_welcome_flow((int) $client['id']); if ($flow) $how = 'welcome'; }
+        if ($prior === 0) {
+            $flow = auto_welcome_flow((int) $client['id']);
+            if (!$flow && function_exists('auto_trigger_flow')) $flow = auto_trigger_flow((int) $client['id'], ['wa_welcome'], fn() => true);
+            if ($flow) $how = 'welcome';
+        }
         // Catch-all: nothing matched and they're not new → answer anyway (e.g. an AI agent
         // acting as an always-on FAQ) instead of leaving the message unanswered.
-        if (!$flow) { $flow = auto_default_flow((int) $client['id']); if ($flow) $how = 'default'; }
+        if (!$flow) {
+            $flow = auto_default_flow((int) $client['id']);
+            if (!$flow && function_exists('auto_trigger_flow')) $flow = auto_trigger_flow((int) $client['id'], ['wa_any'], fn() => true);
+            if ($flow) $how = 'default';
+        }
     }
     if (!$flow) {
         // The commonest silent case by far, and the one that looks most like a bug: the first
@@ -2186,3 +2283,6 @@ function automation_ingest_sheets(int $maxRowsPerFlow = 500): int
     }
     return $total;
 }
+
+// One workflow, many triggers, on WhatsApp, Messenger and Instagram.
+require_once __DIR__ . '/automation_channels.php';

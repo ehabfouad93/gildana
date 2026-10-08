@@ -49,10 +49,53 @@ function channel_blocked_reason(array $client): string
         ? '' : 'Missing WhatsApp access token or phone number ID.';
 }
 
+/* ── where an automation's message goes ──
+   An automation that started on Messenger or Instagram, or a step set to "Send on: Instagram",
+   still calls channel_send_text() and friends like every other step. While a route is set, those
+   calls go to that person on that channel instead of to a WhatsApp number — so every existing step
+   works on every channel without knowing about channels. Set and cleared by the engine around each
+   step (auto_route_for()); never left set across runs. */
+function channel_route(?array $set = null, bool $clear = false): ?array
+{
+    static $route = null;
+    if ($clear) $route = null;
+    elseif ($set !== null) $route = $set;
+    return $route;
+}
+
+/** The routed send, or null when the message goes to WhatsApp as usual. */
+function channel_routed(array $client, string $kind, array $args): ?array
+{
+    $r = channel_route();
+    if (!$r || !function_exists('social_send')) return null;
+    [$contact, $ch] = [$r['contact'], $r['channel']];
+    switch ($kind) {
+        case 'text':  return social_send_text($client, $contact, $ch, (string) $args[0]);
+        case 'image': return social_send_image($client, $contact, $ch, (string) $args[0], (string) ($args[1] ?? ''));
+        case 'buttons':
+            $c = [];
+            foreach (array_values((array) $args[1]) as $i => $b) $c[] = ['id' => (string) ($b['id'] ?? ('b' . $i)), 'title' => (string) ($b['title'] ?? ('Option ' . ($i + 1)))];
+            return social_send_choices($client, $contact, $ch, (string) $args[0], $c);
+        case 'list':
+            $c = [];
+            foreach (array_values((array) $args[1]) as $i => $row) $c[] = ['id' => (string) ($row['id'] ?? ('o' . $i)), 'title' => (string) ($row['title'] ?? ('Option ' . ($i + 1)))];
+            return social_send_choices($client, $contact, $ch, (string) $args[0], $c);
+        case 'template':
+            // Messenger and Instagram have no WhatsApp templates: the template's words go as a message.
+            [$tpl, $cfg, $row] = $args;
+            $components = json_decode((string) ($tpl['components'] ?? ''), true) ?: [];
+            $text = channel_render_template_text($components, $cfg, $row, null, (string) ($tpl['body_text'] ?? ''));
+            $media = trim((string) ($cfg['header_media'] ?? ''));
+            return $media !== '' ? social_send_image($client, $contact, $ch, $media, $text) : social_send_text($client, $contact, $ch, $text);
+    }
+    return null;
+}
+
 /* ── sends ── */
 
 function channel_send_text(array $client, string $to, string $body): array
 {
+    if (($r = channel_routed($client, 'text', [$body])) !== null) return $r;
     return channel_is_personal($client)
         ? pw_send_text($client, $to, $body)
         : wa_send_text($client, $to, $body);
@@ -60,6 +103,7 @@ function channel_send_text(array $client, string $to, string $body): array
 
 function channel_send_image(array $client, string $to, string $link, string $caption = ''): array
 {
+    if (($r = channel_routed($client, 'image', [$link, $caption])) !== null) return $r;
     return channel_is_personal($client)
         ? pw_send_image($client, $to, $link, $caption)
         : wa_send_image($client, $to, $link, $caption);
@@ -72,6 +116,7 @@ function channel_send_image(array $client, string $to, string $link, string $cap
  */
 function channel_send_buttons(array $client, string $to, string $body, array $buttons): array
 {
+    if (($r = channel_routed($client, 'buttons', [$body, $buttons])) !== null) return $r;
     if (!channel_is_personal($client)) {
         return wa_send_buttons($client, $to, $body, $buttons);
     }
@@ -92,6 +137,7 @@ function channel_send_buttons(array $client, string $to, string $body, array $bu
  */
 function channel_send_list(array $client, string $to, string $body, string $buttonText, array $rows, string $header = ''): array
 {
+    if (($r = channel_routed($client, 'list', [$body, $rows])) !== null) return $r;
     if (!channel_is_personal($client)) {
         return wa_send_list($client, $to, $body, $buttonText, $rows, $header);
     }
@@ -120,6 +166,7 @@ function channel_send_list(array $client, string $to, string $body, string $butt
  */
 function channel_send_template(array $client, string $to, array $tpl, array $cfg, array $contact, ?callable $resolver = null): array
 {
+    if (($r = channel_routed($client, 'template', [$tpl, $cfg, $contact])) !== null) return $r;
     $components = json_decode((string) ($tpl['components'] ?? ''), true) ?: [];
 
     if (!channel_is_personal($client)) {

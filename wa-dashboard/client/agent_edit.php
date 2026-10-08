@@ -11,6 +11,8 @@ $flow = db_row("SELECT * FROM flows WHERE id=? AND client_id=? AND kind='agent'"
 if (!$flow) { http_response_code(404); exit('Agent not found.'); }
 
 $err = '';
+// Social channels this client is offered, on which the agent can also answer.
+$agentChannels = array_values(array_filter(['messenger', 'instagram'], fn($ch) => function_exists('client_has_channel') && client_has_channel($CLIENT, $ch)));
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save') {
     verify_csrf();
     $name    = trim((string) ($_POST['name'] ?? $flow['name']));
@@ -63,6 +65,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save'
             }
             db_run("UPDATE flows SET name=?, trigger_type=?, trigger_config=?, first_step_id=?, updated_at=NOW() WHERE id=?",
                 [$name, $trigger, $triggerConfig, $ids[0] ?? null, $id]);
+            // The same agent can also answer on Messenger / Instagram, started the same way.
+            if (function_exists('auto_save_triggers')) {
+                $rows = [];
+                foreach ($agentChannels as $ch) {
+                    if (!in_array($ch, (array) ($_POST['also_on'] ?? []), true)) continue;
+                    $rows[] = $trigger === 'keyword'
+                        ? ['kind' => $ch . '_keyword', 'config' => ['keywords' => $keywords, 'match_type' => $match]]
+                        : ['kind' => $ch . '_any', 'config' => []];
+                }
+                auto_save_triggers($CLIENT, $id, $rows);
+            }
             $pdo->commit();
             flash('Agent saved.');
             redirect('agent_edit.php?id=' . $id);
@@ -77,6 +90,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save'
 
 /* reconstruct form */
 $tc = json_decode((string) $flow['trigger_config'], true) ?: [];
+$alsoOn = [];
+foreach ((function_exists('auto_flow_triggers') ? auto_flow_triggers($id) : []) as $t) {
+    if (preg_match('/^(messenger|instagram)_/', $t['kind'], $m)) $alsoOn[$m[1]] = true;
+}
 $kwStr = implode(', ', (array) ($tc['keywords'] ?? [])); $matchType = (string) ($tc['match_type'] ?? 'contains');
 $steps = db_all("SELECT * FROM flow_steps WHERE flow_id=? ORDER BY sort, id", [$id]);
 $knowledge = ''; $chatIntro = ''; $chatPersona = ''; $chatInstructions = ''; $chatMaxTurns = 8; $chatGoals = []; $chatCaptures = [];
@@ -127,6 +144,17 @@ client_header('Agent · ' . $flow['name'], 'agents', $CLIENT);
         </select>
       </div>
     </div>
+    <?php if ($agentChannels): ?>
+      <div class="field"><span class="lbl">Answer on</span>
+        <div style="display:flex;gap:16px;flex-wrap:wrap">
+          <label class="mod-opt"><input type="checkbox" checked disabled> WhatsApp</label>
+          <?php foreach ($agentChannels as $ch): ?>
+            <label class="mod-opt"><input type="checkbox" name="also_on[]" value="<?= $ch ?>" <?= !empty($alsoOn[$ch]) ? 'checked' : '' ?>> <?= $ch === 'messenger' ? 'Messenger' : 'Instagram' ?></label>
+          <?php endforeach; ?>
+        </div>
+        <div class="hint">The agent answers there the same way (same trigger and keywords). Buttons become quick replies.</div>
+      </div>
+    <?php endif; ?>
     <div class="hint">Free-form AI replies only work within 24h of the customer's last message; each sent message costs 1 credit.</div>
   </div>
 

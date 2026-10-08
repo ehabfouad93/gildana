@@ -205,6 +205,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save'
                     break;
                 case 'notify':   $cfg = ['message' => (string) ($c['message'] ?? '')]; $next = $R($out['next'] ?? null); break;
                 case 'collect':  $cfg = ['sheet_name' => (string) ($c['sheet_name'] ?? 'Leads'), 'fields' => array_values((array) ($c['fields'] ?? []))]; $next = $R($out['next'] ?? null); break;
+                case 'comment_reply':
+                case 'comment_dm':
+                    $cfg = ['body' => (string) ($c['body'] ?? ''), 'wait_reply' => !empty($c['wait_reply']), 'save_as' => (string) ($c['save_as'] ?? '')];
+                    $next = $R($out['next'] ?? null); break;
+                case 'export':
+                    $cfg = ['fields' => array_values(array_map('strval', (array) ($c['fields'] ?? []))),
+                            'to_sheet' => !empty($c['to_sheet']), 'sheet_id' => trim((string) ($c['sheet_id'] ?? '')), 'sheet_name' => (string) ($c['sheet_name'] ?? ''),
+                            'sheet_tab' => (string) ($c['sheet_tab'] ?? ''), 'to_crm' => !empty($c['to_crm']),
+                            'webhook_url' => trim((string) ($c['webhook_url'] ?? '')), 'emails' => trim((string) ($c['emails'] ?? '')),
+                            // The webhook's signing secret: made once, kept across saves, shown in the panel.
+                            'secret' => (string) ($c['secret'] ?? '') !== '' ? (string) $c['secret'] : bin2hex(random_bytes(16))];
+                    $next = $R($out['next'] ?? null); break;
                 case 'sheet_export':
                     $cfg = ['sheet_id' => trim((string) ($c['sheet_id'] ?? '')), 'sheet_name' => (string) ($c['sheet_name'] ?? ''),
                             'sheet_tab' => (string) ($c['sheet_tab'] ?? ''), 'fields' => array_values((array) ($c['fields'] ?? []))];
@@ -223,6 +235,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save'
                     }
                     $cfg = ['prompt' => (string) ($c['prompt'] ?? ''), 'branches' => $brs, 'fallback_next' => $R($out['fallback'] ?? null)];
                     break;
+            }
+            // Any sending step: which channel it sends on, and where to go if the person is not reachable there.
+            if (in_array($type, auto_sending_types(), true)) {
+                $so = (string) ($c['send_on'] ?? '');
+                if (in_array($so, ['whatsapp', 'messenger', 'instagram'], true)) $cfg['send_on'] = $so;
+                if (($u = $R($out['unreachable'] ?? null)) !== null) $cfg['unreachable_next'] = $u;
             }
             db_run("UPDATE flow_steps SET config=?, next_step_id=? WHERE id=?",
                 [json_encode($cfg, JSON_UNESCAPED_UNICODE), $next, $map[$tid]]);
@@ -250,6 +268,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save'
 
         db_run("UPDATE flows SET name=?, trigger_type=?, trigger_config=?, source_config=?, hot_min=?, warm_min=?, first_step_id=?, updated_at=NOW() WHERE id=?",
             [$name, $trigger, $tc ? json_encode($tc, JSON_UNESCAPED_UNICODE) : null, $sourceConfig, $hotMin, $warmMin, $firstStep, $id]);
+        // "Also start when…" — the flow's extra triggers, on any channel.
+        if (isset($_POST['extra_triggers'])) auto_save_triggers($CLIENT, $id, (array) (json_decode((string) $_POST['extra_triggers'], true) ?: []));
         $pdo->commit();
 
         /* The auto-save posts the same form with ajax=1 and stays on the page. Saving rewrites
@@ -375,6 +395,12 @@ function automation_graph_for_editor(int $id): array
                 break;
             case 'notify':   $node['config'] = ['message' => $c['message'] ?? '']; $node['outputs']['next'] = $tid($s['next_step_id']); break;
             case 'collect':  $node['config'] = ['sheet_name' => $c['sheet_name'] ?? 'Leads', 'fields' => $c['fields'] ?? ['phone','name','last_reply','score','tags']]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
+            case 'comment_reply':
+            case 'comment_dm': $node['config'] = ['body' => $c['body'] ?? '', 'wait_reply' => !empty($c['wait_reply']), 'save_as' => $c['save_as'] ?? '']; $node['outputs']['next'] = $tid($s['next_step_id']); break;
+            case 'export': $node['config'] = ['fields' => $c['fields'] ?? ['date','name','phone','channel','last_reply','all_answers'], 'to_sheet' => !empty($c['to_sheet']),
+                    'sheet_id' => $c['sheet_id'] ?? '', 'sheet_name' => $c['sheet_name'] ?? '', 'sheet_tab' => $c['sheet_tab'] ?? '', 'to_crm' => !empty($c['to_crm']),
+                    'webhook_url' => $c['webhook_url'] ?? '', 'emails' => $c['emails'] ?? '', 'secret' => $c['secret'] ?? ''];
+                $node['outputs']['next'] = $tid($s['next_step_id']); break;
             case 'sheet_export': $node['config'] = ['sheet_id' => $c['sheet_id'] ?? '', 'sheet_name' => $c['sheet_name'] ?? '', 'sheet_tab' => $c['sheet_tab'] ?? '', 'fields' => $c['fields'] ?? ['date','phone','name','last_reply','score','grade']]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
             case 'buttons':
                 $node['config'] = ['body' => $c['body'] ?? '', 'buttons' => array_map(fn($b) => ['title' => $b['title'] ?? '', 'points' => (int) ($b['points'] ?? 0)], (array) ($c['buttons'] ?? []))];
@@ -385,6 +411,10 @@ function automation_graph_for_editor(int $id): array
                 foreach ((array) ($c['branches'] ?? []) as $ri => $b) $node['outputs']['r' . $ri] = $tid($b['next_step_id'] ?? null);
                 $node['outputs']['fallback'] = $tid($c['fallback_next'] ?? null);
                 break;
+        }
+        if (in_array($s['type'], auto_sending_types(), true)) {
+            $node['config']['send_on'] = (string) ($c['send_on'] ?? '');
+            if (!empty($c['unreachable_next'])) $node['outputs']['unreachable'] = $tid($c['unreachable_next']);
         }
         // Real numbers for this step, so the canvas shows where people actually drop out.
         $node['stats'] = $stepStats[(int) $s['id']] ?? null;
@@ -407,6 +437,7 @@ client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
   <h1><?= e((string) $flow['name']) ?></h1>
   <div class="page-actions">
     <?= guide_button('automations') ?>
+    <a class="btn btn-ghost btn-sm" href="automation_data.php?id=<?= (int) $id ?>">Data</a>
     <a class="btn btn-ghost btn-sm" href="automations.php">← All</a>
     <button type="submit" form="flow-form" class="btn btn-primary btn-sm">Save</button>
   </div>
@@ -546,6 +577,26 @@ client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
     </div>
   </div>
 
+  <?php /* ── More triggers, on any channel ── */
+    $trigKinds = auto_trigger_kinds_for($CLIENT);
+    $extraTrig = auto_flow_triggers($id);
+    $metaForms = [];
+    try { $metaForms = db_all("SELECT form_id, name FROM meta_forms WHERE client_id=? ORDER BY name", [$cid]); } catch (Throwable $e) {}
+    $recentPosts = [];
+    try { $recentPosts = db_all("SELECT post_id, platform, MAX(COALESCE(post_text,'')) txt, MAX(created_at) at FROM social_comments WHERE client_id=? GROUP BY post_id, platform ORDER BY at DESC LIMIT 30", [$cid]); } catch (Throwable $e) {}
+  ?>
+  <div class="card" id="more-triggers">
+    <h2 style="margin-bottom:4px">Also start this automation when…</h2>
+    <p class="text-muted" style="font-size:12.5px;margin:0 0 10px">One automation can answer every channel: add a Messenger keyword, an Instagram comment on
+      a reel, a Meta lead form, a CRM stage… Each step sends where the conversation started unless you choose otherwise in the step.</p>
+    <input type="hidden" name="extra_triggers" id="extra_triggers" value="<?= e(json_encode($extraTrig, JSON_UNESCAPED_UNICODE)) ?>">
+    <div id="trig-list"></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+      <select id="trig-add"><?php foreach ($trigKinds as $k => $t): ?><option value="<?= e($k) ?>"><?= e($t[0]) ?></option><?php endforeach; ?></select>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="trigAdd()">+ Add trigger</button>
+    </div>
+  </div>
+
   <?php /* ── What's wrong with this flow, and what does it actually do ── */ ?>
   <div class="card" id="health-card">
     <div class="row-between" style="flex-wrap:wrap;gap:10px">
@@ -615,6 +666,13 @@ client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
           <option value="template">Send template</option>
           <option value="buttons">Reply buttons</option>
           <option value="list_msg">Menu list (up to 10)</option>
+        </optgroup>
+        <optgroup label="Comments (Facebook / Instagram)">
+          <option value="comment_reply">Reply to the comment</option>
+          <option value="comment_dm">Reply privately (message)</option>
+        </optgroup>
+        <optgroup label="Data">
+          <option value="export">Export data (sheet, CRM, webhook, email)</option>
         </optgroup>
         <optgroup label="Ask / branch">
           <option value="question">Ask &amp; capture</option>
@@ -690,6 +748,14 @@ const KNOWN_FIELDS = <?= json_encode(array_values(array_unique(array_filter(arra
     array_map(fn($st) => (string) (json_decode((string) $st['config'], true)['save_as'] ?? ''), $stepsRaw)
 ))))) ?>;
 const INIT_NODES = <?= json_encode($nodes) ?>;
+const TRIG_KINDS = <?= json_encode(array_map(fn($t) => ['label' => $t[0], 'cfg' => $t[2]], $trigKinds), JSON_UNESCAPED_UNICODE) ?>;
+const META_FORMS = <?= json_encode(array_map(fn($f) => ['id' => (string) $f['form_id'], 'name' => (string) $f['name']], $metaForms), JSON_UNESCAPED_UNICODE) ?>;
+const CRM_STAGES = <?= json_encode(function_exists('crm_enabled') && crm_enabled($CLIENT) ? array_map(fn($st) => ['id' => (int) $st['id'], 'name' => $st['name']], crm_stages($cid)) : [], JSON_UNESCAPED_UNICODE) ?>;
+const RECENT_POSTS = <?= json_encode(array_map(fn($p) => ['id' => (string) $p['post_id'], 'pl' => $p['platform'], 'txt' => mb_substr((string) $p['txt'], 0, 60)], $recentPosts), JSON_UNESCAPED_UNICODE) ?>;
+// Channels this account sends on, for each step's "Send on".
+const SEND_CHANNELS = <?= json_encode(array_values(array_intersect(['whatsapp', 'messenger', 'instagram'], client_channels($CLIENT)))) ?>;
+const SENDING_TYPES = <?= json_encode(auto_sending_types()) ?>;
+const EXPORT_FIELDS = <?= json_encode(auto_export_fields(), JSON_UNESCAPED_UNICODE) ?>;
 const INIT_START = <?= json_encode($startNode) ?>;
 const esc = s => (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
@@ -953,7 +1019,9 @@ async function runPreview(){
 }
 
 const TYPE_LABEL = {start:'Trigger',text:'Send text',image:'Send image',template:'Template',buttons:'Buttons',question:'Ask',ai_chat:'AI conversation',ai_branch:'AI branch',ai_score:'AI score',score:'Add points',wait:'Wait',tag:'Tag',list_add:'Add to list',notify:'Notify',collect:'Collect',sheet_export:'Write to Sheet',
-  condition:'If / then',split:'Split test',jump:'Go to automation',wait_until:'Wait until',set_field:'Remember',http:'Web service',list_msg:'Menu list'};
+  condition:'If / then',split:'Split test',jump:'Go to automation',wait_until:'Wait until',set_field:'Remember',http:'Web service',list_msg:'Menu list',
+  comment_reply:'Reply to comment',comment_dm:'Private reply',export:'Export data'};
+const CH_NAME = {whatsapp:'WhatsApp', messenger:'Messenger', instagram:'Instagram'};
 
 let nodes = {};        // id -> {id,type,x,y,config,outputs}
 let start = {id:'start', type:'start', x:INIT_START.x, y:INIT_START.y, outputs:{next:INIT_START.next||null}};
@@ -1013,18 +1081,27 @@ function summary(n){
              (o.length ? '<div class="muted" style="margin-top:4px">'+o.length+' option'+(o.length>1?'s':'')+'</div>' : ''); }
     case 'notify': return '🔔 notify me';
     case 'collect': return '📥 sheet: '+esc(c.sheet_name||'Leads');
+    case 'comment_reply': return '💬 '+(esc(c.body)||'<span class="muted">write the public reply</span>');
+    case 'comment_dm': return '✉️ '+(esc(c.body)||'<span class="muted">write the private message</span>')+(c.wait_reply?'<div class="muted" style="margin-top:4px">waits for their answer</div>':'');
+    case 'export': { const to=[c.to_sheet&&'Sheet',c.to_crm&&'CRM',c.webhook_url&&'webhook',c.emails&&'email'].filter(Boolean);
+      return '📤 '+(to.length?to.join(' · '):'<span class="muted">choose where it goes</span>')+'<div class="muted" style="margin-top:4px">'+(c.fields||[]).length+' fields</div>'; }
     case 'sheet_export': return '📊 '+(c.sheet_id?esc(c.sheet_name||'sheet')+(c.sheet_tab?' → '+esc(c.sheet_tab):''):'<span class="muted">choose a sheet</span>');
   }
   return '';
 }
 function outPorts(n){
   if(n.type==='start') return [{key:'next',label:''}];
-  if(n.type==='buttons') return (n.config.buttons||[]).map((b,i)=>({key:'b'+i,label:b.title||('Button '+(i+1))}));
+  if(n.type==='buttons') return (n.config.buttons||[]).map((b,i)=>({key:'b'+i,label:b.title||('Button '+(i+1))})).concat(n.config.send_on?[{key:'unreachable',label:'Not reachable'}]:[]);
   if(n.type==='ai_branch'){ const a=(n.config.branches||[]).map((b,i)=>({key:'r'+i,label:b.label||('Branch '+(i+1))})); a.push({key:'fallback',label:'(else)'}); return a; }
   if(n.type==='condition') return [{key:'yes',label:'Yes'},{key:'no',label:'No'}];
   if(n.type==='split') return (n.config.paths||[]).map((p,i)=>({key:'p'+i,label:(p.label||String.fromCharCode(65+i))+' ('+(p.weight||1)+')'}));
   if(n.type==='http') return [{key:'next',label:'OK'},{key:'fail',label:'Failed'}];
   if(n.type==='jump') return [];   // a jump hands over and ends this flow
+  // A step sending on a named channel: where to go when the person is not reachable there.
+  if(SENDING_TYPES.includes(n.type) && n.config && n.config.send_on){
+    const base = n.type==='buttons'||n.type==='ai_branch' ? [] : [{key:'next',label:''}];
+    return base.concat([{key:'unreachable',label:'Not reachable'}]);
+  }
   return [{key:'next',label:''}];
 }
 
@@ -1037,7 +1114,7 @@ function nodeEl(n){
   el.innerHTML =
     (n.type==='start'?'':`<span class="port port-in" data-node="${n.id}" data-port="in"></span>`) +
     `<div class="node-head" data-drag="1">${TYPE_LABEL[n.type]||n.type}${n.type==='start'?'':'<span class="del" title="Delete">✕</span>'}</div>`+
-    `<div class="node-body">${summary(n)}</div>`+
+    `<div class="node-body">${summary(n)}${SENDING_TYPES.includes(n.type)&&n.config&&n.config.send_on?`<div class="muted" style="margin-top:4px">on ${esc(CH_NAME[n.config.send_on]||n.config.send_on)}</div>`:''}</div>`+
     statsRow(n)+
     `<div class="node-ports">`+ports.map(p=>
         `<div class="prow"><span class="plabel">${esc(p.label)}</span>`+
@@ -1375,7 +1452,9 @@ function defaultConfig(type){
     jump:{flow_id:0},
     wait_until:{time:'09:00',weekday:''},
     http:{method:'GET',url:'',body:'',save_as:'',pick:''},
-    list_msg:{body:'',button:'Choose',header:'',options:[{title:'',description:''}]}}[type]||{};
+    list_msg:{body:'',button:'Choose',header:'',options:[{title:'',description:''}]},
+    comment_reply:{body:''}, comment_dm:{body:'',wait_reply:true,save_as:''},
+    export:{fields:['date','name','phone','channel','last_reply','all_answers'],to_sheet:false,sheet_id:'',sheet_name:'',sheet_tab:'',to_crm:true,webhook_url:'',emails:'',secret:''}}[type]||{};
 }
 function addNode(type,data){
   mark();
@@ -1393,7 +1472,7 @@ function deleteCurrent(){ if(!current) return; mark(); const id=current.id; dele
 function openCfg(id){ current = id==='start'?start:nodes[id]; if(!current) return;
   document.querySelectorAll('.node').forEach(e=>e.classList.toggle('sel',e.dataset.id===id));
   document.getElementById('cfg-title').textContent=TYPE_LABEL[current.type]||current.type;
-  document.getElementById('cfg-body').innerHTML=current.type==='start'?'<p class="text-muted" style="font-size:13px">This is the entry point. Connect its port to the first step. Trigger settings are at the top of the page.</p>':cfgForm(current);
+  document.getElementById('cfg-body').innerHTML=current.type==='start'?'<p class="text-muted" style="font-size:13px">This is the entry point. Connect its port to the first step. Trigger settings are at the top of the page.</p>':cfgForm(current)+sendOnForm(current);
   document.querySelector('#cfg [onclick="deleteCurrent()"]').parentElement.style.display=current.type==='start'?'none':'';
   document.getElementById('cfg').classList.add('open');
   bindCfg();
@@ -1410,6 +1489,28 @@ function cfgForm(n){ const c=n.config;
           <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('img-file').click()">Upload</button>
         </div><div class="hint" id="img-status"></div></label>
       <label><span class="lbl">Caption</span><input data-k="caption" value="${esc(c.caption)}"></label>`;
+    case 'comment_reply': return `<label><span class="lbl">Public reply, under their comment</span><textarea data-k="body" rows="3" placeholder="Thanks {{name}}! We sent you the details in a message 📩">${esc(c.body)}</textarea></label>
+        <div class="hint">For automations started by a Facebook or Instagram comment. Everyone can see it.</div>`;
+    case 'comment_dm': return `<label><span class="lbl">Private message to the person who commented</span><textarea data-k="body" rows="3" placeholder="Hi {{name}}, here are the prices you asked about…">${esc(c.body)}</textarea></label>
+        <label style="display:flex;gap:8px;align-items:center;font-weight:normal"><input type="checkbox" data-k="wait_reply" ${c.wait_reply?'checked':''} style="width:auto"> Wait for their answer, then continue</label>
+        <label><span class="lbl">Save their answer as</span><input data-k="save_as" value="${esc(c.save_as)}" placeholder="dm_reply"></label>
+        <div class="hint">Meta allows one private reply per comment, within 7 days. Once they answer, the normal conversation opens and the next steps can send freely for 24 hours.</div>`;
+    case 'export': { const f=c.fields||[];
+      const known=[...Object.entries(EXPORT_FIELDS), ...(KNOWN_FIELDS||[]).filter(k=>!['name','phone','score','tag'].includes(k)).map(k=>['f:'+k,'Answer: '+k])];
+      return `<div class="lbl">What to send</div>`
+        + known.map(([k,l])=>`<label style="display:flex;gap:6px;font-weight:normal;align-items:center"><input type="checkbox" class="exf" value="${esc(k)}" ${f.includes(k)?'checked':''} style="width:auto">${esc(l)}</label>`).join('')
+        + `<div class="lbl mt10">Where to send it</div>
+        <label style="display:flex;gap:6px;font-weight:normal;align-items:center"><input type="checkbox" data-k="to_crm" ${c.to_crm?'checked':''} style="width:auto"> The CRM lead — creates it if needed; answers named like a lead field (email, budget, your own fields) fill it; everything goes in a note</label>
+        <label style="display:flex;gap:6px;font-weight:normal;align-items:center"><input type="checkbox" data-k="to_sheet" ${c.to_sheet?'checked':''} style="width:auto"> A Google Sheet</label>
+        <div style="${c.to_sheet?'':'display:none'}"><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+            <input id="sx-name" value="${esc(c.sheet_name||'')}" placeholder="No sheet chosen" readonly style="flex:1;min-width:140px">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="pickSheet()">Choose…</button></div>
+          <div class="hint" id="sx-status"></div>
+          <label><span class="lbl">Tab</span><select id="sx-tab" data-k="sheet_tab"><option value="${esc(c.sheet_tab||'')}">${esc(c.sheet_tab||'— choose a sheet first —')}</option></select></label></div>
+        <label><span class="lbl">Another system (webhook address)</span><input data-k="webhook_url" value="${esc(c.webhook_url)}" placeholder="https://…"></label>
+        ${c.webhook_url?`<div class="hint">Signed: X-Revenect-Signature = sha256 HMAC of "timestamp.body" with the secret <code>${esc(c.secret||'(made when saved)')}</code>.</div>`:''}
+        <label><span class="lbl">Email to</span><input data-k="emails" value="${esc(c.emails)}" placeholder="sales@company.com, manager@company.com"></label>
+        <div class="hint">Every export is also kept on this automation's <a href="automation_data.php?id=<?= (int) $id ?>" target="_blank">Data</a> page, ready to download.</div>`; }
     case 'sheet_export': { const f=c.fields||[];
       return `<label><span class="lbl">Spreadsheet</span>
           <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
@@ -1695,13 +1796,18 @@ function bindCfg(){
       scheduleSave();
     });
   });
+  document.querySelectorAll('#cfg-body .exf').forEach(cb=>cb.addEventListener('change',()=>{
+    current.config.fields=[...document.querySelectorAll('#cfg-body .exf:checked')].map(x=>x.value); renderKeepPanel(false); scheduleSave();
+  }));
+  // Choosing a channel adds or removes the "Not reachable" exit, and showing the sheet picker needs a redraw.
+  document.querySelectorAll('#cfg-body [data-k="send_on"], #cfg-body [data-k="to_sheet"]').forEach(el=>el.addEventListener('change',()=>{ if(el.dataset.k==='send_on' && !el.value && current.outputs) current.outputs.unreachable=null; reopenCfg(); }));
   document.querySelectorAll('#cfg-body .cf').forEach(cb=>cb.addEventListener('change',()=>{ current.config.fields=[...document.querySelectorAll('#cfg-body .cf:checked')].map(x=>x.value); }));
   // Export columns are written in the order shown, so read them in DOM order.
   document.querySelectorAll('#cfg-body .sxf').forEach(cb=>cb.addEventListener('change',()=>{
     current.config.fields=[...document.querySelectorAll('#cfg-body .sxf:checked')].map(x=>x.value);
     renderKeepPanel(false);
   }));
-  if(current.type==='sheet_export' && current.config.sheet_id) loadSheetTabs(current.config.sheet_id, current.config.sheet_tab);
+  if((current.type==='sheet_export' || (current.type==='export' && current.config.to_sheet)) && current.config.sheet_id) loadSheetTabs(current.config.sheet_id, current.config.sheet_tab);
   // AI conversation: line-based lists → arrays (labels only; keys are derived on save).
   const ag=document.getElementById('ac-goals'), ac=document.getElementById('ac-caps');
   if(ag) ag.addEventListener('input',()=>{ current.config.goals=ag.value.split('\n').map(s=>s.trim()).filter(Boolean); renderKeepPanel(false); });
@@ -1875,7 +1981,7 @@ window.addEventListener('message', ev=>{
     loadSourceSheet(d.id,'');
     return;
   }
-  if(!current || current.type!=='sheet_export') return;
+  if(!current || (current.type!=='sheet_export' && current.type!=='export')) return;
   current.config.sheet_id=d.id; current.config.sheet_name=d.name||''; current.config.sheet_tab='';
   const n=document.getElementById('sx-name'); if(n) n.value=d.name||d.id;
   loadSheetTabs(d.id,'');
@@ -1894,6 +2000,41 @@ async function loadSheetTabs(id, selected){
     renderKeepPanel(false);
   }catch(e){ sel.innerHTML='<option value="">— error —</option>'; }
 }
+
+/* ── "Send on": which channel a sending step uses ── */
+function sendOnForm(n){
+  if(!SENDING_TYPES.includes(n.type) || SEND_CHANNELS.length < 2) return '';
+  const v = (n.config||{}).send_on || '';
+  return `<div class="mt16" style="border-top:1px solid var(--line);padding-top:10px"><label><span class="lbl">Send on</span>
+      <select data-k="send_on"><option value="" ${v===''?'selected':''}>Where the conversation started</option>
+      ${SEND_CHANNELS.map(ch=>`<option value="${ch}" ${v===ch?'selected':''}>${CH_NAME[ch]}</option>`).join('')}</select></label>
+    <div class="hint">${v ? 'If they have no '+CH_NAME[v]+' yet, the step takes its <b>Not reachable</b> exit — wire it, for example, to a question asking for their number.' : 'Messenger and Instagram allow free messages for 24 hours after their last message; WhatsApp needs a template outside that.'}</div></div>`;
+}
+
+/* ── "Also start when…": the flow's extra triggers ── */
+let TRIGS = []; try { TRIGS = JSON.parse(document.getElementById('extra_triggers').value || '[]'); } catch(e) { TRIGS = []; }
+function trigSync(){ document.getElementById('extra_triggers').value = JSON.stringify(TRIGS); scheduleSave(); }
+function trigAdd(){ const k=document.getElementById('trig-add').value; if(!k) return; TRIGS.push({kind:k, config:{}, active:1}); trigRender(); trigSync(); }
+function trigDel(i){ TRIGS.splice(i,1); trigRender(); trigSync(); }
+function trigSet(i, key, val){ TRIGS[i].config = TRIGS[i].config || {}; TRIGS[i].config[key] = val; trigSync(); }
+function trigRender(){
+  const box = document.getElementById('trig-list'); if(!box) return;
+  if(!TRIGS.length){ box.innerHTML = '<p class="text-muted" style="font-size:12.5px;margin:0">No extra triggers — this automation starts only from the trigger above.</p>'; return; }
+  box.innerHTML = TRIGS.map((t,i)=>{
+    const k = TRIG_KINDS[t.kind] || {label:t.kind, cfg:''}, c = t.config || {};
+    const list = v => Array.isArray(v) ? v.join(', ') : (v||'');
+    let f = '';
+    if(k.cfg==='keywords' || k.cfg==='posts') f += `<input placeholder="${k.cfg==='posts'?'Keywords (optional — any comment if empty)':'Keywords, comma-separated'}" value="${esc(list(c.keywords))}" onchange="trigSet(${i},'keywords',this.value.split(',').map(s=>s.trim()).filter(Boolean))">
+        <select onchange="trigSet(${i},'match_type',this.value)">${[['contains','contains'],['exact','is exactly'],['starts','starts with']].map(([v,l])=>`<option value="${v}" ${(c.match_type||'contains')===v?'selected':''}>${l}</option>`).join('')}</select>`;
+    if(k.cfg==='posts') f += `<select multiple size="3" title="Only these posts (none chosen = every post)" onchange="trigSet(${i},'posts',[...this.selectedOptions].map(o=>o.value))">${RECENT_POSTS.filter(p=>(t.kind==='ig_comment')===(p.pl==='ig')).map(p=>`<option value="${esc(p.id)}" ${(c.posts||[]).includes(p.id)?'selected':''}>${esc(p.txt||p.id)}</option>`).join('')}</select>
+        <input placeholder="…or post ids" value="${esc(list((c.posts||[]).filter(id=>!RECENT_POSTS.some(p=>p.id===id))))}" onchange="trigSet(${i},'posts',[...new Set([...(TRIGS[${i}].config.posts||[]).filter(id=>RECENT_POSTS.some(p=>p.id===id)), ...this.value.split(',').map(s=>s.trim()).filter(Boolean)])])">`;
+    if(k.cfg==='ads') f += `<input placeholder="Ad ids (optional — any ad if empty)" value="${esc(list(c.ad_ids))}" onchange="trigSet(${i},'ad_ids',this.value.split(',').map(s=>s.trim()).filter(Boolean))">`;
+    if(k.cfg==='forms') f += META_FORMS.length ? `<select multiple size="3" onchange="trigSet(${i},'forms',[...this.selectedOptions].map(o=>o.value))">${META_FORMS.map(fm=>`<option value="${esc(fm.id)}" ${(c.forms||[]).includes(fm.id)?'selected':''}>${esc(fm.name)}</option>`).join('')}</select><span class="hint">none chosen = every form</span>` : '<span class="hint">Connect lead forms in CRM → Facebook &amp; Instagram.</span>';
+    if(k.cfg==='stage') f += `<select onchange="trigSet(${i},'stage_id',+this.value)"><option value="0">— choose a stage —</option>${CRM_STAGES.map(st=>`<option value="${st.id}" ${+c.stage_id===st.id?'selected':''}>${esc(st.name)}</option>`).join('')}</select>`;
+    return `<div class="trig-row"><strong>${esc(k.label)}</strong><span class="trig-cfg">${f}</span><button type="button" class="btn-link" style="color:var(--danger)" onclick="trigDel(${i})">Remove</button></div>`;
+  }).join('');
+}
+trigRender();
 
 function onTrig(){ const v=document.getElementById('trigger_type').value; const k=v==='keyword'; document.getElementById('kw-wrap').style.display=k?'':'none'; document.getElementById('mt-wrap').style.display=k?'':'none';
   const sw=document.getElementById('sheet-wrap'); if(sw) sw.style.display=v==='google_sheet'?'block':'none';

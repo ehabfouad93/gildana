@@ -39,6 +39,9 @@ $campaigns = db_all(
 );
 
 $actions = '<a class="btn btn-primary btn-sm" href="campaign_new.php">+ New Campaign</a>';
+if (client_has_channel($CLIENT, 'messenger') || client_has_channel($CLIENT, 'instagram')) {
+    $actions = '<a class="btn btn-ghost btn-sm" href="campaign_social.php">+ Messenger / Instagram</a>' . $actions;
+}
 client_header('Campaigns', 'campaigns', $CLIENT);
 page_head('Campaigns', $actions);
 
@@ -74,7 +77,7 @@ $pc = fn(int $n, int $of) => $of > 0 ? round(100 * $n / $of) . '%' : '—';
       ?>
         <tr>
           <td><strong><?= e((string) $c['name']) ?></strong></td>
-          <td class="text-muted"><?= e((string) ($c['template_name'] ?? '—')) ?></td>
+          <td class="text-muted"><?php if (in_array($c['channel'] ?? 'whatsapp', ['messenger', 'instagram'], true)): ?><span class="pill <?= $c['channel'] === 'instagram' ? 'gold' : 'blue' ?>"><?= $c['channel'] === 'instagram' ? 'Instagram' : 'Messenger' ?></span> <?= $c['audience_kind'] === 'optin' ? 'Offers opt-in' : 'Last 24h' ?><?php else: ?><?= e((string) ($c['template_name'] ?? '—')) ?><?php endif; ?></td>
           <td><?= status_pill((string) $c['status']) ?></td>
           <td style="min-width:150px">
             <div class="progress" title="<?= (int) $c['sent_count'] ?> sent / <?= (int) $c['total_count'] ?>">
@@ -99,8 +102,10 @@ $pc = fn(int $n, int $of) => $of > 0 ? round(100 * $n / $of) . '%' : '—';
             <a class="btn btn-ghost btn-sm" href="report.php?id=<?= (int) $c['id'] ?>">Report</a>
             <?php /* Opens the new-campaign form filled in, rather than queueing a send behind
                       a single click — the audience and timing deserve a second look. */ ?>
+            <?php if (($c['channel'] ?? 'whatsapp') === 'whatsapp'): ?>
             <a class="btn btn-ghost btn-sm" href="campaign_new.php?copy=<?= (int) $c['id'] ?>"
                title="Send this again — opens a copy you can check first">Duplicate</a>
+            <?php endif; ?>
             <?php if (in_array($c['status'], ['sending', 'scheduled'], true)): ?>
               <button class="btn-link" onclick="act('pause',<?= (int) $c['id'] ?>)">Pause</button>
             <?php elseif ($c['status'] === 'paused'): ?>

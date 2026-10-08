@@ -16,7 +16,8 @@ if (!$camp) { http_response_code(404); exit('Campaign not found.'); }
 if (($_GET['export'] ?? '') === '1') {
     $exF = ['sent' => "status IN ('sent','delivered','read')", 'delivered' => "status IN ('delivered','read')", 'read' => "status='read'",
             'unread' => "status IN ('sent','delivered')", 'failed' => "status IN ('failed','dead','review')", 'queued' => "status IN ('queued','sending')"][(string) ($_GET['status'] ?? '')] ?? '1=1';
-    $rows = db_all("SELECT phone_e164,status,wa_message_id,error_title,sent_at,delivered_at,read_at FROM campaign_messages WHERE campaign_id=? AND $exF ORDER BY id", [$id]);
+    $rows = db_all("SELECT COALESCE(phone_e164, (SELECT COALESCE(NULLIF(k.name,''), CONCAT('@', k.ig_username)) FROM contacts k WHERE k.id=contact_id)) phone_e164,
+                           status,wa_message_id,error_title,sent_at,delivered_at,read_at FROM campaign_messages WHERE campaign_id=? AND $exF ORDER BY id", [$id]);
     header('Content-Type: text/csv; charset=UTF-8');
     header('Content-Disposition: attachment; filename="campaign-' . $id . '-' . date('Y-m-d') . '.csv"');
     echo "\xEF\xBB\xBF";
@@ -59,7 +60,9 @@ $filterSql = ['sent' => "status IN ('sent','delivered','read')", 'delivered' => 
               'unread' => "status IN ('sent','delivered')", 'failed' => "status IN ('failed','dead','review')", 'queued' => "status IN ('queued','sending')"];
 if (isset($filterSql[$statusFilter])) $where .= " AND " . $filterSql[$statusFilter];
 $msgTotal = (int) db_val("SELECT COUNT(*) FROM campaign_messages WHERE $where", $params);
-$messages = db_all("SELECT * FROM campaign_messages WHERE $where ORDER BY id DESC LIMIT $per OFFSET $off", $params);
+$messages = db_all("SELECT campaign_messages.*, (SELECT COALESCE(NULLIF(k.name,''), CONCAT('@', k.ig_username)) FROM contacts k WHERE k.id=campaign_messages.contact_id) AS who
+                       FROM campaign_messages WHERE $where ORDER BY id DESC LIMIT $per OFFSET $off", $params);
+$social = in_array((string) ($camp['channel'] ?? 'whatsapp'), ['messenger', 'instagram'], true);
 $pages = (int) max(1, ceil($msgTotal / $per));
 
 $actions = '<a class="btn btn-ghost btn-sm" href="report.php?id=' . $id . '&export=1' . ($statusFilter !== '' ? '&status=' . urlencode($statusFilter) : '') . '">Export CSV</a><a class="btn btn-ghost btn-sm" href="campaigns.php">← Campaigns</a>';
@@ -71,7 +74,11 @@ client_header('Report · ' . $camp['name'], 'campaigns', $CLIENT);
 </div>
 
 <p class="text-muted" style="margin:-10px 0 20px;font-size:13px">
+  <?php if ($social): ?>
+  <?= $camp['channel'] === 'instagram' ? 'Instagram' : 'Messenger' ?> · <strong><?= $camp['audience_kind'] === 'optin' ? 'People who agreed to receive offers' : 'People who wrote in the last 24 hours' ?></strong> ·
+  <?php else: ?>
   Template <strong><?= e((string) ($camp['template_name'] ?? '—')) ?></strong> ·
+  <?php endif; ?>
   List <strong><?= e((string) ($camp['list_name'] ?? '—')) ?></strong> ·
   Created <?= e(date('d M Y, H:i', strtotime((string) $camp['created_at']))) ?>
 </p>
@@ -126,12 +133,12 @@ if ($failReasons): ?>
   </div>
   <div class="table-wrap">
     <table class="data">
-      <thead><tr><th>Phone</th><th>Status</th><th>Sent</th><th>Delivered</th><th>Read</th><th>Error</th></tr></thead>
+      <thead><tr><th><?= $social ? 'Person' : 'Phone' ?></th><th>Status</th><th>Sent</th><th>Delivered</th><th>Read</th><th>Error</th></tr></thead>
       <tbody>
       <?php if (!$messages): ?><tr><td colspan="6"><div class="empty">No messages<?= $statusFilter ? ' with this status' : '' ?>.</div></td></tr><?php endif; ?>
       <?php foreach ($messages as $m): ?>
         <tr>
-          <td class="mono">+<?= e((string) $m['phone_e164']) ?></td>
+          <td class="<?= $social ? '' : 'mono' ?>"><?= $social ? e((string) ($m['who'] ?? '—')) : '+' . e((string) $m['phone_e164']) ?></td>
           <td><?= msg_status_pill((string) $m['status']) ?></td>
           <td class="text-muted"><?= $m['sent_at'] ? e(date('d M H:i', strtotime((string) $m['sent_at']))) : '—' ?></td>
           <td class="text-muted"><?= $m['delivered_at'] ? e(date('d M H:i', strtotime((string) $m['delivered_at']))) : '—' ?></td>

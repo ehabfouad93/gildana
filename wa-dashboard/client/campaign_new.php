@@ -145,7 +145,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
     if (!$err) {
         $recipients = db_all(
             "SELECT c.* FROM contact_list_members m JOIN contacts c ON c.id=m.contact_id
-              WHERE m.list_id=? AND c.client_id=? AND c.opt_in_status='in'",
+              WHERE m.list_id=? AND c.client_id=? AND c.opt_in_status='in'
+                AND c.phone_e164 IS NOT NULL AND c.phone_e164 <> ''",   // Messenger/Instagram people with no number yet
             [$listId, $cid]
         );
         if (!$recipients) {

@@ -3,6 +3,7 @@ declare(strict_types=1);
 require __DIR__ . '/_init.php';
 require_once __DIR__ . '/../includes/meta_leads.php';
 require_once __DIR__ . '/../includes/meta_ads.php';
+require_once __DIR__ . '/../includes/social.php';
 
 /**
  * Lead forms from Facebook and Instagram, feeding the CRM.
@@ -116,6 +117,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     $page = db_row("SELECT * FROM meta_pages WHERE id=? AND client_id=?", [(int) ($_POST['page'] ?? 0), $cid]);
+    // Messages and comments for one Page, on or off — only for channels this account is offered.
+    if ($page && $a === 'social_set') {
+        $what = (string) ($_POST['what'] ?? '');
+        $need = ['msg_on' => 'messenger', 'ig_msg_on' => 'instagram', 'comments_on' => 'fb_comments', 'ig_comments_on' => 'ig_comments'][$what] ?? '';
+        if ($need === '' || !client_has_channel($CLIENT, $need)) { flash('That channel is not part of your plan.', 'error'); redirect('meta_leads.php#social'); }
+        $on = !empty($_POST['on']);
+        $r = social_page_set($page, $what, $on);
+        $label = ['msg_on' => 'Messenger messages', 'ig_msg_on' => 'Instagram messages', 'comments_on' => 'Facebook comments', 'ig_comments_on' => 'Instagram comments'][$what];
+        if ($r['ok']) flash($label . ($on ? ' now arrive in Revenect.' : ' stopped.'));
+        else flash('Facebook refused: ' . meta_explain_error((string) $r['error']) . ' If it mentions a permission, press Reconnect Facebook so Meta asks for it.', 'error');
+        redirect('meta_leads.php#social');
+    }
     if ($page && $a === 'disconnect') {
         if ((int) $page['subscribed']) meta_page_subscribe($page, false);
         db_run("DELETE FROM meta_forms WHERE client_id=? AND page_id=?", [$cid, (string) $page['page_id']]);
@@ -209,8 +222,8 @@ $ago = function ($t): string {
 $checkStale = $liveForms && (!$lastCheck || strtotime((string) $lastCheck) < time() - 20 * 60);
 $pageErrors = array_filter($pages, fn($p) => (int) $p['subscribed'] && $p['last_error']);
 
-client_header('Lead forms', 'crm', $CLIENT);
-page_head('Facebook & Instagram lead forms', '<a class="btn btn-ghost btn-sm" href="crm.php">&larr; CRM</a>');
+client_header('Facebook & Instagram', 'crm', $CLIENT);
+page_head('Facebook & Instagram', '<a class="btn btn-ghost btn-sm" href="crm.php">&larr; CRM</a>');
 ?>
 <?php if (!meta_configured()): ?>
   <div class="card" style="max-width:640px"><h2>Not available yet</h2>
@@ -386,6 +399,31 @@ page_head('Facebook & Instagram lead forms', '<a class="btn btn-ghost btn-sm" hr
     </tbody></table></div>
   <?php endif; ?>
 </div>
+
+<?php if ($pages && client_has_social($CLIENT)):
+  $sw = array_filter(['msg_on' => ['messenger', 'Messenger messages'], 'ig_msg_on' => ['instagram', 'Instagram messages'],
+                      'comments_on' => ['fb_comments', 'Facebook comments'], 'ig_comments_on' => ['ig_comments', 'Instagram comments']],
+                     fn($x) => client_has_channel($CLIENT, $x[0])); ?>
+<div class="card" id="social">
+  <h2>Messages and comments</h2>
+  <p class="text-muted" style="font-size:12.5px;margin:-6px 0 12px">Choose what reaches Revenect from each Page. Messages land in the
+    <a href="inbox.php">Inbox</a> next to WhatsApp; comments on the <a href="comments.php">Comments</a> page. Instagram needs a professional
+    account linked to the Page, with <em>Allow access to messages</em> on in the Instagram app.</p>
+  <div class="table-wrap"><table class="data"><thead><tr><th>Page</th><th>Instagram</th><?php foreach ($sw as [$ch, $l]): ?><th><?= e($l) ?></th><?php endforeach; ?></tr></thead><tbody>
+  <?php foreach ($pages as $p): ?>
+    <tr><td><strong><?= e((string) $p['name']) ?></strong><?php if ($p['last_error']): ?><span class="text-muted" style="display:block;font-size:12px;color:var(--danger)"><?= e(meta_explain_error((string) $p['last_error'])) ?></span><?php endif; ?></td>
+      <td><?= !empty($p['ig_username']) ? '@' . e((string) $p['ig_username']) : '<span class="text-muted">None linked</span>' ?></td>
+      <?php foreach ($sw as $k => [$ch, $l]): $on = (int) ($p[$k] ?? 0); $needsIg = str_starts_with($k, 'ig_'); ?>
+        <td><form method="post" style="display:inline"><?= csrf_field() ?><input type="hidden" name="action" value="social_set"><input type="hidden" name="page" value="<?= (int) $p['id'] ?>">
+          <input type="hidden" name="what" value="<?= $k ?>"><input type="hidden" name="on" value="<?= $on ? '' : '1' ?>">
+          <?php if ($isAdmin): ?><button class="btn btn-sm <?= $on ? 'btn-primary' : 'btn-ghost' ?>" <?= $needsIg && empty($p['ig_user_id']) && !$on ? 'title="Link an Instagram professional account to this Page first"' : '' ?>><?= $on ? 'On' : 'Off' ?></button>
+          <?php else: ?><span class="pill <?= $on ? 'green' : 'gray' ?>"><?= $on ? 'On' : 'Off' ?></span><?php endif; ?></form></td>
+      <?php endforeach; ?></tr>
+  <?php endforeach; ?></tbody></table></div>
+  <?php if ($isAdmin): ?><form method="post" style="margin-top:10px"><?= csrf_field() ?><input type="hidden" name="action" value="connect">
+    <button class="btn btn-ghost btn-sm">Reconnect Facebook</button> <span class="text-muted" style="font-size:12px">— once, so Meta asks for the message and comment permissions.</span></form><?php endif; ?>
+</div>
+<?php endif; ?>
 
 <details class="card" style="font-size:13px"><summary><strong>Connected Pages (<?= count($pages) ?>)</strong></summary>
   <div class="table-wrap" style="margin-top:10px"><table class="data"><tbody>

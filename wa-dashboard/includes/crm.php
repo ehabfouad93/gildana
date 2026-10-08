@@ -419,6 +419,8 @@ function crm_source_label(?string $source): string
         'inbound'   => 'WhatsApp message', 'manual' => 'Added by hand', 'import' => 'Imported',
         'meta_form' => 'Meta lead form',   'ctwa'   => 'Click-to-WhatsApp ad',
         'sheet'     => 'Google Sheet',     'qualifier' => 'Lead Qualifier',
+        'messenger' => 'Facebook Messenger', 'instagram_dm' => 'Instagram Direct',
+        'fb_comment' => 'Facebook comment', 'ig_comment' => 'Instagram comment',
     ][(string) $source] ?? ($source ? ucfirst((string) $source) : '—');
 }
 
@@ -427,7 +429,7 @@ function crm_source_label(?string $source): string
  * ad — rather than through a sheet, an import, another system or by hand? Then Meta itself told us
  * the campaign, ad set and ad, and they can be trusted as given.
  */
-function crm_meta_direct_sources(): array { return ['meta_form', 'ctwa']; }
+function crm_meta_direct_sources(): array { return ['meta_form', 'ctwa', 'messenger', 'instagram_dm', 'fb_comment', 'ig_comment']; }
 function crm_is_meta_direct(?string $source): bool { return in_array((string) $source, crm_meta_direct_sources(), true); }
 
 /** How a lead reached the CRM, in a few words, for the list and the lead page. */
@@ -436,6 +438,10 @@ function crm_arrival_label(array $c): string
     return match ((string) ($c['source'] ?? '')) {
         'meta_form' => 'Direct from Meta — Lead Ads form',
         'ctwa'      => 'Direct from Meta — click-to-WhatsApp ad',
+        'messenger' => 'Direct from Meta — Messenger message',
+        'instagram_dm' => 'Direct from Meta — Instagram message',
+        'fb_comment' => 'Direct from Meta — Facebook comment',
+        'ig_comment' => 'Direct from Meta — Instagram comment',
         default     => crm_source_label($c['source'] ?? null) . (!empty($c['campaign']) ? ' (campaign given by the ' . (in_array($c['source'] ?? '', ['sheet', 'import', 'qualifier'], true) ? 'sheet' : 'sender') . ')' : ''),
     };
 }

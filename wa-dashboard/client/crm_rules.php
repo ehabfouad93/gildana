@@ -91,6 +91,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         flash('WhatsApp alerts saved.');
         redirect('crm_rules.php#staff-wa');
     }
+    if ($a === 'social_leads') {
+        $st = (int) ($_POST['stage'] ?? 0);
+        if ($st && !isset(crm_stage_map($cid)[$st])) $st = 0;
+        crm_settings_set($cid, ['social_auto_lead' => !empty($_POST['on']) ? 1 : 0, 'social_lead_stage' => $st ?: null]);
+        flash(!empty($_POST['on']) ? 'New Messenger and Instagram conversations will become leads by themselves.'
+                                   : 'Messenger and Instagram conversations stay in the Inbox until someone adds them to the CRM.');
+        redirect('crm_rules.php#social-leads');
+    }
     if ($a === 'staff_wa_test') {
         $me = db_row("SELECT * FROM users WHERE id=?", [(int) ($PERM_USER['id'] ?? 0)]);
         if (empty($me['phone'])) { flash('Add your own WhatsApp number on your profile first.', 'error'); redirect('crm_rules.php#staff-wa'); }
@@ -221,6 +229,25 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
   $kindsOn = array_filter(explode(',', (string) $s['staff_wa_kinds']));
   $staffCustom = crm_staff_custom($s);
 ?>
+<?php if (function_exists('client_has_channel') && (client_has_channel($CLIENT, 'messenger') || client_has_channel($CLIENT, 'instagram'))): ?>
+<div class="card" id="social-leads">
+  <h2>Messenger and Instagram conversations</h2>
+  <form method="post">
+    <?= csrf_field() ?><input type="hidden" name="action" value="social_leads">
+    <label class="mod-all"><input type="checkbox" name="on" value="1" <?= (int) ($s['social_auto_lead'] ?? 0) ? 'checked' : '' ?>>
+      Make every new Messenger and Instagram conversation a lead automatically</label>
+    <p class="text-muted" style="font-size:12.5px;margin:6px 0 10px">When it is off, they wait in the Inbox, and whoever reads the conversation
+      can press <strong>Add to CRM as lead</strong> — useful when many messages are questions, not buyers. Either way they are given out by
+      the rules above.</p>
+    <div class="field" style="max-width:320px"><span class="lbl">They start in</span><select name="stage">
+      <option value="0">The first stage</option>
+      <?php foreach (crm_stages($cid) as $st): ?><option value="<?= (int) $st['id'] ?>" <?= (int) ($s['social_lead_stage'] ?? 0) === (int) $st['id'] ? 'selected' : '' ?>><?= e($st['name']) ?></option><?php endforeach; ?>
+    </select></div>
+    <button class="btn btn-primary">Save</button>
+  </form>
+</div>
+<?php endif; ?>
+
 <div class="card" id="staff-wa">
   <h2>WhatsApp alerts to salespeople</h2>
   <p class="text-muted" style="font-size:12.5px;margin-top:-4px">Besides the bell in the app, send each person the alert on their own WhatsApp.

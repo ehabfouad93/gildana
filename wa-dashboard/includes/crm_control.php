@@ -76,6 +76,7 @@ function crm_phone_mask(string $e164): string
 /** The phone as this person may see it. */
 function crm_phone_show(string $e164): string
 {
+    if (trim($e164) === '') return '';        // a Messenger / Instagram person with no number yet
     return crm_phone_hidden() ? crm_phone_mask($e164) : '+' . $e164;
 }
 

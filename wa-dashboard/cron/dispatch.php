@@ -31,6 +31,7 @@ require_once __DIR__ . '/../includes/automation.php';
 require_once __DIR__ . '/../includes/meta_leads.php';
 require_once __DIR__ . '/../includes/crm_auto.php';
 require_once __DIR__ . '/../includes/push.php';
+require_once __DIR__ . '/../includes/social_campaigns.php';
 
 if (PHP_SAPI !== 'cli') {
     /* Prefer the header. The ?token= form still works for one release so an existing cron
@@ -118,6 +119,11 @@ try {
     );
     if ($promoted) out("Promoted {$promoted} scheduled campaign(s).");
 
+    // Messenger / Instagram campaigns go through the Page's Send API, not the WhatsApp senders below.
+    $waOnly = db_has_column('campaigns', 'channel') ? " AND c.channel='whatsapp'" : '';
+    [$sSent, $sFailed] = social_campaign_dispatch($workerId);
+    if ($sSent || $sFailed) out("Messenger/Instagram campaigns: {$sSent} sent, {$sFailed} failed.");
+
     $perClientCap = (int) config('send_batch_per_run', 300);
     $globalCap    = (int) config('send_batch_global', 1000);
     $parallel     = max(1, (int) config('send_parallel', 30));
@@ -128,7 +134,7 @@ try {
     $clients = db_all(
         "SELECT DISTINCT cl.*
            FROM clients cl
-           JOIN campaigns c        ON c.client_id = cl.id AND c.status = 'sending'
+           JOIN campaigns c        ON c.client_id = cl.id AND c.status = 'sending'{$waOnly}
            JOIN campaign_messages m ON m.campaign_id = c.id AND m.status = 'queued'
           WHERE cl.status = 'active'"
     );
@@ -160,7 +166,7 @@ try {
         try {
             $ids = array_column(db_all(
                 "SELECT m.id FROM campaign_messages m JOIN campaigns c ON c.id = m.campaign_id
-                  WHERE m.client_id = ? AND m.status = 'queued' AND c.status = 'sending'
+                  WHERE m.client_id = ? AND m.status = 'queued' AND c.status = 'sending'{$waOnly}
                     AND (m.next_attempt_at IS NULL OR m.next_attempt_at <= NOW())
                   ORDER BY m.id ASC LIMIT {$limit}", [$cid]
             ), 'id');

@@ -48,6 +48,12 @@ function msg_log(int $clientId, int $contactId, string $direction, string $body,
             'media_ref'       => isset($opts['media_ref']) && $opts['media_ref'] !== '' ? substr((string) $opts['media_ref'], 0, 255) : null,
             'media_mime'      => isset($opts['media_mime']) && $opts['media_mime'] !== '' ? substr((string) $opts['media_mime'], 0, 100) : null,
             'media_name'      => isset($opts['media_name']) && $opts['media_name'] !== '' ? substr((string) $opts['media_name'], 0, 255) : null,
+            // Messenger / Instagram: the channel, and Meta's id for the message. An automation step
+            // that went out on a routed channel says so without being told (channel_route()).
+            'channel'         => isset($opts['channel']) && $opts['channel'] !== '' ? (string) $opts['channel']
+                                 : (function_exists('channel_route') && channel_route() && $direction === 'out' ? (string) channel_route()['channel'] : 'whatsapp'),
+            'ext_id'          => isset($opts['ext']) && $opts['ext'] !== '' ? substr((string) $opts['ext'], 0, 190)
+                                 : (function_exists('channel_route') && channel_route() && $direction === 'out' && !empty($opts['wamid']) ? substr((string) $opts['wamid'], 0, 190) : null),
         ] as $col => $val) {
             if (!db_has_column('messages', $col)) continue;
             $cols[] = $col; $vals[] = $val;
@@ -83,11 +89,22 @@ function inbox_window_open(array $contact, array $client = []): bool
 }
 
 /** Thread list for a client: newest conversation first, with unread counts. */
-function inbox_threads(int $clientId, string $q = '', int $limit = 200): array
+function inbox_threads(int $clientId, string $q = '', int $limit = 200, string $channel = ''): array
 {
     $params = [$clientId];
     $search = '';
-    if ($q !== '') { $search = " AND (c.name LIKE ? OR c.phone_e164 LIKE ?)"; $params[] = "%$q%"; $params[] = "%$q%"; }
+    $social = db_has_column('contacts', 'fb_psid');
+    if ($q !== '') {
+        $search = " AND (c.name LIKE ? OR c.phone_e164 LIKE ?" . ($social ? " OR c.ig_username LIKE ?" : '') . ")";
+        array_push($params, "%$q%", "%$q%"); if ($social) $params[] = "%$q%";
+    }
+    // One channel's conversations: anyone who has written or been written to on it.
+    if ($social && in_array($channel, ['whatsapp', 'messenger', 'instagram'], true)) {
+        $search .= " AND EXISTS (SELECT 1 FROM messages xc WHERE xc.client_id=c.client_id AND xc.contact_id=c.id AND xc.channel=?)";
+        $params[] = $channel;
+    }
+    $sx = $social ? ', c.fb_psid IS NOT NULL has_fb, c.ig_sid IS NOT NULL has_ig, c.ig_username' : '';
+    $mx = $social ? ', m.channel last_channel' : '';
     // A salesperson sees the conversations of their own leads, and nobody else's.
     [$scope, $sp] = crm_scope('c');
     $search .= $scope; $params = array_merge($params, $sp);
@@ -98,11 +115,11 @@ function inbox_threads(int $clientId, string $q = '', int $limit = 200): array
        sorting took minutes on an account with 20,000 conversations. */
     $params = array_merge([$clientId], $params);
     $rows = db_all(
-        "SELECT t.*, m.body last_body, m.direction last_dir, m.type last_type, m.created_at last_at,
+        "SELECT t.*, m.body last_body, m.direction last_dir, m.type last_type, m.created_at last_at{$mx},
                 (SELECT COUNT(*) FROM messages mi
                    WHERE mi.client_id=? AND mi.contact_id=t.contact_id AND mi.direction='in'
                      AND mi.created_at > COALESCE(t.inbox_read_at,'2000-01-01')) unread
-           FROM (SELECT c.id contact_id, c.phone_e164, c.name, c.last_inbound_at, c.inbox_read_at, lm.mid
+           FROM (SELECT c.id contact_id, c.phone_e164, c.name, c.last_inbound_at, c.inbox_read_at, lm.mid{$sx}
                    FROM (SELECT contact_id, MAX(id) mid FROM messages WHERE client_id=? GROUP BY contact_id) lm
                    JOIN contacts c ON c.id = lm.contact_id
                   WHERE c.client_id=?{$search}
@@ -116,7 +133,9 @@ function inbox_threads(int $clientId, string $q = '', int $limit = 200): array
     foreach ($rows as &$r) {
         unset($r['inbox_read_at'], $r['mid']);
         // The Inbox adds the "+" itself; a hidden number arrives already masked, without it.
-        if ($hide) $r['phone_e164'] = ltrim(crm_phone_mask((string) $r['phone_e164']), '+');
+        if ($hide && (string) $r['phone_e164'] !== '') $r['phone_e164'] = ltrim(crm_phone_mask((string) $r['phone_e164']), '+');
+        $r['phone_e164'] = (string) ($r['phone_e164'] ?? '');
+        $r['last_channel'] = (string) ($r['last_channel'] ?? 'whatsapp');
     }
     unset($r);
     // "[audio]" in the list reads like a fault; say what it is.
@@ -142,7 +161,7 @@ function inbox_thread(int $clientId, int $contactId, int $afterId = 0, int $limi
     // Same reason as msg_log below: between a pull and its migration these may not exist yet,
     // and a thread that will not load at all is far worse than one missing a Send again button.
     $extra = '';
-    foreach (['error_code', 'source_ref_id', 'template_id', 'media_mime', 'media_name', 'wa_message_id', 'media_ref', 'media_path', 'via'] as $col) {
+    foreach (['error_code', 'source_ref_id', 'template_id', 'media_mime', 'media_name', 'wa_message_id', 'media_ref', 'media_path', 'via', 'channel'] as $col) {
         if (db_has_column('messages', $col)) $extra .= ', ' . $col;
     }
     $rows = db_all(
@@ -285,7 +304,7 @@ function inbox_handle_ajax(array $client): void
     if ($a === '') return;
 
     if ($a === 'threads') {
-        json_out(['ok' => true, 'threads' => inbox_threads($cid, trim((string) ($_GET['q'] ?? '')))]);
+        json_out(['ok' => true, 'threads' => inbox_threads($cid, trim((string) ($_GET['q'] ?? '')), 200, (string) ($_GET['ch'] ?? ''))]);
     }
     /* Every action below names a contact. Check that this user may see it before any of them run:
        the thread list is scoped, but ids are guessable, and a salesperson must not be able to read
@@ -295,6 +314,12 @@ function inbox_handle_ajax(array $client): void
     if ($cidReq > 0) {
         $seen = db_row("SELECT * FROM contacts WHERE id=? AND client_id=?", [$cidReq, $cid]);
         if (!$seen || !crm_can_see($seen)) json_out(['ok' => false, 'error' => 'Contact not found.']);
+    }
+    if ($a === 'optin_ask') {
+        verify_csrf();
+        if (function_exists('can_write') && !can_write()) json_out(['ok' => false, 'error' => 'You can only look at this account.']);
+        require_once __DIR__ . '/social_campaigns.php';
+        json_out(social_optin_request($client, (int) ($_POST['contact'] ?? 0), (string) ($_POST['title'] ?? ''), (string) ($_POST['frequency'] ?? 'WEEKLY')));
     }
     if ($a === 'resend') {
         $mid  = (int) ($_POST['message'] ?? 0);
@@ -310,12 +335,32 @@ function inbox_handle_ajax(array $client): void
         if (!$contact) json_out(['ok' => false]);
         $msgs = inbox_thread($cid, $contactId, $after);
         inbox_mark_read($cid, $contactId);
+        // Every channel this person can be answered on, the one they last wrote on, and its 24-hour window.
+        require_once __DIR__ . '/social.php';
+        $s = sender_for($client, sending_user());
+        $reach = array_filter(social_reach($contact), fn($v, $ch) => client_has_channel($client, $ch), ARRAY_FILTER_USE_BOTH);
+        $lastIn = db_has_column('messages', 'channel')
+            ? (string) db_val("SELECT channel FROM messages WHERE client_id=? AND contact_id=? AND direction='in' ORDER BY id DESC LIMIT 1", [$cid, $contactId]) : '';
+        $reply = isset($reach[$lastIn]) ? $lastIn : (array_key_first($reach) ?? 'whatsapp');
+        $windows = [];
+        foreach (array_keys($reach) as $ch) {
+            $windows[$ch] = $ch === 'whatsapp' ? inbox_window_open($contact, $s['ok'] ? $s['client'] : $client) : social_window_open($contact, $ch);
+        }
         json_out([
             'ok' => true, 'messages' => $msgs,
             // Judged against the number THIS person sends from — own/company phone has no window.
-            'window_open' => inbox_window_open($contact, ($s = sender_for($client, sending_user()))['ok'] ? $s['client'] : $client),
-            'can_send'    => $s['ok'], 'send_error' => $s['ok'] ? '' : (string) $s['error'],
-            'name' => (string) $contact['name'], 'phone' => (string) $contact['phone_e164'],
+            'window_open' => $windows[$reply] ?? inbox_window_open($contact, $s['ok'] ? $s['client'] : $client),
+            'can_send'    => $reply !== 'whatsapp' || $s['ok'], 'send_error' => $reply !== 'whatsapp' || $s['ok'] ? '' : (string) $s['error'],
+            'wa_can_send' => $s['ok'], 'wa_send_error' => $s['ok'] ? '' : (string) $s['error'],
+            'channels' => array_keys($reach), 'reply_channel' => $reply, 'windows' => $windows,
+            'ig_username' => (string) ($contact['ig_username'] ?? ''),
+            'in_crm' => $contact['stage_id'] !== null,
+            'can_add_lead' => $contact['stage_id'] === null && function_exists('crm_enabled') && crm_enabled($client) && (!function_exists('can_write') || can_write()),
+            // Messenger Marketing Messages: ask them, while they are inside the 24-hour window.
+            'can_ask_optin' => !empty($contact['fb_psid']) && !empty($windows['messenger']) && function_exists('client_has_channel') && client_has_channel($client, 'social_mm')
+                               && (!function_exists('can_write') || can_write())
+                               && !db_val("SELECT 1 FROM social_optins WHERE client_id=? AND contact_id=? AND (status='active' OR asked_at > NOW() - INTERVAL 1 DAY)", [$cid, (int) $contact['id']]),
+            'name' => (string) $contact['name'], 'phone' => (string) ($contact['phone_e164'] ?? ''),
             'bot_paused' => inbox_bot_paused($contact),
             // For the owner picker in the header — present only where it can be used.
             'owner'      => $contact['owner_user_id'] !== null ? (int) $contact['owner_user_id'] : null,
@@ -323,7 +368,36 @@ function inbox_handle_ajax(array $client): void
     }
     if ($a === 'send') {
         verify_csrf();
+        $ch = (string) ($_POST['channel'] ?? 'whatsapp');
+        if (in_array($ch, ['messenger', 'instagram'], true)) {
+            require_once __DIR__ . '/social.php';
+            json_out(inbox_send_social($client, (int) ($_POST['contact'] ?? 0), (string) ($_POST['body'] ?? ''), $ch));
+        }
         json_out(inbox_send($client, (int) ($_POST['contact'] ?? 0), (string) ($_POST['body'] ?? '')));
+    }
+    /* "Add to CRM as lead" — for a conversation that is not in the pipeline (Messenger and Instagram
+       when the account does not add them by itself, or any WhatsApp contact). A phone number given
+       here joins the person to the WhatsApp contact with that number, if there is one. */
+    if ($a === 'add_lead') {
+        verify_csrf();
+        if (function_exists('can_write') && !can_write()) json_out(['ok' => false, 'error' => 'You can only look at this account.']);
+        if (!function_exists('crm_enabled') || !crm_enabled($client)) json_out(['ok' => false, 'error' => 'This account has no CRM.']);
+        require_once __DIR__ . '/social.php';
+        $contactId = (int) ($_POST['contact'] ?? 0);
+        $phone = trim((string) ($_POST['phone'] ?? ''));
+        if ($phone !== '') {
+            $j = social_attach_phone($client, $contactId, $phone);
+            if (!$j['ok']) json_out($j);
+            $contactId = $j['contact_id'];
+        }
+        $c = db_row("SELECT * FROM contacts WHERE id=? AND client_id=?", [$contactId, $cid]);
+        if (!$c) json_out(['ok' => false, 'error' => 'Contact not found.']);
+        if ($c['stage_id'] !== null) json_out(['ok' => true, 'contact' => $contactId, 'already' => true]);
+        $owner = function_exists('is_sales') && is_sales() ? crm_actor_id() : 'auto';
+        $social = !empty($c['fb_psid']) ? 'messenger' : (!empty($c['ig_sid']) ? 'instagram' : '');
+        $ok = $social !== '' && empty($c['phone_e164']) ? social_add_lead($client, $contactId, $social, crm_actor_id(), $owner)
+                                                        : crm_add_lead($client, $contactId, (string) ($c['source'] ?: 'inbound'), $owner, null, crm_actor_id());
+        json_out(['ok' => $ok, 'contact' => $contactId, 'error' => $ok ? '' : 'Could not add the lead.']);
     }
     if ($a === 'resend') {
         verify_csrf();
@@ -635,6 +709,7 @@ function inbox_send_template(array $client, int $contactId, int $templateId,
     $cid     = (int) $client['id'];
     $contact = db_row("SELECT * FROM contacts WHERE id=? AND client_id=?", [$contactId, $cid]);
     if (!$contact) return ['ok' => false, 'error' => 'Contact not found.'];
+    if (empty($contact['phone_e164'])) return ['ok' => false, 'error' => 'There is no WhatsApp number for this person yet.'];
     if (($contact['opt_in_status'] ?? '') === 'out') {
         return ['ok' => false, 'error' => 'This contact opted out, so we cannot message them.'];
     }
@@ -724,6 +799,7 @@ function inbox_send(array $client, int $contactId, string $body): array
     if ($body === '') return ['ok' => false, 'error' => 'Type a message first.'];
     $contact = db_row("SELECT * FROM contacts WHERE id=? AND client_id=?", [$contactId, (int) $client['id']]);
     if (!$contact) return ['ok' => false, 'error' => 'Contact not found.'];
+    if (empty($contact['phone_e164'])) return ['ok' => false, 'error' => 'There is no WhatsApp number for this person yet — answer on Messenger or Instagram.'];
 
     // Out through THIS person's number: the API, the company phone, their own, or not at all.
     $who = sending_user();

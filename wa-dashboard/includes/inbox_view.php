@@ -10,6 +10,9 @@
 $IB_ENDPOINT = $IB_ENDPOINT ?? 'inbox.php';
 $IB_UPLOAD   = $IB_UPLOAD ?? '';
 $IB_SEP = strpos($IB_ENDPOINT, '?') === false ? '?' : '&';
+// The channels this account talks on, for the tabs over the list (only when there is more than one).
+$IB_CHANNELS = isset($CLIENT) && function_exists('client_channels')
+    ? array_values(array_intersect(['whatsapp', 'messenger', 'instagram'], client_channels($CLIENT))) : ['whatsapp'];
 ?>
 <style>
   .ib-wrap{display:flex;gap:0;height:72vh;min-height:460px;border:1px solid var(--line,rgba(var(--ink-rgb,13,19,33),.10));border-radius:12px;overflow:hidden;background:var(--surface,#fff)}
@@ -23,6 +26,13 @@ $IB_SEP = strpos($IB_ENDPOINT, '?') === false ? '?' : '&';
   .ib-th .nm{font-weight:600;font-size:13.5px} .ib-th .pv{color:var(--muted,rgba(var(--ink-rgb,13,19,33),.55));font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px}
   .ib-th .meta{margin-inline-start:auto;text-align: end;display:flex;flex-direction:column;gap:3px;align-items:flex-end}
   .ib-th .tm{color:var(--muted,rgba(var(--ink-rgb,13,19,33),.55));font-size:11px}
+  .ib-tabs{display:flex;gap:4px;padding:8px 10px 0;flex-wrap:wrap}
+  .ib-tabs button{border:1px solid var(--line,rgba(var(--ink-rgb,13,19,33),.12));background:var(--surface,#fff);border-radius:999px;padding:3px 10px;font-size:12px;cursor:pointer;color:inherit}
+  .ib-tabs button.on{background:var(--brand,#7C3AED);border-color:var(--brand,#7C3AED);color:#fff}
+  .ib-chb{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:16px;padding:0 4px;border-radius:5px;font-size:9.5px;font-weight:700;color:#fff;letter-spacing:.02em;vertical-align:1px}
+  .ib-chb.whatsapp{background:#25D366}.ib-chb.messenger{background:#0866FF}.ib-chb.instagram{background:linear-gradient(45deg,#F58529,#DD2A7B 55%,#8134AF)}
+  .ib-chsel{border:1px solid var(--line,rgba(var(--ink-rgb,13,19,33),.12));border-radius:8px;padding:6px 8px;font-size:12.5px;background:var(--surface,#fff);color:inherit;align-self:center}
+  .ib-addlead{white-space:nowrap}
   .ib-badge{background:var(--brand,#7C3AED);color:#fff;border-radius:10px;font-size:11px;padding:1px 7px;font-weight:600}
   .ib-chat{flex:1;display:flex;flex-direction:column;position:relative;background:var(--chat-bg,#efe7dd)}
   .ib-chat-h{padding:12px 16px;background:var(--surface,#fff);border-bottom:1px solid var(--line,rgba(var(--ink-rgb,13,19,33),.10));display:flex;align-items:center;gap:10px}
@@ -109,6 +119,12 @@ $IB_SEP = strpos($IB_ENDPOINT, '?') === false ? '?' : '&';
 
 <div class="ib-wrap">
   <div class="ib-list">
+    <?php if (count($IB_CHANNELS) > 1): ?>
+    <div class="ib-tabs" id="ib-tabs" role="tablist" aria-label="Channel">
+      <button type="button" class="on" data-ch="">All</button>
+      <?php foreach ($IB_CHANNELS as $ch): ?><button type="button" data-ch="<?= e($ch) ?>"><?= e(['whatsapp' => 'WhatsApp', 'messenger' => 'Messenger', 'instagram' => 'Instagram'][$ch]) ?></button><?php endforeach; ?>
+    </div>
+    <?php endif; ?>
     <div class="ib-search"><input type="text" id="ib-q" placeholder="Search name or number…"></div>
     <div class="ib-threads" id="ib-threads"><div class="ib-empty" style="padding:20px">Loading…</div></div>
   </div>
@@ -130,18 +146,21 @@ $IB_SEP = strpos($IB_ENDPOINT, '?') === false ? '?' : '&';
             <?php foreach ($ibPeople as $u): ?><option value="<?= (int) $u['id'] ?>"><?= e((string) $u['name']) ?></option><?php endforeach; ?>
           </select>
         <?php endif; ?>
+        <button type="button" class="btn btn-ghost btn-sm ib-addlead" id="ib-addlead" hidden>+ Add to CRM as lead</button>
+        <button type="button" class="btn btn-ghost btn-sm ib-addlead" id="ib-optin" hidden title="Meta's opt-in card: if they tap it, you can send them offers on Messenger later (Campaigns → Messenger / Instagram)">🔔 Ask to receive offers</button>
         <span class="ib-bot" id="ib-bot"></span>
         <button type="button" class="btn btn-ghost btn-sm" id="ib-bot-btn"></button>
       </div>
     </div>
     <div class="ib-body" id="ib-body"><div class="ib-empty">Select a conversation to view messages.</div></div>
     <div class="ib-foot" id="ib-foot" style="display:none">
-      <form id="ib-form"><textarea id="ib-text" rows="1" placeholder="Type a reply…"></textarea><button class="btn btn-primary" type="submit">Send</button></form>
+      <form id="ib-form"><select id="ib-ch" class="ib-chsel" aria-label="Reply on" hidden></select><textarea id="ib-text" rows="1" placeholder="Type a reply…"></textarea><button class="btn btn-primary" type="submit">Send</button></form>
       <div class="ib-note" id="ib-nosend" hidden></div>
       <div class="ib-note" id="ib-closed" style="display:none">
         ⏱️ Outside the 24-hour window — only an approved template can reach this contact.
         <button class="ib-tpl-open" type="button">📄 Send a template</button>
       </div>
+      <div class="ib-note" id="ib-closed-social" hidden></div>
       <div class="ib-tpl-overlay" id="ib-tpl" hidden>
         <div class="ib-tpl-card" role="dialog" aria-label="Send a template">
           <div class="ib-tpl-head">
@@ -158,6 +177,19 @@ $IB_SEP = strpos($IB_ENDPOINT, '?') === false ? '?' : '&';
     </div>
   </div>
 </div>
+
+<dialog class="lead-dlg" id="ib-lead-dlg" aria-labelledby="ib-lead-title">
+  <form method="dialog" id="ib-lead-form">
+    <h2 id="ib-lead-title">Add to CRM as lead</h2>
+    <p class="text-muted" style="font-size:13px;margin:-4px 0 10px">They go into the pipeline like any new lead and are given out by your assignment rules.</p>
+    <div class="field"><span class="lbl">Their WhatsApp number <span class="text-muted">(optional)</span></span>
+      <input type="tel" id="ib-lead-phone" placeholder="+20 100 123 4567" autocomplete="off">
+      <div class="hint">If they already wrote on WhatsApp, the two conversations become one contact.</div></div>
+    <div class="ib-note" id="ib-lead-err" hidden style="color:var(--danger)"></div>
+    <div class="dlg-btns"><button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">Cancel</button>
+      <button type="submit" class="btn btn-primary" id="ib-lead-go">Add lead</button></div>
+  </form>
+</dialog>
 
 <script>
 /* A picture, voice note, video or file someone sent: shown and played right in the thread.
@@ -182,7 +214,12 @@ const IB_URL = <?= json_encode($IB_ENDPOINT) ?>;
 const IB_UPLOAD = <?= json_encode($IB_UPLOAD) ?>;
 const IB_SEP = <?= json_encode($IB_SEP) ?>;
 const IB_CSRF = <?= json_encode(csrf_token()) ?>;
-let ibCur = 0, ibLast = 0, ibOpen = false;
+const IB_MULTI = <?= count($IB_CHANNELS) > 1 ? 'true' : 'false' ?>;
+let ibCur = 0, ibLast = 0, ibOpen = false, ibCh = '', ibChPicked = false, ibFilter = '';
+const IB_CH_SHORT = {whatsapp:'WA', messenger:'M', instagram:'IG'}, IB_CH_NAME = {whatsapp:'WhatsApp', messenger:'Messenger', instagram:'Instagram'};
+const chBadge = c => `<span class="ib-chb ${c}" title="${IB_CH_NAME[c]||c}">${IB_CH_SHORT[c]||'?'}</span>`;
+/* Who they are when there is no number yet: their Instagram handle, or the channel they wrote on. */
+const whoName = t => t.name || (t.phone_e164 ? '+'+t.phone_e164 : (t.ig_username ? '@'+t.ig_username : (IB_CH_NAME[t.last_channel]||'Contact')+' user'));
 const el = id => document.getElementById(id);
 const esc = s => (s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const initials = s => (s||'?').trim().slice(0,2).toUpperCase();
@@ -192,16 +229,17 @@ const tick = s => s==='read'?'✓✓':s==='delivered'?'✓✓':s==='sent'?'✓'
 
 async function loadThreads(){
   const q = encodeURIComponent(el('ib-q').value||'');
-  const r = await fetch(IB_URL+IB_SEP+'ajax=threads&q='+q); const d = await r.json();
+  const r = await fetch(IB_URL+IB_SEP+'ajax=threads&q='+q+'&ch='+encodeURIComponent(ibFilter)); const d = await r.json();
   if(!d.ok) return;
   const box = el('ib-threads');
   if(!d.threads.length){ box.innerHTML='<div class="ib-empty" style="padding:20px">No conversations yet.</div>'; return; }
   box.innerHTML = d.threads.map(t=>{
     const pv = (t.last_dir==='out'?'↩ ':'') + esc((t.last_body||'').slice(0,40));
     const badge = t.unread>0 ? `<span class="ib-badge">${t.unread}</span>` : '';
-    return `<div class="ib-th ${t.contact_id==ibCur?'active':''}" onclick="openThread(${t.contact_id},'${esc(t.name||'').replace(/'/g,"\\'")}','${esc(t.phone_e164)}')">
-      <div class="ib-av">${initials(t.name||t.phone_e164)}</div>
-      <div style="min-width:0"><div class="nm">${esc(t.name||('+'+t.phone_e164))}</div><div class="pv">${pv}</div></div>
+    const chs = IB_MULTI ? chBadge(t.last_channel||'whatsapp') + ' ' : '';
+    return `<div class="ib-th ${t.contact_id==ibCur?'active':''}" onclick="openThread(${t.contact_id},'${esc(whoName(t)).replace(/'/g,"\\'")}','${esc(t.phone_e164)}')">
+      <div class="ib-av">${initials(whoName(t))}</div>
+      <div style="min-width:0"><div class="nm">${chs}${esc(whoName(t))}</div><div class="pv">${pv}</div></div>
       <div class="meta"><span class="tm">${tfmt(t.last_at)}</span>${badge}</div></div>`;
   }).join('');
 }
@@ -209,7 +247,8 @@ function openThread(id,name,phone){
   ibCur=id; ibLast=0; el('ib-body').innerHTML='';
   document.querySelector('.ib-wrap').classList.add('chatting');   // phones: show the chat pane
   el('ib-head').style.display='flex'; el('ib-foot').style.display='block';
-  el('ib-hav').textContent=initials(name||phone); el('ib-hname').textContent=name||('+'+phone); el('ib-hphone').textContent='+'+phone;
+  el('ib-hav').textContent=initials(name||phone); el('ib-hname').textContent=name||(phone?'+'+phone:''); el('ib-hphone').textContent=phone?'+'+phone:'';
+  ibCh=''; ibChPicked=false; el('ib-addlead').hidden=true; el('ib-optin').hidden=true;
   document.querySelectorAll('.ib-th').forEach(e=>e.classList.remove('active'));
   pollThread(); loadThreads();
 }
@@ -257,14 +296,29 @@ async function pollThread(){
     body.appendChild(div);
   });
   if(d.messages.length && atBottom) body.scrollTop=body.scrollHeight;
-  ibOpen=!!d.window_open;
+  // The channels they can be answered on; the reply goes where they last wrote, unless changed.
+  const chans = d.channels || ['whatsapp'];
+  if (!ibChPicked || !chans.includes(ibCh)) ibCh = d.reply_channel || chans[0] || 'whatsapp';
+  const sel = el('ib-ch');
+  sel.innerHTML = chans.map(c=>`<option value="${c}" ${c===ibCh?'selected':''}>${IB_CH_NAME[c]||c}</option>`).join('');
+  sel.hidden = chans.length < 2;
+  if (!d.phone && chans.length) el('ib-hphone').textContent = chans.map(c=>IB_CH_NAME[c]).join(' · ') + (d.ig_username ? ' · @'+d.ig_username : '');
+  el('ib-addlead').hidden = !d.can_add_lead;
+  el('ib-optin').hidden = !d.can_ask_optin;
+  ibOpen = d.windows && (ibCh in d.windows) ? !!d.windows[ibCh] : !!d.window_open;
+  const social = ibCh === 'messenger' || ibCh === 'instagram';
+  if (!social) { d.can_send = d.wa_can_send !== undefined ? d.wa_can_send : d.can_send; d.send_error = d.wa_send_error !== undefined ? d.wa_send_error : d.send_error; }
+  else d.can_send = true;
   const own = el('ib-owner');
   if (own && document.activeElement !== own) own.value = d.owner == null ? 'none' : String(d.owner);
   /* Someone set up not to send — or whose own phone is not linked — sees why, instead of a
      reply box that would only fail when they press Send. */
   const blocked = d.can_send === false;
   el('ib-form').style.display = ibOpen && !blocked ? 'flex' : 'none';
-  el('ib-closed').style.display = !ibOpen && !blocked ? 'block' : 'none';
+  el('ib-closed').style.display = !ibOpen && !blocked && !social ? 'block' : 'none';
+  const cs = el('ib-closed-social');
+  cs.hidden = ibOpen || !social;
+  cs.textContent = social ? '⏱️ More than 24 hours since they last wrote on ' + IB_CH_NAME[ibCh] + ' — Meta only allows a reply within 24 hours of their message. It opens again as soon as they write.' : '';
   const ns = el('ib-nosend');
   if (ns) { ns.hidden = !blocked; ns.textContent = blocked ? '\u26a0 ' + (d.send_error || 'You cannot send from this account.') : ''; }
   setBotState(!!d.bot_paused);
@@ -295,11 +349,38 @@ el('ib-bot-btn').addEventListener('click', async ()=>{
 el('ib-form').addEventListener('submit', async e=>{
   e.preventDefault(); const ta=el('ib-text'); const body=ta.value.trim(); if(!body||!ibCur) return;
   const btn=e.target.querySelector('button'); btn.disabled=true;
-  const fd=new FormData(); fd.append('ajax','send'); fd.append('csrf_token',IB_CSRF); fd.append('contact',ibCur); fd.append('body',body);
+  const fd=new FormData(); fd.append('ajax','send'); fd.append('csrf_token',IB_CSRF); fd.append('contact',ibCur); fd.append('body',body); fd.append('channel',ibCh||'whatsapp');
   const r=await fetch(IB_URL,{method:'POST',body:fd}); const d=await r.json();
   btn.disabled=false;
   if(d.ok){ ta.value=''; pollThread(); loadThreads(); }
   else { alert(d.error||'Could not send.'); }
+});
+el('ib-ch').addEventListener('change', e=>{ ibCh=e.target.value; ibChPicked=true; ibLast=Math.max(0,ibLast); pollThread(); });
+document.querySelectorAll('#ib-tabs button').forEach(b=>b.addEventListener('click',()=>{
+  document.querySelectorAll('#ib-tabs button').forEach(x=>x.classList.toggle('on',x===b)); ibFilter=b.dataset.ch; loadThreads();
+}));
+/* Messenger Marketing Messages opt-in request. */
+el('ib-optin').addEventListener('click', async ()=>{
+  const title=prompt('What will they receive? (shown on the card, up to 65 characters)','Offers and news');
+  if (title===null) return;
+  const fd=new FormData(); fd.append('ajax','optin_ask'); fd.append('csrf_token',IB_CSRF); fd.append('contact',ibCur); fd.append('title',title); fd.append('frequency','WEEKLY');
+  const d=await (await fetch(IB_URL,{method:'POST',body:fd})).json().catch(()=>({ok:false}));
+  if (typeof showToast==='function') showToast(d.ok?'Request sent — they can tap "Get messages".':(d.error||'Could not send the request.'), !d.ok);
+  if (d.ok) { el('ib-optin').hidden=true; pollThread(); }
+});
+/* Add to CRM as lead — with their number, optionally, so a WhatsApp contact and this one become one. */
+el('ib-addlead').addEventListener('click',()=>{ el('ib-lead-err').hidden=true; el('ib-lead-phone').value=''; el('ib-lead-dlg').showModal(); });
+el('ib-lead-form').addEventListener('submit', async e=>{
+  e.preventDefault();
+  const go=el('ib-lead-go'); go.disabled=true;
+  const fd=new FormData(); fd.append('ajax','add_lead'); fd.append('csrf_token',IB_CSRF); fd.append('contact',ibCur); fd.append('phone',el('ib-lead-phone').value.trim());
+  const d=await (await fetch(IB_URL,{method:'POST',body:fd})).json().catch(()=>({ok:false,error:'Could not add the lead.'}));
+  go.disabled=false;
+  if(!d.ok){ const er=el('ib-lead-err'); er.hidden=false; er.textContent=d.error||'Could not add the lead.'; return; }
+  el('ib-lead-dlg').close();
+  if (typeof showToast==='function') showToast('Added to the CRM.');
+  if (d.contact && d.contact!==ibCur) { openThread(d.contact, el('ib-hname').textContent, ''); } else { el('ib-addlead').hidden=true; }
+  loadThreads();
 });
 el('ib-text').addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); el('ib-form').requestSubmit(); }});
 

@@ -193,7 +193,8 @@ function crm_platform_label(?string $p): string
 function crm_platform_for_source(string $source): ?string
 {
     return ['ctwa' => 'whatsapp_ad', 'inbound' => 'whatsapp', 'meta_form' => 'facebook', 'import' => 'import',
-            'sheet' => 'import', 'manual' => 'manual', 'qualifier' => 'whatsapp'][$source] ?? null;
+            'sheet' => 'import', 'manual' => 'manual', 'qualifier' => 'whatsapp', 'messenger' => 'messenger',
+            'instagram_dm' => 'instagram', 'fb_comment' => 'facebook', 'ig_comment' => 'instagram'][$source] ?? null;
 }
 
 /** Meta's lead platform ("fb", "ig", "msg", "an") → ours. */

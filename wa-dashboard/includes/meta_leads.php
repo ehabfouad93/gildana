@@ -23,6 +23,8 @@ require_once __DIR__ . '/whatsapp.php';
 
 // pages_manage_ads is what lets us LIST a Page's forms and their questions; leads_retrieval reads the leads.
 const META_SCOPES = 'pages_show_list,pages_read_engagement,pages_manage_metadata,pages_manage_ads,leads_retrieval,business_management,ads_read';
+// Asked for as well when the client has Messenger, Instagram or comments (Admin → client → Channels).
+const SOCIAL_SCOPES = 'pages_messaging,pages_manage_engagement,pages_read_user_content,instagram_basic,instagram_manage_messages,instagram_manage_comments';
 
 /** Where a form's answer can go. */
 /** What we read about each lead: the answers, and which campaign, ad set, ad and platform brought it. */
@@ -100,8 +102,10 @@ function meta_auth_url(int $clientId, ?int $userId): string
     try { db_run("DELETE FROM meta_oauth_state WHERE created_at < NOW() - INTERVAL 1 HOUR"); } catch (Throwable $e) {}
     $cfg = meta_cfg();
     // Business-type apps reject a scope list and want the id of a Login configuration instead.
+    $client = db_row("SELECT * FROM clients WHERE id=?", [$clientId]) ?: [];
+    $scopes = META_SCOPES . (function_exists('client_has_social') && $client && client_has_social($client) ? ',' . SOCIAL_SCOPES : '');
     $ask = $cfg['config_id'] !== '' ? ['config_id' => $cfg['config_id'], 'override_default_response_type' => 'true']
-                                    : ['scope' => META_SCOPES];
+                                    : ['scope' => $scopes];
     return meta_dialog_base() . '/dialog/oauth?' . http_build_query([
         'client_id'     => $cfg['app_id'],
         'redirect_uri'  => meta_redirect_uri(),
@@ -150,6 +154,13 @@ function meta_finish_connect(int $clientId, string $code): array
         db_run("INSERT INTO meta_pages (client_id,page_id,name,token_enc,connected_at) VALUES (?,?,?,?,NOW())
                 ON DUPLICATE KEY UPDATE name=VALUES(name), token_enc=VALUES(token_enc), last_error=NULL",
                [$clientId, (string) $p['id'], mb_substr((string) ($p['name'] ?? ''), 0, 190), encrypt_secret((string) $p['access_token'])]);
+        // Its Instagram account, for Instagram Direct and comments — and re-subscribe, since a new
+        // token may come with new permissions (messages, comments) the old one did not have.
+        $row = db_row("SELECT * FROM meta_pages WHERE client_id=? AND page_id=?", [$clientId, (string) $p['id']]);
+        if ($row && function_exists('social_page_link_ig') && db_has_column('meta_pages', 'ig_user_id')) {
+            social_page_link_ig($row);
+            if ((int) $row['subscribed'] || (int) ($row['msg_on'] ?? 0) || (int) ($row['ig_msg_on'] ?? 0) || (int) ($row['comments_on'] ?? 0)) social_page_apply($row);
+        }
     }
     // The same login can read ad spend, when it was allowed (ads_read). Not having it is fine:
     // lead forms work without it, and the ad spend card says how to add it.
@@ -165,11 +176,24 @@ function meta_page_token(array $page): string
     return $page['token_enc'] ? decrypt_secret((string) $page['token_enc']) : '';
 }
 
-/** Start or stop leads arriving from a Page. */
+/** The webhook fields a Page needs for everything it is switched on for (leads, messages, comments). */
+function meta_page_fields(array $page): array
+{
+    $f = [];
+    if ((int) ($page['leads_on'] ?? 1) && (int) $page['subscribed']) $f[] = 'leadgen';
+    if ((int) ($page['msg_on'] ?? 0) || (int) ($page['ig_msg_on'] ?? 0)) array_push($f, 'messages', 'messaging_postbacks', 'message_reads', 'messaging_optins');
+    if ((int) ($page['comments_on'] ?? 0)) $f[] = 'feed';
+    return array_values(array_unique($f));
+}
+
+/** Start or stop leads arriving from a Page. Its messages and comments, when on, keep arriving. */
 function meta_page_subscribe(array $page, bool $on): array
 {
-    $r = meta_http($on ? 'POST' : 'DELETE', $page['page_id'] . '/subscribed_apps',
-                   ['subscribed_fields' => 'leadgen', 'access_token' => meta_page_token($page)]);
+    $want = ['subscribed' => $on ? 1 : 0] + $page;
+    $fields = meta_page_fields($want);
+    $r = $fields
+        ? meta_http('POST', $page['page_id'] . '/subscribed_apps', ['subscribed_fields' => implode(',', $fields), 'access_token' => meta_page_token($page)])
+        : meta_http('DELETE', $page['page_id'] . '/subscribed_apps', ['access_token' => meta_page_token($page)]);
     db_run("UPDATE meta_pages SET subscribed=?, last_error=? WHERE id=?",
            [$r['ok'] ? ($on ? 1 : 0) : (int) $page['subscribed'], $r['ok'] ? null : mb_substr($r['error'], 0, 255), (int) $page['id']]);
     if ($r['ok'] && $on) meta_sync_forms($page);
@@ -334,6 +358,8 @@ function meta_process_lead(array $page, string $leadgenId, string $via, ?array $
         'ad_name' => $lead['ad_name'] ?? '', 'meta_ad_id' => $lead['ad_id'] ?? '']);
     $isNew = crm_add_lead($client, $contactId, 'meta_form', $owner, $stage);
     if ($wasLead) crm_resubmitted($client, $contactId, 'meta_form');
+    // Automations that start when a lead form is submitted (Automations → "also start when…").
+    social_flow_event($client, $contactId, 'lead_form', ['form_id' => $formId]);
 
     $answers = [];
     foreach ($m['attrs'] as $k => $v) $answers[] = ucfirst($k) . ': ' . $v;

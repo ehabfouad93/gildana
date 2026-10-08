@@ -30,7 +30,7 @@ declare(strict_types=1);
 function perm_modules(): array
 {
     return [
-        'inbox'       => ['label' => 'Inbox',          'pages' => ['inbox.php', 'upload_media.php', 'media.php']],
+        'inbox'       => ['label' => 'Inbox',          'pages' => ['inbox.php', 'upload_media.php', 'media.php', 'comments.php']],
         'crm'         => ['label' => 'CRM',            'pages' => ['crm.php', 'crm_lead.php', 'crm_import.php',
                                                                    'crm_reports.php', 'meta_leads.php',
                                                                    'crm_team.php', 'crm_rules.php', 'crm_setup.php',
@@ -40,9 +40,9 @@ function perm_modules(): array
         'contacts'    => ['label' => 'Contacts',       'pages' => ['contacts.php']],
         'lists'       => ['label' => 'Lists',          'pages' => ['lists.php', 'contact_search.php']],
         'templates'   => ['label' => 'Templates',      'pages' => ['templates.php']],
-        'campaigns'   => ['label' => 'Campaigns',      'pages' => ['campaigns.php', 'campaign_new.php', 'report.php',
+        'campaigns'   => ['label' => 'Campaigns',      'pages' => ['campaigns.php', 'campaign_new.php', 'campaign_social.php', 'report.php',
                                                                    'failed.php', 'upload_media.php']],
-        'automations' => ['label' => 'Automations',    'pages' => ['automations.php', 'automation_edit.php',
+        'automations' => ['label' => 'Automations',    'pages' => ['automations.php', 'automation_edit.php', 'automation_data.php',
                                                                    'automation_report.php', 'google_sheet.php',
                                                                    'upload_media.php']],
         'qualifier'   => ['label' => 'Lead Qualifier', 'pages' => ['qualifiers.php', 'qualifier_edit.php', 'leads.php',
@@ -118,6 +118,50 @@ function client_modules(array $client): array
 {
     $plan = perm_parse($client['modules'] ?? null) ?? array_keys(perm_plan_modules());
     return array_values(array_unique(array_merge($plan, perm_account_modules())));
+}
+
+/* ───────────────────────── channels ───────────────────────── */
+
+/**
+ * The channels the platform admin can offer a client, independently of modules: a client can
+ * have the Inbox module and only WhatsApp in it, or WhatsApp and Instagram, and so on.
+ */
+function perm_channels(): array
+{
+    return [
+        'whatsapp'    => ['label' => 'WhatsApp',                  'hint' => 'Official API or personal number, as set in Sending Channel below'],
+        'messenger'   => ['label' => 'Facebook Messenger',        'hint' => 'Messages to their Facebook Page'],
+        'instagram'   => ['label' => 'Instagram Direct',          'hint' => 'Messages to their Instagram professional account'],
+        'fb_comments' => ['label' => 'Facebook comments',         'hint' => 'Moderate and answer comments on their Page\'s posts'],
+        'ig_comments' => ['label' => 'Instagram comments',        'hint' => 'Moderate and answer comments on their posts and reels'],
+        'social_mm'   => ['label' => 'Messenger Marketing Messages', 'hint' => 'Campaigns to people who agreed to receive offers on Messenger'],
+    ];
+}
+
+/** This client's channels. Never set = WhatsApp only, which is what every older account had. */
+function client_channels(array $client): array
+{
+    $raw = trim((string) ($client['channels'] ?? ''));
+    if ($raw === '') return ['whatsapp'];
+    return array_values(array_intersect(array_keys(perm_channels()), array_map('trim', explode(',', $raw))));
+}
+
+function client_has_channel(array $client, string $channel): bool
+{
+    return in_array($channel, client_channels($client), true);
+}
+
+/** The signed-in client's channel. Outside a client session (cron, webhooks) pass the client row instead. */
+function has_channel(string $channel): bool
+{
+    [, $c] = perm_context();
+    return $c ? client_has_channel($c, $channel) : false;
+}
+
+/** Any of Messenger / Instagram / comments — the "social" part of the product is on for this client. */
+function client_has_social(array $client): bool
+{
+    return (bool) array_intersect(client_channels($client), ['messenger', 'instagram', 'fb_comments', 'ig_comments', 'social_mm']);
 }
 
 /** The user's role inside the client, defaulting to the least surprising answer. */

@@ -82,7 +82,13 @@ function inbox_media_get(array $msg): array
     $ref = (string) ($msg['media_ref'] ?? '');
     $bytes = null;
 
-    if ($ref !== '' && $ref !== 'pw') {
+    if (str_starts_with($ref, 'url:')) {
+        // Messenger / Instagram: Meta hands over a link to the file that works for a while. Fetched
+        // with the same guard as any outside URL — public addresses only, size-capped, few redirects.
+        $bytes = function_exists('safe_http_get') ? safe_http_get(substr($ref, 4), INBOX_MEDIA_MAX + 1, 3) : null;
+        if ($bytes === null || $bytes === '') return ['ok' => false, 'error' => 'Facebook no longer has this file.'];
+        if ($mime === '' && function_exists('finfo_buffer')) $mime = (string) (finfo_buffer(finfo_open(FILEINFO_MIME_TYPE), $bytes) ?: '');
+    } elseif ($ref !== '' && $ref !== 'pw') {
         // Business API: the id gives a short-lived link, which only opens with the account's token.
         $token = wa_token($client);
         $meta = wa_request('GET', wa_graph_base() . '/' . rawurlencode($ref), $token);

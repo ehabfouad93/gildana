@@ -159,6 +159,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
+    if ($action === 'save_channels') {
+        // Which channels this client is offered. WhatsApp alone is stored as NULL, like an account
+        // that was never touched, so turning extra channels off returns it to exactly that.
+        $picked = array_values(array_intersect(array_keys(perm_channels()), array_map('strval', (array) ($_POST['channels'] ?? []))));
+        if (!$picked) {
+            $err = 'Leave at least one channel on.';
+        } else {
+            db_run("UPDATE clients SET channels=? WHERE id=?", [$picked === ['whatsapp'] ? null : implode(',', $picked), $id]);
+            flash('Channels updated.');
+            redirect('client.php?id=' . $id . '#channels');
+        }
+    }
+
     if ($action === 'set_threshold') {
         db_run("UPDATE clients SET low_credit_threshold=? WHERE id=?", [max(0, (int) ($_POST['low_credit_threshold'] ?? 100)), $id]);
         flash('Low-credit threshold updated.');
@@ -339,6 +352,28 @@ $use      = db_row("SELECT * FROM usage_periods WHERE client_id=? AND period_sta
       <?php endforeach; ?>
     </div>
     <button type="submit" class="btn btn-primary mt10">Save modules</button>
+  </form>
+</div>
+
+<!-- ── Channels offered ── -->
+<?php $hasCh = client_channels($client); ?>
+<div class="card" id="channels">
+  <h2>Channels</h2>
+  <p class="text-muted" style="font-size:12.5px;margin:-6px 0 14px">
+    Where this account can talk to customers. A channel switched off disappears everywhere — the
+    Inbox, Comments, automation triggers, the AI agent, campaigns — and messages arriving on it are
+    ignored. Facebook and Instagram also need the client to connect their Page in
+    <strong>CRM → Facebook &amp; Instagram</strong>.
+  </p>
+  <form method="post">
+    <?= csrf_field() ?><input type="hidden" name="action" value="save_channels">
+    <div class="mod-grid">
+      <?php foreach (perm_channels() as $key => $ch): ?>
+        <label class="mod-opt" title="<?= e($ch['hint']) ?>"><input type="checkbox" name="channels[]" value="<?= e($key) ?>" <?= in_array($key, $hasCh, true) ? 'checked' : '' ?>>
+          <?= e($ch['label']) ?></label>
+      <?php endforeach; ?>
+    </div>
+    <button type="submit" class="btn btn-primary mt10">Save channels</button>
   </form>
 </div>
 

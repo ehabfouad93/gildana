@@ -698,10 +698,11 @@ foreach ($views as $v_) { parse_str((string) $v_['params'], $vq); if ($vq == $ac
             <td data-label="<?= e($lbl) ?>" class="<?= 'c-' . e($k) ?><?= in_array($k, ['value', 'effort', 'rotations'], true) ? ' num' : '' ?><?= $k === 'followup' && $late ? ' crm-late' : '' ?>">
             <?php switch ($k):
               case 'lead': ?>
-                <a href="crm_lead.php?id=<?= (int) $l['id'] ?>" class="crm-name"><strong><?= e((string) ($l['name'] ?: crm_phone_show((string) $l['phone_e164']))) ?></strong></a>
+                <a href="crm_lead.php?id=<?= (int) $l['id'] ?>" class="crm-name"><strong><?= e((string) ($l['name'] ?: (crm_phone_show((string) $l['phone_e164']) ?: (!empty($l['ig_username']) ? '@' . $l['ig_username'] : '#' . $l['code'])))) ?></strong></a>
                 <span class="crm-sub-line"><?php if (!empty($l['code'])): ?><span class="crm-code">#<?= e((string) $l['code']) ?></span><?php endif; ?>
                   <?php if (!in_array('phone', $cols, true)): ?><?= e(crm_phone_show((string) $l['phone_e164'])) ?><?php endif; ?></span>
-              <?php break; case 'phone': ?><?php if ($hidePhones): ?><button type="button" class="btn-link" data-reveal="<?= (int) $l['id'] ?>" data-how="call" title="Call — the number is recorded as opened"><?= e(crm_phone_mask((string) $l['phone_e164'])) ?></button>
+              <?php break; case 'phone': ?><?php if ((string) $l['phone_e164'] === ''): ?><span class="text-muted"><?= !empty($l['ig_sid']) ? 'Instagram' : (!empty($l['fb_psid']) ? 'Messenger' : '—') ?></span>
+                <?php elseif ($hidePhones): ?><button type="button" class="btn-link" data-reveal="<?= (int) $l['id'] ?>" data-how="call" title="Call — the number is recorded as opened"><?= e(crm_phone_mask((string) $l['phone_e164'])) ?></button>
                 <?php else: ?><a href="tel:+<?= e((string) $l['phone_e164']) ?>">+<?= e((string) $l['phone_e164']) ?></a><?php endif; ?>
               <?php break; case 'stage': ?>
                 <span class="pill <?= $l['stage_kind'] === 'won' ? 'green' : ($l['stage_kind'] === 'lost' ? 'red' : 'gray') ?>"><?= e((string) $l['stage_name']) ?></span>
