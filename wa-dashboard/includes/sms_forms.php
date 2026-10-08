@@ -151,3 +151,95 @@ function sms_provider_guide_html(string $provider, bool $open = false): string
     if ($link !== '') $h .= '<p class="sms-guide-link"><a href="' . e($link) . '" target="_blank" rel="noopener noreferrer">' . e(parse_url($link, PHP_URL_HOST) ?: $link) . ' ↗</a></p>';
     return $h . '</details>';
 }
+
+/* ───────────── a client's own SMS gateways + which one sends (Settings and SMS → Settings) ───────────── */
+
+/**
+ * Posts from the client's SMS gateway panel: their own gateways (add / edit / test / balance /
+ * on-off / delete — only when the platform admin allows their own provider) and the choice of
+ * gateway. Returns [message, type] or null when the post was not one of these.
+ */
+function sms_client_panel_handle(array $client, array $post, bool $admin): ?array
+{
+    $cid = (int) $client['id'];
+    if (isset($post['gw_action'])) {
+        if (!$admin) return ['Only an account Admin can change SMS gateways.', 'error'];
+        if (($client['sms_mode'] ?? 'platform') !== 'own') return ['Using your own SMS provider needs approval — ask ' . (defined('BRAND_PARENT') ? BRAND_PARENT : 'us') . ' to allow it.', 'error'];
+        $before = (int) db_val("SELECT COUNT(*) FROM sms_gateways WHERE client_id=?", [$cid]);
+        $r = sms_gateway_handle($cid, $post);
+        if (!$r) return null;
+        $act = (string) $post['gw_action'];
+        // Their first own gateway starts sending straight away.
+        if ($act === 'save' && !empty($r[2]) && $before === 0) db_run("UPDATE clients SET sms_choice=? WHERE id=?", ['own:' . (int) $r[2], $cid]);
+        // Deleting the one in use: back to the default until they choose again.
+        if ($act === 'delete' && ($r[1] ?? '') === 'success') db_run("UPDATE clients SET sms_choice=NULL WHERE id=? AND sms_choice=?", [$cid, 'own:' . (int) ($post['gw_id'] ?? 0)]);
+        return $r;
+    }
+    if (($post['action'] ?? '') === 'sms_choose') {
+        if (!$admin) return ['Only an account Admin can choose the SMS gateway.', 'error'];
+        $pick = (string) ($post['gateway'] ?? '');
+        $opts = sms_client_options($client);
+        if (!isset($opts[$pick])) return ['That gateway is not available to your account.', 'error'];
+        if (!$opts[$pick]['ready']) return ['That gateway is turned off — turn it on first.', 'error'];
+        db_run("UPDATE clients SET sms_choice=? WHERE id=?", [$pick, $cid]);
+        return ['SMS now goes out through ' . $opts[$pick]['name'] . '.', 'success'];
+    }
+    return null;
+}
+
+/** The client's SMS gateway panel. $self is the page it posts back to (e.g. settings.php). */
+function sms_client_panel(array $client, string $self): string
+{
+    $cid = (int) $client['id'];
+    $brand = defined('BRAND_PARENT') ? BRAND_PARENT : 'us';
+    $allowOwn = ($client['sms_mode'] ?? 'platform') === 'own';
+    $opts = sms_client_options($client);
+    $cur = sms_client_gateway($client);
+    $curKey = $cur ? ($cur['client_id'] !== null ? 'own:' . (int) $cur['id'] : (string) $cur['id']) : '';
+    $sep = str_contains($self, '?') ? '&' : '?';
+    $h = '<div class="sms-panel">';
+
+    // 1. Which gateway sends.
+    $h .= '<h3 class="sms-panel-h">Send SMS through</h3>';
+    if (!$opts) {
+        $h .= '<p class="text-muted">No SMS gateway yet.' . ($allowOwn ? ' Add your provider below.' : ' Ask ' . e($brand) . ' to connect one.') . '</p>';
+    } elseif (count($opts) === 1) {
+        $o = reset($opts);
+        $h .= '<p>' . e($o['name']) . ' <span class="text-muted">— ' . e(sms_provider_label($o['provider'])) . ($o['kind'] === 'own' ? ' · your account' : ' · ' . e($brand)) . '</span>'
+            . ($cur ? ' <span class="pill green">In use</span>' : '') . '</p>';
+    } else {
+        $h .= '<form method="post" action="' . e($self) . '">' . csrf_field() . '<input type="hidden" name="action" value="sms_choose">'
+            . '<div class="sms-gw-pick" role="radiogroup" aria-label="SMS gateway">';
+        foreach ($opts as $k => $o) {
+            $on = $curKey === (string) $k;
+            $h .= '<label class="sms-gw-opt' . ($on ? ' on' : '') . ($o['ready'] ? '' : ' off') . '">'
+                . '<input type="radio" name="gateway" value="' . e((string) $k) . '"' . ($on ? ' checked' : '') . ($o['ready'] ? '' : ' disabled') . '>'
+                . '<span><strong>' . e($o['name']) . '</strong><small class="text-muted">' . e(sms_provider_label($o['provider']))
+                . ($o['kind'] === 'own' ? ' · your account' . ($o['ready'] ? '' : ' · turned off') : ' · ' . e($brand)) . '</small></span>'
+                . ($on ? '<span class="pill green">In use</span>' : '') . '</label>';
+        }
+        $h .= '</div><button class="btn btn-primary btn-sm mt10">Use this gateway</button></form>';
+    }
+
+    // 2. Their own provider accounts.
+    $h .= '<h3 class="sms-panel-h" id="own">Your SMS provider accounts</h3>';
+    if (!$allowOwn) {
+        return $h . '<p class="text-muted">To send through your own SMS provider account (SMS Misr, Victory Link, Twilio, mShastra or any provider with an HTTP API), ask '
+            . e($brand) . ' to allow it for your account.</p></div>';
+    }
+    $own = array_map('sms_gateway_load', db_all("SELECT * FROM sms_gateways WHERE client_id=? ORDER BY id", [$cid]));
+    $edit = (int) ($_GET['gw_edit'] ?? 0);
+    foreach ($own as $g) {
+        $h .= '<div class="sms-own-gw" id="gw' . (int) $g['id'] . '">' . sms_gateway_card($g, $self . $sep . 'gw_edit=' . (int) $g['id'] . '#gw-form');
+        if ($edit === (int) $g['id']) $h .= '<div id="gw-form" class="sms-own-form"><h4>Edit ' . e((string) $g['name']) . '</h4>' . sms_gateway_form($g, false) . '</div>';
+        $h .= '</div>';
+    }
+    if (!$own) $h .= '<p class="text-muted">No provider account yet — add one below. Choose the provider, fill in what it asks for (the guide under the fields shows where to find each one), save, then send a test.</p>';
+    $adding = isset($_GET['gw_new']) || !$own;
+    if ($adding) {
+        $h .= '<div id="gw-form" class="sms-own-form"><h4>Add an SMS provider account</h4>' . str_replace('<details class="sms-guide">', '<details class="sms-guide" open>', sms_gateway_form(null, false)) . '</div>';
+    } elseif (!$edit) {
+        $h .= '<a class="btn btn-ghost btn-sm" href="' . e($self . $sep . 'gw_new=1#gw-form') . '">+ Add SMS provider account</a>';
+    }
+    return $h . '</div>';
+}

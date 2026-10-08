@@ -453,4 +453,8 @@ return [
     'In use' => 'مستخدمة',
     'Gateways their admin can choose from' => 'البوابات التي يمكن لمسؤول العميل الاختيار منها',
     'Default gateway' => 'البوابة الافتراضية',
+    'SMS gateway' => 'بوابة الرسائل SMS',
+    'Your SMS provider accounts' => 'حسابات مزودي SMS الخاصة بك',
+    '+ Add SMS provider account' => '+ إضافة حساب مزود SMS',
+    'Add an SMS provider account' => 'إضافة حساب مزود SMS',
 ];

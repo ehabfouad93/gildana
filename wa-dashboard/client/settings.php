@@ -175,6 +175,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
     redirect('settings.php#ai');
 }
 
+/* ── SMS gateway: their own provider accounts and which gateway sends (shared with SMS → Settings) ── */
+$smsHere = function_exists('client_modules') && in_array('sms', client_modules($CLIENT), true) && db_has_column('clients', 'sms_choice');
+if ($smsHere) require_once __DIR__ . '/../includes/sms_forms.php';
+if ($smsHere && $_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['gw_action']) || ($_POST['action'] ?? '') === 'sms_choose')) {
+    verify_csrf();
+    $r = sms_client_panel_handle($CLIENT, $_POST, is_client_admin());
+    if ($r) flash($r[0], $r[1]);
+    redirect('settings.php#sms-gateway');
+}
+
 // A person's own name, picture and password now live on profile.php, open to every role.
 
 client_header('Settings', 'settings', $CLIENT);
@@ -536,6 +546,16 @@ $isPersonal = channel_is_personal($CLIENT); ?>
   </p>
   <div id="notif-body"></div>
 </div>
+
+<?php if ($smsHere && is_client_admin()): ?>
+<div class="card" id="sms-gateway">
+  <h2>SMS gateway</h2>
+  <p class="text-muted" style="font-size:12.5px;margin:-6px 0 14px">
+    Where your SMS go out from — campaigns, the API, the CRM and automations all use it. Credits are charged per SMS part as shown on the <a href="sms.php?tab=settings">SMS</a> page.
+  </p>
+  <?= sms_client_panel(db_row("SELECT * FROM clients WHERE id=?", [$cid]) ?: $CLIENT, 'settings.php') ?>
+</div>
+<?php endif; ?>
 
 <?php $gClient = db_row("SELECT * FROM clients WHERE id=?", [$cid]) ?: $CLIENT; ?>
 <div class="card" id="google">

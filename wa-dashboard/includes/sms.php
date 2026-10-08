@@ -123,9 +123,10 @@ function sms_client_options(array $client): array
         foreach ($rows as $g) $out[(string) $g['id']] = ['kind' => 'platform', 'name' => (string) $g['name'], 'provider' => (string) $g['provider'], 'ready' => true];
     }
     if (($client['sms_mode'] ?? 'platform') === 'own') {
-        $own = db_row("SELECT name, provider, active FROM sms_gateways WHERE client_id=? ORDER BY is_default DESC, id LIMIT 1", [(int) $client['id']]);
-        $out['own'] = ['kind' => 'own', 'name' => $own ? (string) $own['name'] : 'Your own provider account', 'provider' => (string) ($own['provider'] ?? ''),
-                       'ready' => $own && (int) $own['active'] === 1];
+        // Each of their own provider accounts is a choice of its own: "own:<id>".
+        foreach (db_all("SELECT id, name, provider, active FROM sms_gateways WHERE client_id=? ORDER BY id", [(int) $client['id']]) as $own) {
+            $out['own:' . (int) $own['id']] = ['kind' => 'own', 'name' => (string) $own['name'], 'provider' => (string) $own['provider'], 'ready' => (int) $own['active'] === 1];
+        }
     }
     return $out;
 }
@@ -138,6 +139,10 @@ function sms_client_gateway(array $client): ?array
     $own = fn() => ($client['sms_mode'] ?? 'platform') === 'own'
         ? db_row("SELECT * FROM sms_gateways WHERE client_id=? AND active=1 ORDER BY is_default DESC, id LIMIT 1", [$cid]) : null;
     // 1. What the client's admin chose — only while it is still allowed and switched on.
+    if (preg_match('/^own:(\d+)$/', $choice, $m) && ($client['sms_mode'] ?? 'platform') === 'own') {
+        $g = db_row("SELECT * FROM sms_gateways WHERE id=? AND client_id=? AND active=1", [(int) $m[1], $cid]);
+        if ($g) return sms_gateway_load($g);
+    }
     if ($choice === 'own' && ($g = $own())) return sms_gateway_load($g);
     if (ctype_digit($choice) && in_array((int) $choice, sms_client_allowed_ids($client), true)) {
         $g = db_row("SELECT * FROM sms_gateways WHERE id=? AND client_id IS NULL AND active=1", [(int) $choice]);

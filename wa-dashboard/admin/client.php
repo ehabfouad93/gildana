@@ -432,7 +432,6 @@ $use      = db_row("SELECT * FROM usage_periods WHERE client_id=? AND period_sta
 <!-- ── SMS ── -->
 <?php if (db_has_column('clients', 'sms_rate')):
   $smsGws = db_all("SELECT id, name, provider, is_default, default_sender FROM sms_gateways WHERE client_id IS NULL AND active=1 ORDER BY is_default DESC, name");
-  $smsOwn = db_row("SELECT name, provider, active FROM sms_gateways WHERE client_id=? ORDER BY is_default DESC, id LIMIT 1", [(int) $client['id']]);
   $smsOn = in_array('sms', client_modules($client), true); ?>
 <div class="card" id="sms">
   <h2>SMS</h2>
@@ -449,21 +448,29 @@ $use      = db_row("SELECT * FROM usage_periods WHERE client_id=? AND period_sta
       </select><?php if (!$smsGws): ?><span class="hint" style="color:var(--danger)">No platform gateway yet — add one in SMS gateways.</span><?php endif; ?></div>
       <div class="field"><span class="lbl">Credits per SMS part</span><input type="number" name="sms_rate" min="0" max="100" value="<?= (int) ($client['sms_rate'] ?? 1) ?>"></div>
     </div>
-    <?php if (count($smsGws) > 1 && db_has_column('clients', 'sms_allowed_gateways')): $smsAllowed = sms_client_allowed_ids($client);
-          $smsChoiceOpts = sms_client_options($client); $smsChoice = (string) ($client['sms_choice'] ?? ''); ?>
+    <?php if (count($smsGws) > 1 && db_has_column('clients', 'sms_allowed_gateways')): $smsAllowed = sms_client_allowed_ids($client); ?>
     <div class="field"><span class="lbl">Gateways their admin can choose from</span>
       <div class="mod-grid">
         <?php foreach ($smsGws as $g): ?><label class="mod-opt"><input type="checkbox" name="sms_allowed[]" value="<?= (int) $g['id'] ?>" <?= in_array((int) $g['id'], $smsAllowed, true) ? 'checked' : '' ?>>
           <?= e($g['name']) ?> <span class="text-muted">— <?= e(sms_provider_label((string) $g['provider'])) ?></span></label><?php endforeach; ?>
       </div>
       <span class="hint">Their account Admin picks one of these in SMS → Settings. The gateway above is always allowed and used until they choose.
-        <?php if ($smsChoice !== '' && isset($smsChoiceOpts[$smsChoice])): ?><br>They chose: <strong><?= e($smsChoiceOpts[$smsChoice]['name']) ?></strong>.<?php endif; ?></span></div>
+</span></div>
     <?php endif; ?>
     <div class="field"><span class="lbl">Sender names approved for them</span><input type="text" name="sms_senders" maxlength="500" value="<?= e((string) ($client['sms_senders'] ?? '')) ?>" placeholder="Comma separated — empty uses the gateway's default sender">
       <span class="hint">Only names registered with the provider for this client. They pick from this list when sending.</span></div>
     <label class="mod-opt"><input type="checkbox" name="sms_mode" value="own" <?= ($client['sms_mode'] ?? 'platform') === 'own' ? 'checked' : '' ?>>
-      Let them use their own SMS provider account (SMS → Settings). Credits are still charged per part as above — set 0 to not charge for SMS on their own account</label>
-    <?php if ($smsOwn): ?><p class="hint">Their own provider: <strong><?= e($smsOwn['name']) ?></strong> (<?= e(sms_provider_label((string) $smsOwn['provider'])) ?>)<?= (int) $smsOwn['active'] ? '' : ' — off' ?>.</p><?php endif; ?>
+      Let them add their own SMS provider accounts (Settings → SMS gateway) and choose them. Credits are still charged per part as above — set 0 to not charge for SMS on their own account</label>
+    <?php $ownList = db_all("SELECT id, name, provider, active, last_test_at, last_test_ok FROM sms_gateways WHERE client_id=? ORDER BY id", [(int) $client['id']]);
+          $usingGw = sms_client_gateway($client); ?>
+    <?php if ($ownList): ?>
+      <div class="hint" style="margin-top:6px">Their own provider accounts (added in their Settings):
+        <ul style="margin:4px 0 0;padding-inline-start:18px">
+        <?php foreach ($ownList as $og): ?><li><strong><?= e((string) $og['name']) ?></strong> — <?= e(sms_provider_label((string) $og['provider'])) ?><?= (int) $og['active'] ? '' : ' · off' ?>
+          <?= $og['last_test_at'] ? ' · last test ' . ((int) $og['last_test_ok'] ? 'passed' : 'failed') : ' · not tested' ?><?= $usingGw && (int) $usingGw['id'] === (int) $og['id'] ? ' <span class="pill green">In use</span>' : '' ?></li><?php endforeach; ?>
+        </ul></div>
+    <?php endif; ?>
+    <?php if ($usingGw): ?><p class="hint">Sending now through: <strong><?= e((string) $usingGw['name']) ?></strong><?= $usingGw['client_id'] !== null ? ' (their own account)' : '' ?>.</p><?php endif; ?>
     <button type="submit" class="btn btn-primary mt10">Save SMS</button>
   </form>
 </div>

@@ -1948,3 +1948,9 @@ a.viz-kpi:hover { border-color: var(--brand); }
 .sms-guide code { font-size: 12px; background: var(--brand-tint, rgba(124,58,237,.08)); padding: 1px 5px; border-radius: 4px; }
 .sms-guide-h { font-weight: 600; margin-top: 10px; margin-bottom: 0; }
 .sms-guide-link { margin-bottom: 12px; }
+/* Client SMS gateway panel (Settings and SMS → Settings) */
+.sms-panel-h { font-size: 14px; margin: 18px 0 8px; }
+.sms-panel-h:first-child { margin-top: 0; }
+.sms-own-gw { margin-bottom: 12px; }
+.sms-own-form { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin: 10px 0; }
+.sms-own-form h4 { margin: 0 0 10px; font-size: 13.5px; }
