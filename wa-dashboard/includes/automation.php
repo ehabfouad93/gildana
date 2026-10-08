@@ -422,6 +422,8 @@ function automation_run_steps(array $client, array $contact, array $run, array $
             $run['status'] = 'waiting_input';
             break;
         } elseif ($type === 'ai_score') {
+            // The qualifier is scoring this chat itself now: drop the provisional Inbox score so it isn't counted twice.
+            if (isset($ctx['scored_from_inbox'])) { $run['score'] = max(0, (int) $run['score'] - (int) ($ctx['inbox_score'] ?? 0)); unset($ctx['scored_from_inbox'], $ctx['inbox_score'], $ctx['inbox_transcript_len']); }
             $pts = ai_score_reply($client, $ctx['transcript'], (string) ($cfg['criterion'] ?? ''), (int) ($cfg['max_points'] ?? 0));
             $run['score'] = (int) $run['score'] + $pts;
             $run['current_step_id'] = $step['next_step_id'];
@@ -876,7 +878,7 @@ function auto_inbound_decide(array $client, array $contact, array $message, stri
     // The inbound is still logged by webhook.php, so nothing is lost.
     if (auto_bot_paused($contact)) return 'bot_paused|A human took over this chat from the Inbox';
 
-    $run = auto_active_run((int) $contact['id']);
+    $run = auto_active_run((int) $contact['id']) ?? auto_revive_no_answer($contact);
     // They answered on another channel than the conversation started on: carry on there.
     if ($run && isset($run['channel']) && $run['channel'] !== $channel && $run['status'] === 'waiting_input') {
         db_run("UPDATE flow_runs SET channel=? WHERE id=?", [$channel, (int) $run['id']]);
@@ -1045,9 +1047,11 @@ function automation_sweep_no_answer(int $hours = 24): int
 {
     $hours = max(0, $hours);
     $rows = db_all(
-        "SELECT id, context FROM flow_runs
-          WHERE status='waiting_input' AND grade IS NULL
-            AND created_at < (NOW() - INTERVAL " . (int) $hours . " HOUR)"
+        "SELECT r.id, r.context FROM flow_runs r
+          WHERE r.status='waiting_input' AND r.grade IS NULL
+            AND r.created_at < (NOW() - INTERVAL " . (int) $hours . " HOUR)
+            -- They wrote back (maybe to a person in the Inbox): that's an answer, scored from the Inbox instead.
+            AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.contact_id=r.contact_id AND m.direction='in' AND m.created_at > r.created_at)"
     );
     $n = 0;
     foreach ($rows as $row) {
@@ -1058,6 +1062,73 @@ function automation_sweep_no_answer(int $hours = 24): int
         }
         if ($replied) continue; // they did reply → not a "no answer"
         db_run("UPDATE flow_runs SET grade='no_answer', status='stopped', updated_at=NOW() WHERE id=?", [(int) $row['id']]);
+        $n++;
+    }
+    return $n;
+}
+
+/**
+ * A qualifier lead marked "No answer" who writes back later: the conversation picks up where it
+ * stopped (within 30 days, while the qualifier is still on), so late replies get qualified too.
+ */
+function auto_revive_no_answer(array $contact): ?array
+{
+    $run = db_row("SELECT r.* FROM flow_runs r JOIN flows f ON f.id=r.flow_id
+                    WHERE r.contact_id=? AND r.status='stopped' AND r.grade='no_answer' AND f.kind='qualifier' AND f.status='active'
+                      AND r.created_at > NOW() - INTERVAL 30 DAY ORDER BY r.id DESC LIMIT 1", [(int) $contact['id']]);
+    if (!$run || !$run['current_step_id']) return null;
+    db_run("UPDATE flow_runs SET status='waiting_input', grade=NULL, updated_at=NOW() WHERE id=?", [(int) $run['id']]);
+    $run['status'] = 'waiting_input'; $run['grade'] = null;
+    return $run;
+}
+
+/**
+ * Score qualifier leads from their real conversation in the Inbox — for leads who replied but whose
+ * qualifier could not carry on: marked "No answer" before they wrote, or a person took the chat over
+ * from the Inbox. Uses the qualifier's own scoring (its AI score steps and Hot/Warm thresholds),
+ * sends nothing, and scores again when new messages arrive. Returns how many were scored.
+ */
+function automation_rescore_from_inbox(int $limit = 20, ?int $flowId = null, ?int $clientId = null): int
+{
+    if (!function_exists('ai_score_reply')) return 0;
+    $w = "f.kind='qualifier' AND r.status IN ('stopped','waiting_input','completed') AND (r.grade='no_answer' OR r.grade IS NULL OR r.grade='' OR JSON_EXTRACT(r.context, '$.scored_from_inbox') IS NOT NULL)";
+    $p = [];
+    if ($flowId) { $w .= " AND r.flow_id=?"; $p[] = $flowId; }
+    if ($clientId) { $w .= " AND r.client_id=?"; $p[] = $clientId; }
+    // Only runs with a reply newer than their last scoring.
+    $rows = db_all("SELECT r.* FROM flow_runs r JOIN flows f ON f.id=r.flow_id
+                     WHERE $w AND NOT (r.grade <=> 'not_interested')
+                       AND EXISTS (SELECT 1 FROM messages m WHERE m.contact_id=r.contact_id AND m.direction='in' AND m.created_at > r.created_at
+                                     AND m.created_at > COALESCE(JSON_UNQUOTE(JSON_EXTRACT(r.context, '$.scored_from_inbox')), '2000-01-01'))
+                       AND (r.status <> 'waiting_input' OR EXISTS (SELECT 1 FROM contacts c WHERE c.id=r.contact_id AND c.bot_paused_until > NOW())
+                            OR r.updated_at < NOW() - INTERVAL 30 MINUTE)
+                     ORDER BY r.updated_at LIMIT " . (int) $limit, $p);
+    $n = 0;
+    foreach ($rows as $run) {
+        $flow = auto_flow((int) $run['flow_id']);
+        $client = db_row("SELECT * FROM clients WHERE id=?", [(int) $run['client_id']]);
+        if (!$flow || !$client || ($client['status'] ?? '') !== 'active') continue;
+        // The conversation as the Inbox has it, from the qualifier's first message on.
+        $msgs = db_all("SELECT direction, body FROM messages WHERE contact_id=? AND created_at >= ? ORDER BY id LIMIT 80", [(int) $run['contact_id'], $run['created_at']]);
+        $transcript = array_map(fn($m) => ['role' => $m['direction'] === 'in' ? 'user' : 'assistant', 'text' => (string) $m['body']], $msgs);
+        if (!array_filter($transcript, fn($t) => $t['role'] === 'user')) continue;
+        $score = 0; $any = false;
+        foreach (db_all("SELECT config FROM flow_steps WHERE flow_id=? AND type='ai_score' ORDER BY sort, id", [(int) $flow['id']]) as $st) {
+            $cfg = json_decode((string) $st['config'], true) ?: [];
+            $score += ai_score_reply($client, $transcript, (string) ($cfg['criterion'] ?? ''), (int) ($cfg['max_points'] ?? 0));
+            $any = true;
+        }
+        foreach (db_all("SELECT config FROM flow_steps WHERE flow_id=? AND type='score'", [(int) $flow['id']]) as $st) $score += (int) ((json_decode((string) $st['config'], true) ?: [])['points'] ?? 0);
+        if (!$any) continue;                                  // a qualifier with no AI scoring step: nothing to judge with
+        $grade = $score >= (int) $flow['hot_min'] ? 'hot' : ($score >= (int) $flow['warm_min'] ? 'warm' : 'cold');
+        $ctx = auto_ctx($run);
+        $ctx['scored_from_inbox'] = date('Y-m-d H:i:s');
+        $ctx['inbox_score'] = $score;
+        $ctx['inbox_transcript_len'] = count($transcript);
+        // A conversation a person is handling stays open; a "No answer" that replied is now finished and graded.
+        $status = $run['status'] === 'waiting_input' ? 'waiting_input' : 'completed';
+        db_run("UPDATE flow_runs SET score=?, grade=?, status=?, context=?, updated_at=NOW() WHERE id=?",
+               [$score, $grade, $status, json_encode($ctx, JSON_UNESCAPED_UNICODE), (int) $run['id']]);
         $n++;
     }
     return $n;
@@ -1402,6 +1473,20 @@ function automation_validate(array $flow, array $client = []): array
              'Ads tell us which ad someone tapped through Meta\'s own callback, and a personal '
            . 'number never receives that. This automation will not run while you send from your '
            . 'own number.');
+    }
+
+    // A Messenger / Instagram / comment / lead form / CRM stage flow starts only from its flow_triggers row.
+    if ($trigger === 'channel' && function_exists('auto_flow_triggers')
+        && !array_filter(auto_flow_triggers($flowId), fn($t) => (int) $t['active'] === 1)) {
+        $add('error', 0, 'This automation has no trigger',
+             'Choose what starts it in Trigger, or add one under "Also start this automation when…".');
+    }
+    if ($trigger === 'channel' && function_exists('auto_flow_triggers')) {
+        foreach (auto_flow_triggers($flowId) as $t) {
+            if ($t['kind'] === 'crm_stage' && empty($t['config']['stage_id'])) {
+                $add('error', 0, 'Choose the CRM stage', 'The trigger "a lead reaches a stage" needs a stage.');
+            }
+        }
     }
 
     /* Two Live flows on the same trigger: only one can ever win, and the loser sits there

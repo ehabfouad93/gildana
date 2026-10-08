@@ -6,8 +6,10 @@ require_once __DIR__ . '/../includes/inbox.php';
 // Live AJAX (threads / thread / send) — handled + exits before any output.
 inbox_handle_ajax($CLIENT);
 
+require_once __DIR__ . '/../includes/social_connect.php';
 client_header('Inbox', 'inbox', $CLIENT);
-page_head('Inbox');
+page_head('Inbox', client_has_social($CLIENT) ? '<a class="btn btn-ghost btn-sm" href="social.php">' . social_fb_icon() . ' Facebook &amp; Instagram</a>' : '');
+echo social_connect_banner($CLIENT, 'inbox.php', is_client_admin());
 $IB_ENDPOINT = 'inbox.php';
 $IB_UPLOAD   = 'upload_media.php';   // lets the template picker upload a header image
 

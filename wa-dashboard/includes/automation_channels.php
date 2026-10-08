@@ -96,6 +96,52 @@ function auto_save_triggers(array $client, int $flowId, array $rows): void
     }
 }
 
+/**
+ * The choices for a flow's main Trigger, grouped for the select: the WhatsApp ones stored in
+ * flows.trigger_type, then every other kind this client can use ("x:<kind>"). Choosing one of
+ * those stores trigger_type='channel' (never matched by WhatsApp) plus a flow_triggers row.
+ */
+function auto_main_trigger_options(array $client): array
+{
+    $out = ['WhatsApp' => ['keyword' => 'Keyword reply', 'welcome' => 'Welcome (first message)',
+                           'default' => 'Default reply (nothing else matched)', 'ad' => 'Someone arrives from an ad'],
+            'Leads' => ['google_sheet' => 'New row in a Google Sheet']];
+    foreach (auto_trigger_kinds_for($client) as $k => $t) {
+        if (str_starts_with($k, 'wa_')) continue;                    // the WhatsApp ones are listed above
+        [$group, $label] = str_contains($t[0], ' — ') ? explode(' — ', $t[0], 2) : ['Other', $t[0]];
+        if (in_array($k, ['lead_form', 'crm_stage'], true)) $group = 'Leads';
+        $out[$group]['x:' . $k] = in_array($k, ['lead_form', 'crm_stage'], true) ? $t[0] : ucfirst($label);
+    }
+    return $out;
+}
+
+/** A main-Trigger choice → [flows.trigger_type, flow_triggers kind or '']. Unknown choices fall back to a keyword reply. */
+function auto_main_trigger_resolve(array $client, string $value): array
+{
+    if (str_starts_with($value, 'x:')) {
+        $k = substr($value, 2);
+        return isset(auto_trigger_kinds_for($client)[$k]) && !str_starts_with($k, 'wa_') ? ['channel', $k] : ['keyword', ''];
+    }
+    return [in_array($value, ['keyword', 'welcome', 'default', 'ad', 'google_sheet'], true) ? $value : 'keyword', ''];
+}
+
+/** The select value showing a flow's current main trigger. */
+function auto_main_trigger_value(array $flow): string
+{
+    if (($flow['trigger_type'] ?? '') !== 'channel') return (string) ($flow['trigger_type'] ?? 'keyword');
+    $t = auto_flow_triggers((int) $flow['id']);
+    return $t ? 'x:' . $t[0]['kind'] : 'keyword';
+}
+
+/** A short name for a flow's main trigger, for lists. */
+function auto_main_trigger_label(array $flow): string
+{
+    $v = auto_main_trigger_value($flow);
+    if (str_starts_with($v, 'x:')) return auto_trigger_kinds()[substr($v, 2)][0] ?? 'Other channel';
+    return ['keyword' => 'Keyword', 'welcome' => 'Welcome', 'default' => 'Default reply', 'ad' => 'From an ad',
+            'google_sheet' => 'Google Sheet (AI leads)', 'button' => 'Button'][$v] ?? $v;
+}
+
 /** Does $text match a keyword list? An empty list matches anything. */
 function auto_keywords_match(array $cfg, string $text): bool
 {

@@ -5,6 +5,7 @@ require_once __DIR__ . '/../includes/sms_providers.php';
 require_once __DIR__ . '/../includes/billing.php';
 require_once __DIR__ . '/../includes/channel.php';
 require_once __DIR__ . '/../includes/permissions.php';
+require_once __DIR__ . '/../includes/social_connect.php';
 
 $id = (int) ($_GET['id'] ?? 0);
 $client = db_row("SELECT * FROM clients WHERE id = ?", [$id]);
@@ -158,6 +159,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             flash('Modules updated. The change applies on the client\'s next click.');
             redirect('client.php?id=' . $id . '#modules');
         }
+    }
+
+    if ($action === 'fb_link') {
+        // A one-hour, single-use Facebook sign-in link for this client — send it to whoever manages their Page.
+        if (!meta_configured()) { flash('Set up the Meta app in Settings first.', 'error'); redirect('client.php?id=' . $id . '#channels'); }
+        $_SESSION['fb_link_' . $id] = meta_auth_url($id, null);
+        redirect('client.php?id=' . $id . '#channels');
     }
 
     if ($action === 'save_channels') {
@@ -374,8 +382,7 @@ $use      = db_row("SELECT * FROM usage_periods WHERE client_id=? AND period_sta
   <p class="text-muted" style="font-size:12.5px;margin:-6px 0 14px">
     Where this account can talk to customers. A channel switched off disappears everywhere — the
     Inbox, Comments, automation triggers, the AI agent, campaigns — and messages arriving on it are
-    ignored. Facebook and Instagram also need the client to connect their Page in
-    <strong>CRM → Facebook &amp; Instagram</strong>.
+    ignored. Facebook and Instagram also need their Page connected (below).
   </p>
   <form method="post">
     <?= csrf_field() ?><input type="hidden" name="action" value="save_channels">
@@ -387,6 +394,33 @@ $use      = db_row("SELECT * FROM usage_periods WHERE client_id=? AND period_sta
     </div>
     <button type="submit" class="btn btn-primary mt10">Save channels</button>
   </form>
+  <?php if (client_has_social($client)): $scSt = social_connect_status($client); $fbLink = $_SESSION['fb_link_' . $id] ?? ''; unset($_SESSION['fb_link_' . $id]); ?>
+  <div class="sc-admin" id="fb-connection">
+    <h3 style="margin:18px 0 6px;font-size:14px">Facebook &amp; Instagram connection
+      <span class="pill <?= $scSt['ready'] ? 'green' : ($scSt['pages'] ? 'gold' : 'gray') ?>"><?= $scSt['ready'] ? 'Working' : ($scSt['pages'] ? 'Partly on' : 'Not connected') ?></span></h3>
+    <?php if ($scSt['pages']): ?>
+      <div class="table-wrap"><table class="data"><thead><tr><th>Page</th><th>Instagram</th><?php foreach ($scSt['switches'] as [$ch, $l]): ?><th><?= e($l) ?></th><?php endforeach; ?></tr></thead><tbody>
+      <?php foreach ($scSt['pages'] as $pg): ?>
+        <tr><td><strong><?= e((string) $pg['name']) ?></strong><?php if ($pg['last_error']): ?><span style="display:block;font-size:12px;color:var(--danger)"><?= e(meta_explain_error((string) $pg['last_error'])) ?></span><?php endif; ?></td>
+          <td><?= !empty($pg['ig_username']) ? '@' . e((string) $pg['ig_username']) : '<span class="text-muted">None linked</span>' ?></td>
+          <?php foreach ($scSt['switches'] as $k => $_): ?><td><span class="pill <?= (int) ($pg[$k] ?? 0) ? 'green' : 'gray' ?>"><?= (int) ($pg[$k] ?? 0) ? 'On' : 'Off' ?></span></td><?php endforeach; ?></tr>
+      <?php endforeach; ?></tbody></table></div>
+    <?php else: ?>
+      <p class="text-muted" style="font-size:12.5px;margin:0">No Page connected yet. The client connects it from their Inbox, Comments, or <em>Facebook &amp; Instagram</em> — or you can do it for them:</p>
+    <?php endif; ?>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center">
+      <a class="btn btn-primary btn-sm" href="open_workspace.php?id=<?= $id ?>&amp;to=social">Open their Facebook &amp; Instagram page →</a>
+      <?php if ($scSt['configured']): ?>
+        <form method="post" style="margin:0"><?= csrf_field() ?><input type="hidden" name="action" value="fb_link"><button class="btn btn-ghost btn-sm">Make a connect link for the client</button></form>
+      <?php else: ?><span class="text-muted" style="font-size:12px">Set up the Meta app in <a href="settings.php">Settings</a> first.</span><?php endif; ?>
+    </div>
+    <?php if ($fbLink !== ''): ?>
+      <div class="alert info" style="margin-top:10px;font-size:12.5px">Send this to the person who manages their Facebook Page. It works once, for one hour, and connects the Pages they tick to <strong><?= e((string) $client['name']) ?></strong>.
+        <div style="display:flex;gap:6px;margin-top:6px"><input type="text" readonly value="<?= e($fbLink) ?>" id="fb-link" style="flex:1;min-width:0" onclick="this.select()">
+        <button type="button" class="btn btn-ghost btn-sm" onclick="navigator.clipboard.writeText(document.getElementById('fb-link').value);this.textContent='Copied'">Copy</button></div></div>
+    <?php endif; ?>
+  </div>
+  <?php endif; ?>
 </div>
 
 <!-- ── SMS ── -->

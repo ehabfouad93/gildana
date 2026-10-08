@@ -47,8 +47,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array(($_POST['action'] ?? ''), 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save') {
     verify_csrf();
     $name    = trim((string) ($_POST['name'] ?? $flow['name']));
-    $trigger = (string) ($_POST['trigger_type'] ?? $flow['trigger_type']);
-    if (!in_array($trigger, ['keyword', 'welcome', 'default', 'ad'], true)) $trigger = 'keyword';
+    // WhatsApp triggers live on the flow; any other kind (Messenger, Instagram, comments, lead form,
+    // CRM stage) is stored as trigger_type 'channel' plus that trigger as the flow's first flow_triggers row.
+    [$trigger, $mainKind] = auto_main_trigger_resolve($CLIENT, (string) ($_POST['trigger_type'] ?? auto_main_trigger_value($flow)));
     $hotMin  = max(0, (int) ($_POST['hot_min'] ?? 70));
     $warmMin = max(0, (int) ($_POST['warm_min'] ?? 40));
 
@@ -275,7 +276,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save'
         db_run("UPDATE flows SET name=?, trigger_type=?, trigger_config=?, source_config=?, hot_min=?, warm_min=?, first_step_id=?, updated_at=NOW() WHERE id=?",
             [$name, $trigger, $tc ? json_encode($tc, JSON_UNESCAPED_UNICODE) : null, $sourceConfig, $hotMin, $warmMin, $firstStep, $id]);
         // "Also start when…" — the flow's extra triggers, on any channel.
-        if (isset($_POST['extra_triggers'])) auto_save_triggers($CLIENT, $id, (array) (json_decode((string) $_POST['extra_triggers'], true) ?: []));
+        $extra = isset($_POST['extra_triggers']) ? (array) (json_decode((string) $_POST['extra_triggers'], true) ?: []) : null;
+        if ($mainKind !== '') {
+            // The main trigger is the first row, so the select shows it again on the next visit.
+            $extra ??= auto_flow_triggers($id);
+            $at = array_search($mainKind, array_column($extra, 'kind'), true);
+            $row = $at !== false ? $extra[$at] : ['kind' => $mainKind, 'config' => [], 'active' => 1];
+            if ($at !== false) array_splice($extra, (int) $at, 1);
+            $row['active'] = 1;
+            array_unshift($extra, $row);
+        }
+        if ($extra !== null) auto_save_triggers($CLIENT, $id, $extra);
         $pdo->commit();
 
         /* The auto-save posts the same form with ajax=1 and stays on the page. Saving rewrites
@@ -461,12 +472,14 @@ client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
       <div class="field"><span class="lbl">Name</span><input type="text" name="name" value="<?= e((string) $flow['name']) ?>" required></div>
       <div class="field"><span class="lbl">Trigger</span>
         <select name="trigger_type" id="trigger_type" onchange="onTrig()">
-          <option value="keyword" <?= $flow['trigger_type'] === 'keyword' ? 'selected' : '' ?>>Keyword reply</option>
-          <option value="welcome" <?= $flow['trigger_type'] === 'welcome' ? 'selected' : '' ?>>Welcome (first message)</option>
-          <option value="default" <?= $flow['trigger_type'] === 'default' ? 'selected' : '' ?>>Default reply (nothing else matched)</option>
-          <option value="ad" <?= $flow['trigger_type'] === 'ad' ? 'selected' : '' ?>>Someone arrives from an ad</option>
-          <option value="google_sheet" <?= $flow['trigger_type'] === 'google_sheet' ? 'selected' : '' ?>>New row in a Google Sheet</option>
+          <?php $mainVal = auto_main_trigger_value($flow);
+                foreach (auto_main_trigger_options($CLIENT) as $grp => $opts): ?>
+            <optgroup label="<?= e($grp) ?>">
+              <?php foreach ($opts as $v => $l): ?><option value="<?= e($v) ?>" <?= $mainVal === $v ? 'selected' : '' ?>><?= e($l) ?></option><?php endforeach; ?>
+            </optgroup>
+          <?php endforeach; ?>
         </select>
+        <div class="hint" id="trig-x-hint" <?= str_starts_with($mainVal, 'x:') ? '' : 'hidden' ?>>Set its keywords, posts, form or stage under <a href="#more-triggers">Also start this automation when…</a> below.</div>
       </div>
       <div class="field" id="kw-wrap"><span class="lbl">Keywords</span><input type="text" name="keywords" value="<?= e(implode(', ', (array) ($tc['keywords'] ?? []))) ?>" placeholder="price, info"></div>
     </div>
@@ -1045,7 +1058,7 @@ function nid(){ return 't'+(seq++); }
 function summary(n){
   const c=n.config||{};
   switch(n.type){
-    case 'start': return '<span class="muted">When '+(document.getElementById('trigger_type')?.value||'keyword')+' triggers</span>';
+    case 'start': { const ts=document.getElementById('trigger_type'); return '<span class="muted">When: '+esc(ts && ts.selectedIndex>=0 ? ts.options[ts.selectedIndex].text : 'Keyword reply')+'</span>'; }
     case 'text': return esc(c.body)||'<span class="muted">(empty message)</span>';
     case 'image': return '🖼 '+(esc(c.caption)||esc(c.link)||'<span class="muted">image</span>');
     case 'template': {
@@ -2050,7 +2063,11 @@ function trigRender(){
 }
 trigRender();
 
-function onTrig(){ const v=document.getElementById('trigger_type').value; const k=v==='keyword'; document.getElementById('kw-wrap').style.display=k?'':'none'; document.getElementById('mt-wrap').style.display=k?'':'none';
+function onTrig(init){ const v=document.getElementById('trigger_type').value; const k=v==='keyword';
+  // A Messenger / Instagram / comment / lead form / CRM stage trigger: it becomes the first "Also start when…" row, where its settings live.
+  const x=v.startsWith('x:'); const xh=document.getElementById('trig-x-hint'); if(xh) xh.hidden=!x;
+  if(x && !init && typeof TRIGS!=='undefined'){ const kind=v.slice(2), at=TRIGS.findIndex(t=>t.kind===kind);
+    const row = at>=0 ? TRIGS.splice(at,1)[0] : {kind, config:{}, active:1}; row.active=1; TRIGS.unshift(row); trigRender(); trigSync(); } document.getElementById('kw-wrap').style.display=k?'':'none'; document.getElementById('mt-wrap').style.display=k?'':'none';
   const sw=document.getElementById('sheet-wrap'); if(sw) sw.style.display=v==='google_sheet'?'block':'none';
   const aw=document.getElementById('ad-wrap');    if(aw) aw.style.display=v==='ad'?'block':'none';
   const s=canvas.querySelector('.node.start .node-body'); if(s)s.innerHTML=summary(start); }
@@ -2083,7 +2100,7 @@ document.getElementById('flow-form').addEventListener('submit',()=>{
    leaving it out meant the per-node reached/stopped counters never appeared on load —
    only after an autosave round-trip, by which point you had already edited something. */
 INIT_NODES.forEach(n=>{ nodes[n.id]={id:n.id,type:n.type,x:n.x,y:n.y,config:n.config||{},outputs:n.outputs||{},stats:n.stats||null}; const m=n.id.match(/^s(\d+)$/); });
-onTrig(); render();
+onTrig(true); render();
 // Open with the whole flow visible instead of scrolled off the right edge.
 zoomFit();
 window.addEventListener('resize',()=>redraw());

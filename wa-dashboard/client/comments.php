@@ -141,8 +141,10 @@ $platName = ['fb' => 'Facebook', 'ig' => 'Instagram'];
 
 $rules = db_all("SELECT * FROM social_rules WHERE client_id=? ORDER BY kind, sort, id", [$cid]);
 
+require_once __DIR__ . '/../includes/social_connect.php';
 client_header('Comments', 'comments', $CLIENT);
-page_head('Comments');
+page_head('Comments', '<a class="btn btn-ghost btn-sm" href="social.php">' . social_fb_icon() . ' Facebook &amp; Instagram</a>');
+echo social_connect_banner($CLIENT, 'comments.php', is_client_admin());
 ?>
 <nav class="dv-tabs" aria-label="Comments sections">
   <a href="comments.php" class="<?= $tab === 'feed' ? 'on' : '' ?>">Comments</a>
@@ -174,7 +176,13 @@ page_head('Comments');
 <?php if (!$byPost): ?>
   <div class="card"><div class="empty">
     <?php if ($show === '' && $qtxt === '' && $post === ''): ?>
-      No comments yet. Turn on comments for your Page in <a href="meta_leads.php#social">Facebook &amp; Instagram</a> — new comments appear here as they are written.
+      No comments yet — new comments on your Page's posts appear here as they are written.
+      <?php $scSt = social_connect_status($CLIENT); if (!$scSt['pages'] || array_intersect_key($scSt['missing'], ['comments_on' => 1, 'ig_comments_on' => 1])): ?>
+        <div style="margin-top:12px"><?php if (is_client_admin() && $scSt['configured'] && !$scSt['pages']): ?>
+          <form method="post" action="social.php" style="display:inline"><?= csrf_field() ?><input type="hidden" name="action" value="fb_connect"><input type="hidden" name="return" value="comments.php">
+            <button class="btn btn-primary fb-connect-btn"><?= social_fb_icon() ?> Connect Facebook &amp; Instagram</button></form>
+        <?php else: ?><a class="btn btn-primary" href="social.php">Turn on comments</a><?php endif; ?></div>
+      <?php endif; ?>
     <?php else: ?>Nothing matches these filters.<?php endif; ?>
   </div></div>
 <?php endif; ?>

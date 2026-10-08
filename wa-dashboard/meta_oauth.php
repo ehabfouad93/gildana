@@ -15,6 +15,11 @@ require_once __DIR__ . '/includes/social.php';     // link each Page's Instagram
 
 $row = meta_take_state((string) ($_GET['state'] ?? ''));    // single use: a replayed callback finds nothing
 
+/* Started from the Inbox, Comments or the Facebook & Instagram page: go back there, not to lead forms. */
+$back = in_array($_SESSION['meta_return'] ?? '', ['social.php', 'inbox.php', 'comments.php', 'meta_leads.php'], true) ? (string) $_SESSION['meta_return'] : 'meta_leads.php';
+unset($_SESSION['meta_return']);
+$GLOBALS['META_BACK'] = $back;
+
 function meta_done(string $title, string $message, bool $ok): void
 {
     http_response_code($ok ? 200 : 400);
@@ -24,7 +29,8 @@ function meta_done(string $title, string $message, bool $ok): void
        . '<link rel="stylesheet" href="assets/dashboard.css"></head><body style="padding:40px 16px">'
        . '<div class="card" style="max-width:560px;margin:0 auto"><h2>' . e($title) . '</h2>'
        . '<div class="alert ' . ($ok ? 'success' : 'error') . '" style="font-size:13px">' . $message . '</div>'
-       . '<a class="btn btn-primary" href="client/meta_leads.php">Back to lead forms</a></div></body></html>';
+       . '<a class="btn btn-primary" href="client/' . e($GLOBALS['META_BACK'] ?? 'meta_leads.php') . '">'
+       . (($GLOBALS['META_BACK'] ?? 'meta_leads.php') === 'meta_leads.php' ? 'Back to lead forms' : 'Back to Revenect') . '</a></div></body></html>';
     exit;
 }
 
@@ -46,6 +52,11 @@ if (empty($res['ok'])) {
           . e(meta_redirect_uri()) . '</span>'
         : '';
     meta_done('Could not connect', e((string) $res['error']) . $hint, false);
+}
+if ($back !== 'meta_leads.php') {
+    // Straight back to the next step: choosing what arrives (one click turns it all on).
+    flash('Facebook connected — ' . (int) $res['pages'] . ' Page' . ((int) $res['pages'] === 1 ? '' : 's') . ' found. Now choose what arrives in Revenect.');
+    redirect('client/social.php');
 }
 meta_done('Facebook connected', (int) $res['pages'] . ' Page' . ((int) $res['pages'] === 1 ? '' : 's')
     . ' found. Choose which ones should send their leads to your CRM.', true);

@@ -30,14 +30,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
     $name    = trim((string) ($_POST['name'] ?? ''));
     // Must match the editor's own list (automation_edit.php), or a trigger you can choose
     // here would be silently rewritten the moment the flow opens.
-    $trigger = (string) ($_POST['trigger_type'] ?? 'keyword');
-    if (!in_array($trigger, ['keyword', 'welcome', 'default', 'ad', 'google_sheet'], true)) $trigger = 'keyword';
+    [$trigger, $mainKind] = auto_main_trigger_resolve($CLIENT, (string) ($_POST['trigger_type'] ?? 'keyword'));
     if ($name === '') $err = 'Enter an automation name.';
     else {
         $newId = db_insert(
             "INSERT INTO flows (client_id,name,kind,status,trigger_type,created_at) VALUES (?,?, 'bot','draft', ?, NOW())",
             [$cid, $name, $trigger]
         );
+        if ($mainKind !== '') auto_save_triggers($CLIENT, $newId, [['kind' => $mainKind, 'config' => [], 'active' => 1]]);
         redirect('automation_edit.php?id=' . $newId);
     }
 }
@@ -125,7 +125,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
       <?php foreach ($flows as $f): ?>
         <tr>
           <td><strong><?= e((string) $f['name']) ?></strong> <?= $f['status'] === 'draft' ? '<span class="pill gray">draft</span>' : '' ?></td>
-          <td class="text-muted"><?= e($triggerLabel[$f['trigger_type']] ?? $f['trigger_type']) ?></td>
+          <td class="text-muted"><?= e(auto_main_trigger_label($f)) ?></td>
           <td><?= (int) $f['runs_count'] ?></td>
           <td><?= (int) $f['sends'] ?></td>
           <td>
@@ -161,13 +161,11 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
     <div class="field">
       <span class="lbl">Type</span>
       <select name="trigger_type">
-        <option value="keyword">Keyword reply</option>
-        <option value="welcome">Welcome (first message)</option>
-        <option value="default">Default reply (nothing else matched)</option>
-        <option value="ad">Someone arrives from an ad</option>
-        <option value="google_sheet">New row in a Google Sheet</option>
+        <?php foreach (auto_main_trigger_options($CLIENT) as $grp => $opts): ?>
+          <optgroup label="<?= e($grp) ?>"><?php foreach ($opts as $v => $l): ?><option value="<?= e($v) ?>"><?= e($l) ?></option><?php endforeach; ?></optgroup>
+        <?php endforeach; ?>
       </select>
-      <div class="hint">All four can be changed later in the editor. Keywords, the sheet to watch and
+      <div class="hint">The trigger can be changed later in the editor, and more can be added there (one automation can answer WhatsApp, Messenger, Instagram and comments). Keywords, the sheet to watch and
         the rest of the settings are set there once the flow opens.<br>
         For AI lead <em>scoring</em> from a sheet, the <strong>Lead Qualifier</strong> section is the
         better fit — this one runs a flow you build yourself.</div>

@@ -1910,3 +1910,23 @@ a.viz-kpi:hover { border-color: var(--brand); }
 .sw-sendby { display: flex; flex-direction: column; gap: 4px; }
 .sw-kind-row { display: flex; align-items: center; gap: 10px; justify-content: space-between; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding: 3px 0; }
 .sw-kind-row select { padding: 4px 8px; font-size: 12.5px; }
+/* Lead Qualifier tiles: a brief cue when the live numbers change. */
+.tiles-updated .stat-tile .val { transition: color .3s; color: var(--brand); }
+@media (prefers-reduced-motion: reduce) { .tiles-updated .stat-tile .val { transition: none; } }
+
+/* ── Facebook & Instagram connect: the strip on Inbox / Comments, and the setup page ── */
+.social-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 12px 16px; margin: 0 0 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); font-size: 13px; }
+.social-banner-act { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.fb-connect-btn { display: inline-flex; align-items: center; gap: 7px; }
+.sc-steps { list-style: none; display: flex; gap: 8px; padding: 0; margin: 0 0 14px; flex-wrap: wrap; counter-reset: sc; }
+.sc-steps li { counter-increment: sc; display: flex; align-items: center; gap: 8px; padding: 7px 12px 7px 8px; border: 1px solid var(--line);
+  border-radius: 999px; background: var(--surface); color: var(--muted); font-size: 12.5px; }
+.sc-steps li::before { content: counter(sc); display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%;
+  background: var(--line); color: var(--ink); font-size: 11px; font-weight: 700; }
+.sc-steps li.now { color: var(--ink); border-color: var(--brand); }
+.sc-steps li.now::before { background: var(--brand); color: #fff; }
+.sc-steps li.done::before { content: "✓"; background: var(--success, #16a34a); color: #fff; }
+.sc-hero { display: flex; gap: 20px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.sc-need { margin: 10px 0 0; padding-inline-start: 18px; color: var(--muted); font-size: 12.5px; }
+.sc-need li { margin: 3px 0; }

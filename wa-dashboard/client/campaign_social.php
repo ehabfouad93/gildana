@@ -69,7 +69,7 @@ page_head('New Messenger / Instagram campaign', '<a class="btn btn-ghost btn-sm"
 ?>
 <?php if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 <?php if (!$pages): ?>
-  <div class="card"><div class="empty">Connect your Facebook Page first in <a href="meta_leads.php#social">CRM → Facebook &amp; Instagram</a>.</div></div>
+  <div class="card"><div class="empty">Connect your Facebook Page first in <a href="social.php">Facebook &amp; Instagram</a>.</div></div>
 <?php else: ?>
 <form method="post" class="card" id="sc-form">
   <?= csrf_field() ?>

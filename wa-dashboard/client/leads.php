@@ -10,6 +10,39 @@ $fid  = (int) ($_GET['flow'] ?? 0);
 $flow = db_row("SELECT * FROM flows WHERE id=? AND client_id=? AND kind='qualifier'", [$fid, $cid]);
 if (!$flow) { http_response_code(404); exit('Qualifier not found.'); }
 
+/* Grade tiles, also read every 30 seconds by the page so the numbers follow the conversations. */
+function leads_counts(int $fid): array {
+    $c = db_row(
+        "SELECT COUNT(*) total,
+                SUM(grade='hot') hot, SUM(grade='warm') warm, SUM(grade='cold') cold,
+                SUM(grade='not_interested') noint, SUM(grade='no_answer') noans,
+                SUM(status IN ('waiting_input','active') AND (grade IS NULL OR grade='')) chatting,
+                SUM(grade IN ('hot','warm','cold')) scored,
+                SUM(status='blocked') blocked
+           FROM flow_runs WHERE flow_id=?", [$fid]) ?: [];
+    // Leads who wrote back but the qualifier hasn't graded yet (late replies, chats taken over in the Inbox).
+    $c['pending'] = (int) db_val(
+        "SELECT COUNT(*) FROM flow_runs r WHERE r.flow_id=? AND r.status IN ('stopped','waiting_input','completed')
+            AND (r.grade='no_answer' OR r.grade IS NULL OR r.grade='' OR JSON_EXTRACT(r.context, '$.scored_from_inbox') IS NOT NULL)
+            AND EXISTS (SELECT 1 FROM messages m WHERE m.contact_id=r.contact_id AND m.direction='in' AND m.created_at > r.created_at
+                          AND m.created_at > COALESCE(JSON_UNQUOTE(JSON_EXTRACT(r.context, '$.scored_from_inbox')), '2000-01-01'))", [$fid]);
+    return array_map('intval', $c);
+}
+if (isset($_GET['counts'])) json_out(leads_counts($fid));
+
+/* ── Score from conversations now: grade leads from what they wrote in the Inbox ── */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'rescore') {
+    verify_csrf();
+    if (!can_write()) { flash('You can only view this qualifier.', 'error'); redirect('leads.php?flow=' . $fid); }
+    @set_time_limit(120);
+    $n = automation_rescore_from_inbox(25, $fid, $cid);
+    $left = leads_counts($fid)['pending'];
+    flash($n ? "Scored {$n} lead" . ($n === 1 ? '' : 's') . ' from their conversations.' . ($left ? " {$left} more are scored in the background over the next few minutes." : '')
+             : 'Nothing new to score: no lead has written since they were last scored.');
+    trigger_worker();
+    redirect('leads.php?flow=' . $fid);
+}
+
 /* ── Import now (manual trigger from the Google Sheet) ── */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'import_now') {
     verify_csrf();
@@ -212,15 +245,7 @@ if (($_GET['export'] ?? '') === '1') {
     exit;
 }
 
-$counts = db_row(
-    "SELECT COUNT(*) total,
-            SUM(grade='hot') hot, SUM(grade='warm') warm, SUM(grade='cold') cold,
-            SUM(grade='not_interested') noint, SUM(grade='no_answer') noans,
-            SUM(status IN ('waiting_input','active') AND (grade IS NULL OR grade='')) chatting,
-            SUM(status='completed') completed,
-            SUM(status='blocked') blocked
-       FROM flow_runs WHERE flow_id=?", [$fid]
-) ?: [];
+$counts = leads_counts($fid);
 
 $mc = qualifier_msg_counts($cid, $fid)[$fid] ?? ['leads' => 0, 'sent' => 0, 'read' => 0, 'unread' => 0, 'failed' => 0];
 $page = max(1, (int) ($_GET['page'] ?? 1)); $per = 50; $off = ($page - 1) * $per;
@@ -254,15 +279,40 @@ $actions = '<button class="btn btn-primary btn-sm" onclick="document.getElementB
 client_header('Leads · ' . $flow['name'], 'qualifier', $CLIENT);
 page_head('Leads — ' . $flow['name'], $actions);
 ?>
-<div class="stats-row">
-  <div class="stat-tile"><span class="lbl">Total leads</span><span class="val accent"><?= (int) ($counts['total'] ?? 0) ?></span></div>
-  <div class="stat-tile"><span class="lbl">Hot</span><span class="val danger"><?= (int) ($counts['hot'] ?? 0) ?></span></div>
-  <div class="stat-tile"><span class="lbl">Warm</span><span class="val"><?= (int) ($counts['warm'] ?? 0) ?></span></div>
-  <div class="stat-tile"><span class="lbl">Cold</span><span class="val"><?= (int) ($counts['cold'] ?? 0) ?></span></div>
-  <div class="stat-tile"><span class="lbl">Not interested</span><span class="val"><?= (int) ($counts['noint'] ?? 0) ?></span></div>
-  <div class="stat-tile"><span class="lbl">No answer</span><span class="val"><?= (int) ($counts['noans'] ?? 0) ?></span></div>
-  <div class="stat-tile"><span class="lbl">Chatting</span><span class="val"><?= (int) ($counts['chatting'] ?? 0) ?></span><span class="sub"><?= (int) ($counts['completed'] ?? 0) ?> scored</span></div>
+<div class="stats-row" id="grade-tiles" data-src="<?= e('leads.php?flow=' . $fid . '&counts=1') ?>">
+  <div class="stat-tile"><span class="lbl">Total leads</span><span class="val accent" data-k="total"><?= $counts['total'] ?></span></div>
+  <div class="stat-tile"><span class="lbl">Hot</span><span class="val danger" data-k="hot"><?= $counts['hot'] ?></span></div>
+  <div class="stat-tile"><span class="lbl">Warm</span><span class="val" data-k="warm"><?= $counts['warm'] ?></span></div>
+  <div class="stat-tile"><span class="lbl">Cold</span><span class="val" data-k="cold"><?= $counts['cold'] ?></span></div>
+  <div class="stat-tile"><span class="lbl">Not interested</span><span class="val" data-k="noint"><?= $counts['noint'] ?></span></div>
+  <div class="stat-tile"><span class="lbl">No answer</span><span class="val" data-k="noans"><?= $counts['noans'] ?></span></div>
+  <div class="stat-tile"><span class="lbl">Chatting</span><span class="val" data-k="chatting"><?= $counts['chatting'] ?></span><span class="sub"><span data-k="scored"><?= $counts['scored'] ?></span> scored</span></div>
 </div>
+<div class="alert info row-between" id="rescore-bar" style="flex-wrap:wrap;gap:10px"<?= $counts['pending'] ? '' : ' hidden' ?>>
+  <span><strong data-k="pending"><?= $counts['pending'] ?></strong> lead(s) wrote back in the Inbox and haven't been scored yet. They are scored automatically every few minutes from their conversation (nothing is sent to them).</span>
+  <?php if (can_write()): ?>
+  <form method="post" style="margin:0"><?= csrf_field() ?><input type="hidden" name="action" value="rescore"><button class="btn btn-primary btn-sm">Score from conversations now</button></form>
+  <?php endif; ?>
+</div>
+<script>
+(function () {
+  const box = document.getElementById('grade-tiles'), bar = document.getElementById('rescore-bar');
+  let last = box.textContent;
+  async function tick() {
+    if (document.hidden) return;
+    try {
+      const r = await fetch(box.dataset.src, {credentials: 'same-origin', headers: {Accept: 'application/json'}});
+      if (!r.ok) return;
+      const c = await r.json();
+      document.querySelectorAll('#grade-tiles [data-k], #rescore-bar [data-k]').forEach(el => { if (el.dataset.k in c) el.textContent = c[el.dataset.k]; });
+      bar.hidden = !c.pending;
+      if (box.textContent !== last) { last = box.textContent; box.classList.add('tiles-updated'); setTimeout(() => box.classList.remove('tiles-updated'), 900); }
+    } catch (e) {}
+  }
+  setInterval(tick, 30000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
+})();
+</script>
 <?php $pc = fn(int $n, int $of) => $of > 0 ? round(100 * $n / $of) . '%' : '—'; ?>
 <div class="stats-row">
   <?php foreach (['sent' => ['Sent', $pc($mc['sent'], $mc['leads']) . ' of leads', ''], 'read' => ['Read', $pc($mc['read'], $mc['sent']) . ' of sent', 'accent'],
@@ -340,7 +390,7 @@ page_head('Leads — ' . $flow['name'], $actions);
           <td><?= e((string) $r['name']) ?: '<span class="text-muted">—</span>' ?></td>
           <td><?php $b = (int) $r['msg_best']; ?><span class="pill <?= [3 => 'green', 2 => 'blue', 1 => 'gray'][$b] ?? ((int) $r['msg_failed'] ? 'red' : 'gray') ?>"><?= [3 => 'Read', 2 => 'Delivered · unread', 1 => 'Sent · unread'][$b] ?? ((int) $r['msg_failed'] ? 'Failed' : 'Not sent yet') ?></span></td>
           <td><?= lead_status_pill((string) $r['status']) ?></td>
-          <td><strong><?= (int) $r['score'] ?></strong></td>
+          <td><strong><?= (int) $r['score'] ?></strong><?php if (!empty($ctx['scored_from_inbox'])): ?> <a class="pill blue" style="font-size:10.5px" href="inbox.php?contact=<?= (int) $r['contact_id'] ?>" title="Scored from the Inbox conversation, <?= e(date('d M, H:i', strtotime((string) $ctx['scored_from_inbox']))) ?>">Inbox</a><?php endif; ?></td>
           <td><?= grade_pill($r['grade']) ?></td>
           <td class="text-muted" style="max-width:220px;font-size:12px"<?= $fail ? ' title="' . e($fail[5]) . '"' : '' ?>><?= $reason !== '' ? e($reason) : '<span class="text-muted">—</span>' ?><?= $resends ? '<div>Resent ×' . $resends . '</div>' : '' ?></td>
           <td class="text-muted"><?= e(date('d M, H:i', strtotime((string) $r['created_at']))) ?></td>

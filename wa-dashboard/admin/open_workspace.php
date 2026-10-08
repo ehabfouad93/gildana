@@ -7,4 +7,6 @@ $client = db_row("SELECT id FROM clients WHERE id = ?", [$id]);
 if (!$client) { http_response_code(404); exit('Client not found.'); }
 
 $_SESSION['impersonate_client_id'] = $id;
-redirect('../client/index.php');
+// Optional landing page inside the workspace (fixed list — never a free-form URL).
+$to = ['social' => 'social.php', 'inbox' => 'inbox.php'][(string) ($_GET['to'] ?? '')] ?? 'index.php';
+redirect('../client/' . $to);
