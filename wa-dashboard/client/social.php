@@ -123,6 +123,36 @@ page_head('Facebook & Instagram', function_exists('crm_enabled') && crm_enabled(
     <?php endif; ?>
   </div>
   <div class="table-wrap" style="margin-top:12px"><table class="data"><?= $thead ?><tbody><?php foreach ($st['used'] as $p) echo $row($p); ?></tbody></table></div>
+
+  <?php /* Is Meta pushing events to us, and when did Revenect last fetch them itself? */
+    $ago = function (?string $t): string {
+        if (!$t) return '';
+        $m = (int) round((time() - strtotime($t)) / 60);
+        return $m < 1 ? 'just now' : ($m < 60 ? $m . ' min ago' : ($m < 1440 ? round($m / 60) . ' h ago' : date('j M, H:i', strtotime($t))));
+    };
+    $live = array_filter($st['used'], fn($p) => !empty($p['last_event_at']));
+    $lastSync = max(array_map(fn($p) => (string) ($p['social_synced_at'] ?? ''), $st['used']) ?: ['']); ?>
+  <div class="sc-sync">
+    <div class="sc-sync-line">
+      <span class="pill <?= $live ? 'green' : 'gold' ?>"><?= $live ? 'Real-time on' : 'Real-time not reaching us yet' ?></span>
+      <span class="text-muted"><?= $live ? 'Last event from Meta ' . e($ago(max(array_map(fn($p) => (string) $p['last_event_at'], $live)))) . '.' : 'Meanwhile Revenect fetches new messages and comments itself every 2 minutes.' ?>
+        <?= $lastSync !== '' ? ' Last fetched ' . e($ago($lastSync)) . '.' : '' ?></span>
+      <?php if ($isAdmin): ?><form method="post" style="margin:0"><?= csrf_field() ?><input type="hidden" name="action" value="social_sync_now">
+        <button class="btn btn-ghost btn-sm">↻ Fetch recent messages &amp; comments</button></form><?php endif; ?>
+    </div>
+    <?php if (!$live && $isAdmin): ?>
+    <details class="sc-live-help"><summary>Make messages arrive instantly (Meta app settings)</summary>
+      <ol>
+        <li>In Meta for Developers, open the Revenect app → <strong>Webhooks</strong> (in the Messenger and Instagram use cases). Callback URL
+          <code><?= e(rtrim(app_base_url(), '/')) ?>/webhook_leads.php</code>, with the same verify token as lead forms.</li>
+        <li>Subscribe the <strong>Page</strong> object to <code>messages</code>, <code>messaging_postbacks</code>, <code>message_reads</code>, <code>feed</code>, and the
+          <strong>Instagram</strong> object to <code>messages</code>, <code>comments</code>.</li>
+        <li>Switch the app to <strong>Live</strong>. In Development mode Meta only sends events from people who have a role on the app — real customers' messages never arrive.</li>
+      </ol>
+      <p class="text-muted" style="font-size:12px;margin:0">This card turns green on the first real-time event.</p>
+    </details>
+    <?php endif; ?>
+  </div>
 </div>
 <?php endif; ?>
 

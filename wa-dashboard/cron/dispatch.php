@@ -462,6 +462,10 @@ try {
             // Qualifier leads who replied after "No answer", or whose chat a person took over in
             // the Inbox: score them from the real conversation (a few per pass — each is an AI call).
             $rescored = automation_rescore_from_inbox((int) config('rescore_per_pass', 20));
+            // Facebook & Instagram safety net: re-read Pages in use every couple of minutes, so messages
+            // and comments arrive even while Meta's webhooks are not reaching us.
+            if (!function_exists('social_sync_due')) require_once __DIR__ . '/../includes/social_sync.php';
+            $socialIn = social_sync_due((int) config('social_sync_seconds', 120));
             // Lead-form safety net: re-read connected forms for leads Meta never announced.
             // Throttled per form inside meta_poll(), so this is cheap on most passes.
             $formLeads = function_exists('meta_poll') ? meta_poll()['imported'] : 0;
@@ -470,7 +474,7 @@ try {
             $crm = function_exists('crm_auto_tick') ? crm_auto_tick() : [];
             // One push per client with pending inbound, however many messages arrived.
             $pushes   = push_dispatch() + push_dispatch_users();   // + "a lead was assigned to you"
-            out("Automation: resumed={$resumed} sheet_leads={$leads} campaign_followups={$followed} outreach_sent={$outreach} no_answer={$noAns} rescored={$rescored} form_leads={$formLeads} crm=" . json_encode($crm) . " pushes={$pushes}.");
+            out("Automation: resumed={$resumed} sheet_leads={$leads} campaign_followups={$followed} outreach_sent={$outreach} no_answer={$noAns} rescored={$rescored} social_fetched={$socialIn} form_leads={$formLeads} crm=" . json_encode($crm) . " pushes={$pushes}.");
         } finally {
             $pdo->query("SELECT RELEASE_LOCK('wa_automation')");
         }

@@ -1961,3 +1961,9 @@ a.viz-kpi:hover { border-color: var(--brand); }
 .sc-all summary { cursor: pointer; }
 .sc-reconnect { margin: 4px 0 16px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .btn.sc-broken { color: var(--danger); border-color: var(--danger); }
+.sc-sync { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; font-size: 13px; }
+.sc-sync-line { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.sc-sync-line form { margin-inline-start: auto; }
+.sc-live-help { margin-top: 10px; }
+.sc-live-help summary { cursor: pointer; color: var(--brand); font-weight: 600; }
+.sc-live-help ol { padding-inline-start: 20px; line-height: 1.6; max-width: 80ch; }

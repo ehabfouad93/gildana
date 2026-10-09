@@ -57,13 +57,13 @@ foreach ((array) ($data['entry'] ?? []) as $entry) {
     $owner = (string) ($entry['id'] ?? '');
     foreach ((array) ($entry['messaging'] ?? []) as $ev) {
         if (!is_array($ev)) continue;
-        foreach (social_pages_for($owner, $platform) as $page) { social_inbound_event($page, $platform, $ev); $handled++; }
+        foreach (social_pages_for($owner, $platform) as $page) { social_inbound_event($page, $platform, $ev); $handled++; social_mark_event($page); }
     }
     foreach ((array) ($entry['changes'] ?? []) as $change) {
         $f = (string) ($change['field'] ?? '');
         if (($object === 'page' && $f === 'feed') || ($object === 'instagram' && in_array($f, ['comments', 'live_comments'], true))) {
             foreach (social_pages_for($owner, $platform) as $page) {
-                if (function_exists('social_comment_event')) { social_comment_event($page, $object === 'instagram' ? 'ig' : 'fb', (array) ($change['value'] ?? [])); $handled++; }
+                if (function_exists('social_comment_event')) { social_comment_event($page, $object === 'instagram' ? 'ig' : 'fb', (array) ($change['value'] ?? [])); $handled++; social_mark_event($page); }
             }
         }
     }

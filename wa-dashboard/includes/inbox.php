@@ -60,10 +60,14 @@ function msg_log(int $clientId, int $contactId, string $direction, string $body,
         }
 
         $ph = implode(',', array_fill(0, count($cols), '?'));
+        // 'at': when it really happened — messages fetched afterwards from Facebook / Instagram keep their own time.
+        $at = isset($opts['at']) && strtotime((string) $opts['at']) ? date('Y-m-d H:i:s', strtotime((string) $opts['at'])) : null;
+        $cols[] = 'created_at'; $vals[] = $at ?? date('Y-m-d H:i:s');
         $id = db_insert(
-            "INSERT INTO messages (" . implode(',', $cols) . ",created_at) VALUES ({$ph},NOW())",
+            "INSERT INTO messages (" . implode(',', $cols) . ") VALUES ({$ph},?)",
             $vals
         );
+        if (!empty($opts['quiet'])) return $id;          // history being filled in: no response times, no rescoring
         // A person answering a lead — the sales report's first-response time.
         if ($direction === 'out' && ($opts['status'] ?? '') !== 'failed') {
             crm_mark_response($contactId, (string) ($opts['source'] ?? ''));

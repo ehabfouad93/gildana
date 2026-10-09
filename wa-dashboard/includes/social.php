@@ -93,6 +93,12 @@ function social_page_link_ig(array $page): array
     return ['ok' => true, 'ig' => $ig];
 }
 
+/** Meta pushed a real-time event for this Page: proof its webhooks reach us (shown on Facebook & Instagram). */
+function social_mark_event(array $page): void
+{
+    if (db_has_column('meta_pages', 'last_event_at')) db_run("UPDATE meta_pages SET last_event_at=NOW() WHERE id=?", [(int) $page['id']]);
+}
+
 /** Switch one use of a Page on or off: msg_on, ig_msg_on, comments_on, ig_comments_on. */
 function social_page_set(array $page, string $what, bool $on): array
 {
@@ -274,10 +280,15 @@ function social_inbound_event(array $page, string $platform, array $ev): string
     $mid = (string) ($msg['mid'] ?? ($ev['postback']['mid'] ?? ''));
     if ($mid !== '' && db_val("SELECT 1 FROM messages WHERE client_id=? AND ext_id=? LIMIT 1", [(int) $client['id'], $mid])) return 'duplicate';
 
-    [$contact, $isNew] = social_contact($client, $page, $platform, $sender);
+    /* Fetched afterwards (social_sync): it keeps its real time, and anything older than 15 minutes is
+       history — stored for the Inbox, but no automation, alert, auto-lead or STOP handling fires for it. */
+    $at = isset($ev['_at']) ? date('Y-m-d H:i:s', (int) $ev['_at']) : date('Y-m-d H:i:s');
+    $quiet = isset($ev['_at']) && time() - (int) $ev['_at'] > 900;
+
+    [$contact, $isNew] = social_contact($client, $page, $platform, $sender, (string) ($ev['_name'] ?? ''));
     $col = $platform === 'instagram' ? 'ig_last_in_at' : 'fb_last_in_at';
-    db_run("UPDATE contacts SET $col=NOW(), social_page_id=? WHERE id=?", [(string) $page['page_id'], (int) $contact['id']]);
-    $contact[$col] = date('Y-m-d H:i:s');
+    db_run("UPDATE contacts SET $col=GREATEST(COALESCE($col,'2000-01-01'), ?), social_page_id=? WHERE id=?", [$at, (string) $page['page_id'], (int) $contact['id']]);
+    $contact[$col] = max((string) ($contact[$col] ?? ''), $at);
 
     // What they sent: words, a tapped quick reply or button, a picture or file, a story reply.
     $text = trim((string) ($msg['text'] ?? ''));
@@ -302,7 +313,8 @@ function social_inbound_event(array $page, string $platform, array $ev): string
 
     $logBody = $text !== '' ? $text : '[' . $type . ']';
     msg_log((int) $client['id'], (int) $contact['id'], 'in', $logBody, ['type' => $type, 'source' => 'inbound', 'media_ref' => $mediaRef,
-            'media_mime' => $mediaMime, 'channel' => $platform, 'ext' => $mid]);
+            'media_mime' => $mediaMime, 'channel' => $platform, 'ext' => $mid, 'at' => $at, 'quiet' => $quiet]);
+    if ($quiet) return 'history';
     if (function_exists('push_queue_client')) push_queue_client((int) $client['id']);
 
     // Into the CRM: by itself when the account wants that, otherwise when someone adds them from the Inbox.
@@ -464,15 +476,19 @@ function social_comment_event(array $page, string $platform, array $v): string
         $contactId = (int) $c['id'];
         if ($platform === 'ig' && !empty($from['name']) && empty($c['ig_username'])) db_run("UPDATE contacts SET ig_username=? WHERE id=?", [(string) $from['name'], $contactId]);
     }
-    $post = social_post_info($page, $platform, $postId);
+    // The post's link, text and picture: given by the sync when it already has them, else looked up once.
+    $post = isset($v['_post']) ? (array) $v['_post'] : social_post_info($page, $platform, $postId);
+    $at = isset($v['_at']) ? date('Y-m-d H:i:s', (int) $v['_at']) : date('Y-m-d H:i:s');
+    $quiet = isset($v['_at']) && time() - (int) $v['_at'] > 900;     // fetched history: kept, never auto-moderated or answered
     try {
         $id = db_insert("INSERT INTO social_comments (client_id,page_id,platform,post_id,post_link,post_text,post_image,comment_id,parent_id,author_id,author_name,contact_id,body,from_page,created_at)
-                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())",
-                        [$clientId, (string) $page['page_id'], $platform, $postId, $post['post_link'], $post['post_text'], $post['post_image'], $cid,
+                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        [$clientId, (string) $page['page_id'], $platform, $postId, $post['post_link'] ?? null, $post['post_text'] ?? null, $post['post_image'] ?? null, $cid,
                          $parent !== '' ? $parent : null, (string) ($from['id'] ?? '') ?: null, mb_substr((string) ($from['name'] ?? ''), 0, 160) ?: null,
-                         $contactId, $text, $fromPage ? 1 : 0]);
+                         $contactId, $text, $fromPage ? 1 : 0, $at]);
     } catch (Throwable $e) { return 'duplicate'; }
     if ($fromPage) return 'own';
+    if ($quiet) return 'history';
     $cm = db_row("SELECT * FROM social_comments WHERE id=?", [$id]);
 
     if (social_moderate($client, $cm)) return 'moderated';

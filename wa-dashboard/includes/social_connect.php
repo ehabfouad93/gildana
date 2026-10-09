@@ -12,6 +12,7 @@ declare(strict_types=1);
  */
 require_once __DIR__ . '/meta_leads.php';
 require_once __DIR__ . '/social.php';
+require_once __DIR__ . '/social_sync.php';
 
 /** The Page switches and the channel each needs. */
 function social_switches(): array
@@ -78,7 +79,7 @@ function social_return_ok(string $to): string
 function social_connect_handle(array $client, array $post, bool $isAdmin, int $userId): ?array
 {
     $a = (string) ($post['action'] ?? '');
-    if (!in_array($a, ['fb_connect', 'social_set', 'social_all_on', 'social_use_page'], true)) return null;
+    if (!in_array($a, ['fb_connect', 'social_set', 'social_all_on', 'social_use_page', 'social_sync_now'], true)) return null;
     if (!$isAdmin) return ['Only an account Admin can connect Facebook & Instagram.', 'error', 'social.php'];
     $cid = (int) $client['id'];
 
@@ -87,6 +88,15 @@ function social_connect_handle(array $client, array $post, bool $isAdmin, int $u
         $_SESSION['meta_return'] = social_return_ok((string) ($post['return'] ?? 'social.php'));
         header('Location: ' . meta_auth_url($cid, $userId ?: null));
         exit;
+    }
+
+    // Bring in what is on Facebook / Instagram now: recent conversations, posts and comments.
+    if ($a === 'social_sync_now') {
+        @set_time_limit(180);
+        $m = $c = 0; $errs = [];
+        foreach (social_sync_pages($cid) as $p) { $r = social_sync_page($p); $m += $r['messages']; $c += $r['comments']; if ($r['error'] !== '') $errs[$r['error']] = 1; }
+        if ($errs) return ['Fetched ' . $m . ' message(s) and ' . $c . ' comment(s). Facebook refused part of it: ' . implode(' ', array_keys($errs)), $m + $c ? 'success' : 'error', 'social.php'];
+        return ['Fetched ' . $m . ' new message(s) and ' . $c . ' new comment(s) from the last ' . SOCIAL_SYNC_DAYS . ' days.', 'success', 'social.php'];
     }
 
     $sw = social_switches();
@@ -126,11 +136,15 @@ function social_connect_handle(array $client, array $post, bool $isAdmin, int $u
         }
     }
     $where = count($pages) === 1 ? ' on ' . $pages[0]['name'] : '';
+    // Start full: the last two weeks of messages and comments from the Page(s) just switched on.
+    $got = ['messages' => 0, 'comments' => 0];
+    if ($done) { @set_time_limit(180); foreach ($pages as $p) { $r = social_sync_page(db_row("SELECT * FROM meta_pages WHERE id=?", [(int) $p['id']]) ?: $p); $got['messages'] += $r['messages']; $got['comments'] += $r['comments']; } }
+    $brought = $got['messages'] + $got['comments'] ? ' Brought in ' . $got['messages'] . ' recent message(s) and ' . $got['comments'] . ' comment(s).' : '';
     if ($failed) {
         $why = implode(' ', array_map(fn($reason, $labels) => implode(', ', array_unique($labels)) . ': ' . $reason, array_keys($failed), $failed));
         return [($done ? 'Turned on ' . implode(', ', array_unique($done)) . $where . '. ' : '') . 'Not possible yet — ' . $why, $done ? 'success' : 'error', 'social.php'];
     }
-    return [$done ? 'Done — ' . implode(', ', array_unique($done)) . $where . ' now arrive in Revenect.' : 'Everything was already on.', 'success', 'social.php'];
+    return [$done ? 'Done — ' . implode(', ', array_unique($done)) . $where . ' now arrive in Revenect.' . $brought : 'Everything was already on.', 'success', 'social.php'];
 }
 
 /**
