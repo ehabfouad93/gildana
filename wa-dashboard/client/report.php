@@ -2,6 +2,7 @@
 declare(strict_types=1);
 require __DIR__ . '/_init.php';
 require_once __DIR__ . '/../includes/charts.php';
+require_once __DIR__ . '/../includes/sms.php';   // sms_error_explain for SMS campaigns
 
 $cid = (int) $CLIENT['id'];
 $id  = (int) ($_GET['id'] ?? 0);
@@ -146,7 +147,7 @@ if ($failReasons): ?>
           // Plain-language cause + what to actually do about it. The ladder itself lives in
           // wa_error_explain() so this page, the Inbox and Needs attention cannot disagree
           // about whether a given code is worth retrying.
-          $hint = wa_error_explain($code, (string) $fr['reason'])['hint'];
+          $hint = (($camp['channel'] ?? '') === 'sms' ? sms_error_explain($code, (string) $fr['reason']) : wa_error_explain($code, (string) $fr['reason']))['hint'];
           if ($hint !== '') echo '<div class="text-muted" style="font-size:12px;margin-top:2px">' . $hint . '</div>';
         ?></li>
       <?php endforeach; ?>

@@ -252,6 +252,13 @@ function sms_provider_balance(array $gw): ?string
     return null;
 }
 
+/** The server's public IP, as the platform admin noted it (Admin → SMS gateways) — for providers that whitelist IPs. */
+function sms_public_ip(): string
+{
+    $ip = function_exists('setting_get') ? trim((string) (setting_get('sms_public_ip', '') ?? '')) : '';
+    return filter_var($ip, FILTER_VALIDATE_IP) ? $ip : '';
+}
+
 /**
  * mShastra's answers in plain words: [reason, worth retrying]. Codes come from ShowError=C;
  * accounts that still answer in text get the same words for the same problems.
@@ -280,6 +287,7 @@ function sms_mshastra_error(string $code, string $text): array
         'Submission Stops'      => ['sending is paused on your mShastra account — contact mShastra', false],
         'No More Credits'       => ['your mShastra account has no SMS credit left — top it up with mShastra', false],
         'Country not activated' => ['sending to this country is not switched on for your mShastra account', false],
+        'Whitelist IP'          => ['the server\'s IP address is not whitelisted on your mShastra account — add it in the mShastra panel (or ask mShastra support), then send again', false],
         'Enter Mobile'          => ['no phone number was given', false],
         'Enter text'            => ['the message is empty', false],
     ];
@@ -300,7 +308,9 @@ function sms_provider_guide(string $provider): ?array
              'Put that profile\'s password in <em>API password</em>. If you change it in the mShastra panel later, update it here too.',
              'Ask mShastra to approve your <strong>Sender ID</strong> (the name people see, up to 13 characters, e.g. <em>GILDANA</em>) with the operators, and to switch on every country you will send to. Put the approved name in <em>Default sender name</em>; others go in <em>Other sender names</em>.',
              'Save. On the gateway card, type your own number and press <strong>Send test</strong>; press <strong>Balance</strong> to see the SMS credit left on your mShastra account.'],
-            ['Leave <em>Country code</em> empty (ALL): Revenect always sends numbers in full international form, e.g. 2010XXXXXXXX or 9715XXXXXXXX.',
+            ['<strong>Whitelist the server\'s IP address</strong> in your mShastra account (API settings, or ask mShastra support) — mShastra refuses API calls from any other address with <em>Whitelist IP address to use API</em>. '
+             . (sms_public_ip() !== '' ? 'Revenect sends from <code>' . e(sms_public_ip()) . '</code>.' : 'Ask your Revenect administrator for the server\'s IP address.'),
+             'Leave <em>Country code</em> empty (ALL): Revenect always sends numbers in full international form, e.g. 2010XXXXXXXX or 9715XXXXXXXX.',
              'A sender name that is not approved is replaced by your account\'s default sender — or refused, depending on the country.',
              'Message length: 160 English / 70 Arabic characters per SMS. Longer messages are split — mShastra counts parts of 153 English / 63 Arabic characters, so a long Arabic message can use one part more on your mShastra account than Revenect counts (Revenect uses the usual 67).',
              'Common refusals and what they mean: <em>No More Credits</em> — top up with mShastra; <em>Country not activated</em> — ask mShastra to enable the country; <em>Invalid Profile Id / Password</em> — check the two fields above; <em>DND Number</em> — that person blocked promotional SMS.',

@@ -12,6 +12,13 @@ if (!sms_ready()) { layout_header('SMS gateways', 'admin', 'sms'); echo '<div cl
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     verify_csrf();
+    if (($_POST['action'] ?? '') === 'public_ip') {
+        $ip = trim((string) ($_POST['ip'] ?? ''));
+        if ($ip !== '' && !filter_var($ip, FILTER_VALIDATE_IP)) { flash('Enter an IP address like 203.0.113.10.', 'error'); redirect('sms.php'); }
+        setting_set('sms_public_ip', $ip);
+        flash($ip !== '' ? 'Saved — the mShastra guide and gateway cards now show ' . $ip . ' to whitelist.' : 'Server IP cleared.');
+        redirect('sms.php');
+    }
     $r = sms_gateway_handle(null, $_POST);
     if ($r) { flash($r[0], $r[1]); redirect('sms.php' . (!empty($r[2]) ? '#gw' . (int) $r[2] : '')); }
 }
@@ -44,6 +51,12 @@ page_head('SMS gateways', $gws && !$adding && !$edit ? '<a class="btn btn-primar
 
 <p class="text-muted" style="font-size:13px;max-width:760px">Clients send through the default gateway unless their page names another, or they are allowed their own provider.
   Each client's approved sender names and credits per SMS part are set on the client's page (SMS card). Sender names must be registered with the provider first.</p>
+
+<form method="post" class="card" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap"><?= csrf_field() ?><input type="hidden" name="action" value="public_ip">
+  <div class="field" style="margin:0;flex:1 1 280px"><span class="lbl">This server's public IP (for providers that whitelist IPs, like mShastra)</span>
+    <input type="text" name="ip" value="<?= e(sms_public_ip()) ?>" placeholder="e.g. 203.0.113.10 — on the server run: curl -4 ifconfig.me"></div>
+  <button class="btn btn-ghost btn-sm">Save</button>
+</form>
 
 <?php foreach ($gws as $gw): ?>
   <div class="card" id="gw<?= (int) $gw['id'] ?>">

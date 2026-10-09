@@ -128,6 +128,8 @@ function sms_gateway_card(array $gw, string $editUrl): string
         . (in_array($gw['provider'], ['twilio', 'mshastra'], true) ? '<button class="btn btn-ghost btn-sm" name="gw_action" value="balance">Balance</button>' : '')
         . '<button class="btn btn-ghost btn-sm" name="gw_action" value="toggle">' . ((int) $gw['active'] ? 'Turn off' : 'Turn on') . '</button>'
         . '<button class="btn btn-ghost btn-sm" name="gw_action" value="delete" onclick="return confirm(\'Delete this gateway?\')">Delete</button></form></div></div>'
+        . ($gw['provider'] === 'mshastra' ? '<div class="sms-dlr"><span class="lbl">Whitelist this IP at mShastra</span> '
+            . (sms_public_ip() !== '' ? '<code>' . e(sms_public_ip()) . '</code>' : '<span class="hint">ask your Revenect administrator for the server IP</span>') . '</div>' : '')
         . ($dlr !== '' ? '<div class="sms-dlr"><span class="lbl">Delivery reports URL</span> <code>' . e($dlr) . '</code> <span class="hint">Paste it in the provider\'s panel (Twilio sets it by itself).</span></div>' : '')
         . '<form method="post" class="sms-test">' . csrf_field() . '<input type="hidden" name="gw_action" value="test"><input type="hidden" name="gw_id" value="' . (int) $gw['id'] . '">'
         . '<input type="tel" name="test_to" placeholder="Test number, e.g. 01001234567" required>'

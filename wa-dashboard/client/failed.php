@@ -23,7 +23,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['ajax'])) {
         // Retry clears the attempt history so the backoff starts fresh.
         $n = db_run("UPDATE campaign_messages SET status='queued', attempt_count=0, next_attempt_at=NULL,
                             claimed_by=NULL, claimed_at=NULL, error_code=NULL, error_title=NULL, updated_at=NOW()
-                      WHERE id=? AND client_id=? AND status IN ('dead','review','failed')", [$id, $cid]);
+                      WHERE id=? AND client_id=? AND status IN ('dead','review','failed')
+                        AND campaign_id NOT IN (SELECT id FROM campaigns WHERE client_id=? AND channel='sms')", [$id, $cid, $cid]);
         if ($n) {
             db_run("DELETE FROM send_attempts WHERE campaign_message_id=?", [$id]);
             trigger_worker();
@@ -42,7 +43,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['ajax'])) {
         $ids = [];
         foreach (db_all("SELECT id, error_code, error_title FROM campaign_messages
                           WHERE client_id=? AND status='failed'
-                            AND COALESCE(error_title,'') <> 'Discarded by user'", [$cid]) as $r) {
+                            AND COALESCE(error_title,'') <> 'Discarded by user'
+                            AND campaign_id NOT IN (SELECT id FROM campaigns WHERE client_id=? AND channel='sms')", [$cid, $cid]) as $r) {
             $ex = wa_error_explain((string) ($r['error_code'] ?? ''), (string) ($r['error_title'] ?? ''));
             if ($ex['action'] === 'later') $ids[] = (int) $r['id'];
         }
@@ -81,6 +83,7 @@ $candidates = db_all(
        LEFT JOIN contacts ct ON ct.id = m.contact_id
       WHERE m.client_id = ? AND m.status IN ('dead','review','failed')
         AND COALESCE(m.error_title,'') <> 'Discarded by user'
+        AND COALESCE(c.channel,'whatsapp') <> 'sms'      -- SMS failures live in SMS → Log; never offer a WhatsApp resend
       ORDER BY m.updated_at DESC LIMIT 800", [$cid]);
 
 $rows = [];

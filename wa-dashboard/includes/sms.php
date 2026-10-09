@@ -99,6 +99,41 @@ function sms_gateway(int $id): ?array
     return sms_gateway_load(db_row("SELECT * FROM sms_gateways WHERE id=?", [$id]) ?: null);
 }
 
+/**
+ * An SMS failure in plain words, with what to do — the SMS counterpart of wa_error_explain(), same
+ * shape: action fix (change something first) | later (sending again may work), label, hint (HTML-safe).
+ * $title is the stored reason, already worded by the provider adapter ("mShastra: …").
+ */
+function sms_error_explain(string $code, string $title = ''): array
+{
+    $t = strtolower($title);
+    $has = fn(string $w) => str_contains($t, $w);
+    if ($has('whitelist')) {
+        return ['action' => 'fix', 'label' => 'Server IP not whitelisted',
+                'hint' => 'The SMS provider only accepts messages from IP addresses whitelisted on your account. Add the server\'s IP in the provider\'s panel (or ask their support), then resend.'];
+    }
+    if ($has('opted out') || $has('do-not-disturb') || $has('dnd')) {
+        return ['action' => 'fix', 'label' => 'Number blocked SMS', 'hint' => 'This person asked not to receive SMS. It will not be sent again.'];
+    }
+    if ($has('not valid') || $has('invalid receiver') || $has('invalid mobile') || $has('country code') || $has('phone number')) {
+        return ['action' => 'fix', 'label' => 'Number not valid', 'hint' => 'Check the number, including its country code.'];
+    }
+    if ($has('credit') || $has('balance')) {
+        return ['action' => 'fix', 'label' => 'No credit', 'hint' => 'There is not enough credit — top up your Revenect credits or the SMS provider account, then resend.'];
+    }
+    if ($has('password') || $has('profile') || $has('authori') || $has('authenticat') || $has('username') || $has('token')) {
+        return ['action' => 'fix', 'label' => 'Provider login refused', 'hint' => 'The SMS provider did not accept the account details. Check them in Settings → SMS gateway (or ask your Revenect administrator for the platform gateway).'];
+    }
+    if ($has('sender')) {
+        return ['action' => 'fix', 'label' => 'Sender name refused', 'hint' => 'Use a sender name approved for your account by the SMS provider.'];
+    }
+    if ($has('server error') || $has('did not answer') || $has('timeout') || $has('try again') || preg_match('/^5\d\d$/', $code)) {
+        return ['action' => 'later', 'label' => 'Provider unavailable', 'hint' => 'The SMS provider was not reachable. Sending again later usually works.'];
+    }
+    return ['action' => 'fix', 'label' => 'SMS provider refused it',
+            'hint' => 'The SMS provider refused this message for the reason shown. Fix it in the provider account or the gateway settings (Settings → SMS gateway), then resend.'];
+}
+
 /** The platform gateway ids a client may pick from: what the platform admin allowed, plus their default. */
 function sms_client_allowed_ids(array $client): array
 {
