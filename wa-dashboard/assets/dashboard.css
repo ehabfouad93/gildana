@@ -1954,3 +1954,10 @@ a.viz-kpi:hover { border-color: var(--brand); }
 .sms-own-gw { margin-bottom: 12px; }
 .sms-own-form { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin: 10px 0; }
 .sms-own-form h4 { margin: 0 0 10px; font-size: 13.5px; }
+/* Facebook & Instagram: permissions, Page chooser, all-Pages list */
+.sc-perms { border-color: var(--danger); }
+.sc-choose { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.sc-choose select { flex: 1 1 320px; max-width: 520px; }
+.sc-all summary { cursor: pointer; }
+.sc-reconnect { margin: 4px 0 16px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.btn.sc-broken { color: var(--danger); border-color: var(--danger); }

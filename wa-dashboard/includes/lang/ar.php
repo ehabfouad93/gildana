@@ -457,4 +457,12 @@ return [
     'Your SMS provider accounts' => 'حسابات مزودي SMS الخاصة بك',
     '+ Add SMS provider account' => '+ إضافة حساب مزود SMS',
     'Add an SMS provider account' => 'إضافة حساب مزود SMS',
+    'Choose your Page' => 'اختر صفحتك',
+    'Add another Page' => 'إضافة صفحة أخرى',
+    'Use this Page' => 'استخدم هذه الصفحة',
+    'Pages in use' => 'الصفحات المستخدمة',
+    'Not working' => 'لا يعمل',
+    'Reconnect Facebook' => 'أعد ربط فيسبوك',
+    "Facebook didn't give Revenect every permission" => 'فيسبوك لم يمنح Revenect كل الصلاحيات',
+    'Choose the Page' => 'اختر الصفحة',
 ];

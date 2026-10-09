@@ -142,6 +142,20 @@ function meta_finish_connect(int $clientId, string $code): array
                                                      'client_secret' => $c['app_secret'], 'fb_exchange_token' => $short['json']['access_token']]);
     $userToken = (string) ($long['json']['access_token'] ?? $short['json']['access_token']);
 
+    // What the person actually allowed on the Facebook screen — so the app can say exactly which
+    // permission is missing instead of failing later with Meta's "(#200)" sentence.
+    $perm = meta_http('GET', 'me/permissions', ['access_token' => $userToken]);
+    if ($perm['ok']) {
+        $granted = $declined = [];
+        foreach ((array) ($perm['json']['data'] ?? []) as $pp) {
+            if (($pp['status'] ?? '') === 'granted') $granted[] = (string) $pp['permission']; else $declined[] = (string) ($pp['permission'] ?? '');
+        }
+        try {
+            db_run("INSERT INTO app_settings (k,v,updated_at) VALUES (?,?,NOW()) ON DUPLICATE KEY UPDATE v=VALUES(v), updated_at=NOW()",
+                   ['meta_perms_' . $clientId, json_encode(['granted' => $granted, 'declined' => array_values(array_filter($declined)), 'at' => date('Y-m-d H:i:s')])]);
+        } catch (Throwable $e) {}
+    }
+
     $pages = meta_http('GET', 'me/accounts', ['fields' => 'id,name,access_token', 'limit' => 100, 'access_token' => $userToken]);
     if (!$pages['ok']) return ['ok' => false, 'error' => $pages['error']];
     $list = (array) ($pages['json']['data'] ?? []);
@@ -455,6 +469,11 @@ function meta_guess_target(string $key, string $type): string
 /** Facebook's permission errors, said in terms of what to do about them. */
 function meta_explain_error(string $err): string
 {
+    // Messages and comments need their own permissions; say which, in words, without Meta's essay.
+    if (preg_match('/pages_messaging|instagram_manage_messages|instagram_manage_comments|pages_manage_engagement|pages_read_user_content/i', $err, $m)) {
+        return 'Facebook has not given Revenect the "' . strtolower($m[0]) . '" permission for this Page. '
+             . 'Press Reconnect and allow every permission Facebook asks for.';
+    }
     if (preg_match('/pages_manage_ads|leads_retrieval|permission|\(#200\)|\(#10\)/i', $err)) {
         return 'Facebook would not share this Page\'s forms: ' . $err . ' — press "Reconnect Facebook" and allow every permission it asks for. '
              . 'You also need to be an admin of the Page (or have Leads access in its settings).';

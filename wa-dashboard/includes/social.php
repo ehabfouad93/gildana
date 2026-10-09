@@ -104,8 +104,12 @@ function social_page_set(array $page, string $what, bool $on): array
             ? 'This Page has no Instagram professional account linked. Link one in the Instagram app (Settings → Account type → Professional, then connect the Facebook Page).'
             : ($l['error'] ?? 'Could not read the Page.')];
     }
+    $was = (int) ($page[$what] ?? 0);
     db_run("UPDATE meta_pages SET `$what`=? WHERE id=?", [$on ? 1 : 0, (int) $page['id']]);
-    return social_page_apply($page);
+    $r = social_page_apply($page);
+    // Facebook refused: put the switch back, so the page never shows "On" for something that isn't arriving.
+    if (!$r['ok']) db_run("UPDATE meta_pages SET `$what`=? WHERE id=?", [$was, (int) $page['id']]);
+    return $r;
 }
 
 /* ───────────────────────── people ───────────────────────── */

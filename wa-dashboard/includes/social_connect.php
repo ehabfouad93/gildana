@@ -20,22 +20,48 @@ function social_switches(): array
             'comments_on' => ['fb_comments', 'Facebook comments'], 'ig_comments_on' => ['ig_comments', 'Instagram comments']];
 }
 
+/** The Facebook permissions each channel needs, with what they let Revenect do (for the "missing" list). */
+function social_needed_perms(array $client): array
+{
+    $need = [
+        'messenger'   => ['pages_messaging' => 'read and answer Messenger messages', 'pages_manage_metadata' => 'connect the Page to Revenect'],
+        'instagram'   => ['instagram_basic' => 'see the Instagram account', 'instagram_manage_messages' => 'read and answer Instagram messages', 'pages_manage_metadata' => 'connect the Page to Revenect'],
+        'fb_comments' => ['pages_read_user_content' => 'read comments on the Page', 'pages_manage_engagement' => 'reply to and hide comments', 'pages_read_engagement' => 'read the Page\'s posts'],
+        'ig_comments' => ['instagram_basic' => 'see the Instagram account', 'instagram_manage_comments' => 'read and reply to Instagram comments'],
+    ];
+    $out = [];
+    foreach ($need as $ch => $perms) if (client_has_channel($client, $ch)) $out += $perms;
+    return $out;
+}
+
+/** Permissions the last Facebook sign-in did not grant: [permission => what it is for]. Null when unknown (signed in before this was recorded). */
+function social_missing_perms(array $client): ?array
+{
+    $raw = meta_setting('meta_perms_' . (int) $client['id']);
+    if ($raw === '') return null;
+    $g = (array) ((json_decode($raw, true) ?: [])['granted'] ?? []);
+    return array_diff_key(social_needed_perms($client), array_flip($g));
+}
+
 /**
- * Where this client stands: Pages connected, which uses are on, and which of the channels its
- * plan includes are not arriving yet.
+ * Where this client stands: Pages connected, which are in use, which uses are working, and which
+ * of the channels its plan includes are not arriving yet. A switch that is on but whose Page has
+ * an error from Facebook does not count as working.
  */
 function social_connect_status(array $client): array
 {
     $pages = [];
     try { $pages = db_all("SELECT * FROM meta_pages WHERE client_id=? ORDER BY name", [(int) $client['id']]); } catch (Throwable $e) {}
     $sw = array_filter(social_switches(), fn($x) => client_has_channel($client, $x[0]));
+    $works = fn(array $p, string $k) => (int) ($p[$k] ?? 0) === 1 && trim((string) ($p['last_error'] ?? '')) === '';
+    $used = array_values(array_filter($pages, fn($p) => (bool) array_filter(array_keys($sw), fn($k) => (int) ($p[$k] ?? 0) === 1)));
     $on = []; $missing = [];
     foreach ($sw as $k => [$ch, $label]) {
-        $on[$k] = (bool) array_filter($pages, fn($p) => (int) ($p[$k] ?? 0) === 1);
+        $on[$k] = (bool) array_filter($pages, fn($p) => $works($p, $k));
         if (!$on[$k]) $missing[$k] = $label;
     }
-    return ['configured' => meta_configured(), 'pages' => $pages, 'switches' => $sw, 'on' => $on, 'missing' => $missing,
-            'errors' => array_values(array_filter(array_map(fn($p) => (string) ($p['last_error'] ?? ''), $pages))),
+    return ['configured' => meta_configured(), 'pages' => $pages, 'used' => $used, 'switches' => $sw, 'on' => $on, 'missing' => $missing,
+            'perms_missing' => social_missing_perms($client),
             'ready' => $pages && !$missing];
 }
 
@@ -52,7 +78,7 @@ function social_return_ok(string $to): string
 function social_connect_handle(array $client, array $post, bool $isAdmin, int $userId): ?array
 {
     $a = (string) ($post['action'] ?? '');
-    if (!in_array($a, ['fb_connect', 'social_set', 'social_all_on'], true)) return null;
+    if (!in_array($a, ['fb_connect', 'social_set', 'social_all_on', 'social_use_page'], true)) return null;
     if (!$isAdmin) return ['Only an account Admin can connect Facebook & Instagram.', 'error', 'social.php'];
     $cid = (int) $client['id'];
 
@@ -74,18 +100,37 @@ function social_connect_handle(array $client, array $post, bool $isAdmin, int $u
                         : ['Facebook refused: ' . meta_explain_error((string) $r['error']) . ' If it mentions a permission, press Reconnect so Meta asks for it.', 'error', 'social.php'];
     }
 
-    // Everything the plan includes, on every connected Page — the one-click "make it work".
+    // Facebook already told us a permission is missing: say so plainly instead of trying and failing Page after Page.
+    $miss = social_missing_perms($client);
+    if ($miss) return ['Facebook has not given Revenect permission to ' . implode(', ', array_unique(array_values($miss)))
+                      . '. Press Reconnect and keep every permission ticked on the Facebook screen.', 'error', 'social.php#perms'];
+
+    if ($a === 'social_use_page') {
+        $page = db_row("SELECT * FROM meta_pages WHERE id=? AND client_id=?", [(int) ($post['page'] ?? 0), $cid]);
+        if (!$page) return ['Choose one of your Pages.', 'error', 'social.php#choose'];
+        $pages = [$page];
+    } else {
+        // "Turn everything on" works on the Pages already in use — never on every Page an agency manages.
+        $all = db_all("SELECT * FROM meta_pages WHERE client_id=?", [$cid]);
+        $pages = array_values(array_filter($all, fn($p) => (int) $p['msg_on'] || (int) $p['ig_msg_on'] || (int) $p['comments_on'] || (int) ($p['ig_comments_on'] ?? 0)));
+        if (!$pages && count($all) === 1) $pages = $all;
+        if (!$pages) return ['Choose which Page to use first.', 'error', 'social.php#choose'];
+    }
     $done = []; $failed = [];
-    foreach (db_all("SELECT * FROM meta_pages WHERE client_id=?", [$cid]) as $page) {
+    foreach ($pages as $page) {
         foreach ($sw as $k => [$ch, $label]) {
-            if (!client_has_channel($client, $ch) || (int) ($page[$k] ?? 0) === 1) continue;
+            if (!client_has_channel($client, $ch) || ((int) ($page[$k] ?? 0) === 1 && trim((string) $page['last_error']) === '')) continue;
             $r = social_page_set($page, $k, true);                     // links the Page's Instagram account first when needed
-            if ($r['ok']) $done[] = $label; else $failed[] = $page['name'] . ' — ' . $label . ': ' . meta_explain_error((string) $r['error']);
+            if ($r['ok']) $done[] = $label; else $failed[meta_explain_error((string) $r['error'])][] = $label;
             $page = db_row("SELECT * FROM meta_pages WHERE id=?", [(int) $page['id']]) ?: $page;
         }
     }
-    if ($failed) return ['Turned on ' . ($done ? implode(', ', array_unique($done)) : 'nothing') . '. Not possible yet: ' . implode('; ', $failed) . '.', $done ? 'success' : 'error', 'social.php'];
-    return [$done ? 'Done — ' . implode(', ', array_unique($done)) . ' now arrive in Revenect.' : 'Everything was already on.', 'success', 'social.php'];
+    $where = count($pages) === 1 ? ' on ' . $pages[0]['name'] : '';
+    if ($failed) {
+        $why = implode(' ', array_map(fn($reason, $labels) => implode(', ', array_unique($labels)) . ': ' . $reason, array_keys($failed), $failed));
+        return [($done ? 'Turned on ' . implode(', ', array_unique($done)) . $where . '. ' : '') . 'Not possible yet — ' . $why, $done ? 'success' : 'error', 'social.php'];
+    }
+    return [$done ? 'Done — ' . implode(', ', array_unique($done)) . $where . ' now arrive in Revenect.' : 'Everything was already on.', 'success', 'social.php'];
 }
 
 /**
@@ -104,6 +149,9 @@ function social_connect_banner(array $client, string $return, bool $isAdmin): st
             ? '<form method="post" action="social.php" style="margin:0">' . csrf_field() . '<input type="hidden" name="action" value="fb_connect"><input type="hidden" name="return" value="' . e($return) . '">'
               . '<button class="btn btn-primary btn-sm fb-connect-btn">' . social_fb_icon() . ' Connect Facebook &amp; Instagram</button></form>'
             : '<span class="text-muted" style="font-size:12.5px">' . ($st['configured'] ? 'Ask your account Admin to connect it.' : 'Not set up on this platform yet.') . '</span>';
+    } elseif (!$st['used'] && count($st['pages']) > 1) {
+        $msg = '<strong>Choose your Page:</strong> Facebook is connected — pick which of your ' . count($st['pages']) . ' Pages Revenect should use.';
+        $btn = '<a class="btn btn-primary btn-sm" href="social.php#choose">Choose the Page</a>';
     } else {
         $msg = '<strong>Not arriving yet:</strong> ' . e($names) . '.';
         $btn = $isAdmin
