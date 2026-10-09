@@ -1,0 +1,8 @@
+# Site images only — nothing here may run as a script.
+<FilesMatch "\.(php|phtml|php[0-9]|phar|pl|py|cgi|sh|shtml)$">
+    Require all denied
+</FilesMatch>
+<IfModule mod_php.c>
+    php_flag engine off
+</IfModule>
+Options -ExecCGI -Indexes

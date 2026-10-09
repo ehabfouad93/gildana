@@ -1,0 +1,18 @@
+# Uploaded files are data, never code: nothing here may run as a script.
+# (The upload handlers only accept image/video/PDF extensions; this is the second lock.)
+<FilesMatch "\.(php|phtml|php[0-9]|phar|pl|py|cgi|sh|shtml|htaccess)$">
+    Require all denied
+</FilesMatch>
+<IfModule !mod_authz_core.c>
+    <FilesMatch "\.(php|phtml|php[0-9]|phar|pl|py|cgi|sh|shtml)$">
+        Order allow,deny
+        Deny from all
+    </FilesMatch>
+</IfModule>
+<IfModule mod_php.c>
+    php_flag engine off
+</IfModule>
+<IfModule mod_php7.c>
+    php_flag engine off
+</IfModule>
+Options -ExecCGI -Indexes

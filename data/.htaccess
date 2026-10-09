@@ -1,0 +1,7 @@
+# Contact-form submissions, newsletter emails and the admin password hash live here:
+# never served over HTTP. PHP reads them from disk.
+Require all denied
+<IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+</IfModule>

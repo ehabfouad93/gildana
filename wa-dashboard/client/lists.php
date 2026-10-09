@@ -167,10 +167,11 @@ if ($detailId) {
         if(q.trim().length<1){ document.getElementById('search-results').innerHTML=''; return; }
         const r=await fetch('contact_search.php?q='+encodeURIComponent(q)+'&exclude_list='+LIST_ID);
         const rows=await r.json();
+        const escH = v => String(v ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));   // contact names come from WhatsApp profiles
         const box=document.getElementById('search-results');
         if(!rows.length){ box.innerHTML='<p class="text-muted" style="font-size:12.5px">No matching contacts not already in this list.</p>'; return; }
         box.innerHTML='<div class="table-wrap"><table class="data"><tbody>'+rows.map(c=>
-          `<tr id="sr-${c.id}"><td class="mono">+${c.phone}</td><td>${c.name||'—'}</td><td style="text-align: end"><button class="btn btn-ghost btn-sm" onclick="addMember(${c.id})">Add</button></td></tr>`
+          `<tr id="sr-${+c.id}"><td class="mono">+${escH(c.phone)}</td><td>${escH(c.name)||'—'}</td><td style="text-align: end"><button class="btn btn-ghost btn-sm" onclick="addMember(${+c.id})">Add</button></td></tr>`
         ).join('')+'</tbody></table></div>';
       },250);
     }

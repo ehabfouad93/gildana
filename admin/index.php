@@ -1,5 +1,8 @@
 <?php
 declare(strict_types=1);
+// Session cookie: not readable by scripts, same-site only, HTTPS-only when served over HTTPS.
+session_set_cookie_params(['lifetime' => 0, 'path' => '/', 'httponly' => true, 'samesite' => 'Lax',
+    'secure' => (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https')]);
 session_start();
 require __DIR__ . '/../includes/functions.php';
 
@@ -31,13 +34,17 @@ if (isset($_GET['action']) && $_GET['action'] === 'export_newsletter' && admin_l
 
 /* ── login ── */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'login') {
-    if (check_password((string) ($_POST['password'] ?? ''))) {
+    if (($wait = login_throttle_wait()) > 0) {
+        $error = 'Too many wrong passwords. Try again in ' . (int) ceil($wait / 60) . ' minute(s).';
+    } elseif (check_password((string) ($_POST['password'] ?? ''))) {
+        login_throttle_clear();
+        session_regenerate_id(true);                         // a fresh session id for the signed-in admin
         $_SESSION['gildana_admin'] = true;
         csrf_token();
         header('Location: index.php');
         exit;
     }
-    $error = 'Wrong password. Please try again.';
+    if (empty($error)) { login_throttle_fail(); $error = 'Wrong password. Please try again.'; }
 }
 
 /* ── require auth ── */

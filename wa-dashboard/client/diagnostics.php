@@ -271,7 +271,8 @@ async function runTest(action, btn){
   const out=document.getElementById('test-out'); btn.disabled=true; const t=btn.textContent; btn.textContent='Testing…';
   try{ const fd=new FormData(); fd.append('action',action); fd.append('csrf_token',CSRF);
     const r=await fetch('',{method:'POST',body:fd}); const d=await r.json();
-    out.innerHTML='<div class="alert '+(d.ok?'success':'error')+'">'+(d.ok?'✓ ':'✕ ')+(d.msg||'')+'</div>';
+    out.innerHTML='<div class="alert '+(d.ok?'success':'error')+'"></div>';
+    out.firstChild.textContent=(d.ok?'✓ ':'✕ ')+(d.msg||'');   // provider error text: shown as text, never HTML
   }catch(e){ out.innerHTML='<div class="alert error">Network error.</div>'; }
   btn.disabled=false; btn.textContent=t;
 }

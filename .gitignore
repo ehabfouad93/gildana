@@ -22,10 +22,13 @@ ai-studio/storage/
 # ── Uploaded / user media (keep the folder, not its contents) ──
 wa-dashboard/uploads/*
 !wa-dashboard/uploads/index.html
+!wa-dashboard/uploads/.htaccess
 
 # ── Flat-file submission stores (may hold personal data) ──
 data/contacts.json
 data/newsletter.json
+data/config.json
+data/login_attempts.json
 
 # ── OS / editor cruft ──
 Thumbs.db

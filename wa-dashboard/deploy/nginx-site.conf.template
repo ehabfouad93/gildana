@@ -26,6 +26,8 @@ server {
     location ^~ /includes/   { deny all; }
     location ^~ /migrations/ { deny all; }
     location ^~ /deploy/     { deny all; }
+    location ^~ /tools/      { deny all; }   # command-line tools (the demo seeder wipes every client)
+    location ^~ /cron/       { deny all; }   # background workers run from the shell
     location ~ /\.           { deny all; }   # .git, .env, .htaccess…
 
     # Uploaded files are data, never code.

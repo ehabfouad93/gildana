@@ -52,6 +52,11 @@ function access_request_handle(string $source): array
     if (trim((string) ($_POST['website'] ?? '')) !== '') return [true, ''];
     if ($name === '' || $email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL))
         return [false, 'Please give us your name and a valid email address.'];
+    // Five requests an hour from one address is plenty for a person; more is a bot filling the inbox.
+    $ip = mb_substr((string) ($_SERVER['REMOTE_ADDR'] ?? ''), 0, 45);
+    if ($ip !== '' && access_requests_ready()
+        && (int) db_val("SELECT COUNT(*) FROM access_requests WHERE ip=? AND created_at > NOW() - INTERVAL 1 HOUR", [$ip]) >= 5)
+        return [false, 'We already have several requests from you — we will be in touch shortly.'];
 
     $body = "Name: {$name}\nJob title: " . ($job ?: '—') . "\nEmail: {$email}\nBusiness: " . ($company ?: '—')
           . "\nWhatsApp: " . ($phone ?: '—') . "\n\n" . ($about ?: '(no message)');

@@ -237,11 +237,14 @@ async function loadThreads(){
     const pv = (t.last_dir==='out'?'↩ ':'') + esc((t.last_body||'').slice(0,40));
     const badge = t.unread>0 ? `<span class="ib-badge">${t.unread}</span>` : '';
     const chs = IB_MULTI ? chBadge(t.last_channel||'whatsapp') + ' ' : '';
-    return `<div class="ib-th ${t.contact_id==ibCur?'active':''}" onclick="openThread(${t.contact_id},'${esc(whoName(t)).replace(/'/g,"\\'")}','${esc(t.phone_e164)}')">
-      <div class="ib-av">${initials(whoName(t))}</div>
+    /* The name is the sender's own profile name: it goes in an escaped data attribute and is read
+       back with dataset — never into an inline handler, where quotes and backslashes could break out. */
+    return `<div class="ib-th ${t.contact_id==ibCur?'active':''}" data-id="${+t.contact_id}" data-name="${esc(whoName(t))}" data-phone="${esc(t.phone_e164)}">
+      <div class="ib-av">${esc(initials(whoName(t)))}</div>
       <div style="min-width:0"><div class="nm">${chs}${esc(whoName(t))}</div><div class="pv">${pv}</div></div>
       <div class="meta"><span class="tm">${tfmt(t.last_at)}</span>${badge}</div></div>`;
   }).join('');
+  box.onclick = ev => { const th = ev.target.closest('.ib-th'); if (th) openThread(+th.dataset.id, th.dataset.name, th.dataset.phone); };
 }
 function openThread(id,name,phone){
   ibCur=id; ibLast=0; el('ib-body').innerHTML='';

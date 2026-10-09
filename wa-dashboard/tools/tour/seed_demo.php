@@ -23,6 +23,9 @@
  */
 declare(strict_types=1);
 
+// Command line only. Over HTTP this would be one request away from deleting every client.
+if (PHP_SAPI !== 'cli') { http_response_code(404); exit; }
+
 chdir(dirname(__DIR__, 2));
 require 'includes/config_loader.php';
 require 'includes/helpers.php';

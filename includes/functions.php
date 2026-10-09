@@ -130,6 +130,40 @@ function upload_image(string $field, string $current = ''): string
     return 'uploads/cms/' . $filename;
 }
 
+/* ── login throttle: 5 wrong passwords from one address → 15 minutes locked out ── */
+const LOGIN_ATTEMPTS_FILE = __DIR__ . '/../data/login_attempts.json';
+
+function login_throttle_key(): string
+{
+    return hash('sha256', (string) ($_SERVER['REMOTE_ADDR'] ?? ''));
+}
+
+function login_throttle_wait(): int
+{
+    $rows = json_decode((string) @file_get_contents(LOGIN_ATTEMPTS_FILE), true) ?: [];
+    $r = $rows[login_throttle_key()] ?? null;
+    if (!$r || (int) ($r['n'] ?? 0) < 5) return 0;
+    return max(0, (int) $r['at'] + 900 - time());
+}
+
+function login_throttle_fail(): void
+{
+    $rows = json_decode((string) @file_get_contents(LOGIN_ATTEMPTS_FILE), true) ?: [];
+    $k = login_throttle_key();
+    $r = $rows[$k] ?? ['n' => 0, 'at' => 0];
+    if (time() - (int) $r['at'] > 900) $r['n'] = 0;          // an old streak doesn't count
+    $rows[$k] = ['n' => (int) $r['n'] + 1, 'at' => time()];
+    $rows = array_filter($rows, fn($x) => time() - (int) $x['at'] < 86400);
+    @file_put_contents(LOGIN_ATTEMPTS_FILE, json_encode($rows), LOCK_EX);
+}
+
+function login_throttle_clear(): void
+{
+    $rows = json_decode((string) @file_get_contents(LOGIN_ATTEMPTS_FILE), true) ?: [];
+    unset($rows[login_throttle_key()]);
+    @file_put_contents(LOGIN_ATTEMPTS_FILE, json_encode($rows), LOCK_EX);
+}
+
 /* ── auth ── */
 function admin_logged_in(): bool
 {
