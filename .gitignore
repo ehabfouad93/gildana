@@ -48,3 +48,10 @@ wa-dashboard/assets/media/*
 # Python bytecode (tools/tour)
 __pycache__/
 *.pyc
+
+# Gildana Listening
+listening/config.php
+listening/cron/.heartbeat
+listening/storage/*
+!listening/storage/.htaccess
+!listening/storage/index.html
