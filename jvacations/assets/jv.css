@@ -499,7 +499,6 @@ form.inline { display: inline; }
 .center { text-align: center !important; }
 
 .roles-matrix td, .roles-matrix th { vertical-align: middle; }
-.roles-matrix td:first-child { min-width: 240px; }
 .cap-cell { display: inline-flex; padding: 6px; border-radius: 6px; cursor: pointer; }
 .cap-cell.is-default { box-shadow: inset 0 0 0 1px var(--accent); }
 .cap-cell input { width: 17px; height: 17px; accent-color: var(--accent); cursor: pointer; }
@@ -519,8 +518,21 @@ form.inline { display: inline; }
 @media (max-width: 860px) {
   .top-search { display: none; }
 }
-.roles-matrix th .pill { white-space: normal; text-align: center; font-size: 10.5px; letter-spacing: 0; }
-.roles-matrix th { white-space: normal; }
+/* Compact so all eight roles fit beside the sidebar; the action column and the
+   role header stay put while scrolling. */
+.roles-wrap { max-height: calc(100vh - var(--topbar-h) - 190px); overflow: auto; }
+.roles-matrix { table-layout: fixed; min-width: 860px; }
+.roles-matrix th, .roles-matrix td { padding: 8px 6px; }
+.roles-matrix th:first-child, .roles-matrix td:first-child { width: 210px; padding-inline-start: 16px; }
+.roles-matrix th { white-space: normal; position: sticky; top: 0; z-index: 2; background: var(--panel); text-transform: none; letter-spacing: 0; }
+.roles-matrix th .pill { white-space: normal; text-align: center; font-size: 10.5px; letter-spacing: 0; padding: 3px 6px; line-height: 1.25; }
+.roles-matrix th .small { font-size: 10.5px; margin-top: 3px; }
+.roles-matrix td:first-child, .roles-matrix th:first-child { position: sticky; inset-inline-start: 0; z-index: 1; background: var(--panel); }
+.roles-matrix th:first-child { z-index: 3; }
+.roles-matrix tbody tr:hover td:first-child { background: #eef3f1; }
+.roles-matrix td:first-child strong { font-size: 13px; }
+.roles-matrix td:first-child .small { font-size: 11px; line-height: 1.4; }
+.roles-form .card-foot { position: sticky; bottom: 0; background: var(--panel); z-index: 4; }
 
 /* ───── brand typography ───── */
 .page-head h1 { font-family: var(--serif); font-weight: 600; font-size: 28px; letter-spacing: .01em; color: var(--brand); line-height: 1.15; }
@@ -578,3 +590,5 @@ table.data th { color: var(--accent); }
                    background: var(--panel); color: var(--ink); }
 .chips-row .chip:hover { border-color: var(--accent); }
 .chips-row .chip.on { background: var(--brand); border-color: var(--brand); color: var(--on-brand); font-weight: 600; }
+table.data.roles-matrix th { text-transform: none; letter-spacing: 0; }
+table.data.roles-matrix th .pill { font-size: 11px; max-width: 100%; }

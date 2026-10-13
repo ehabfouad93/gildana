@@ -491,7 +491,7 @@ return [
     'roles.action' => 'Action',
     'roles.n_users' => '{n} active',
     'roles.default' => 'Default for this role',
-    'roles.legend' => 'A gold outline marks the default. Admin always has every permission.',
+    'roles.legend' => 'A highlighted box marks the default for that role. Admin always has every permission.',
     'roles.reset' => 'Reset to defaults',
     'roles.reset_q' => 'Reset every role to the default permissions?',
     'roles.reset_done' => 'Permissions reset to the defaults.',

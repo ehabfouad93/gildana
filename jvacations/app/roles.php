@@ -36,9 +36,9 @@ foreach (db_all("SELECT role, COUNT(*) AS n FROM users WHERE status = 'active' G
 layout_header(t('nav.roles'), 'roles');
 page_head(t('nav.roles'), t('roles.sub'));
 ?>
-<form method="post" class="card card-flush">
+<form method="post" class="card card-flush roles-form">
   <?= csrf_field() ?>
-  <div class="table-wrap"><table class="data roles-matrix">
+  <div class="table-wrap roles-wrap"><table class="data roles-matrix">
     <thead><tr>
       <th><?= e(t('roles.action')) ?></th>
       <?php foreach ($roles as $r): ?><th class="center"><span class="pill role-<?= e($r) ?>"><?= e(t('role.' . $r)) ?></span>
