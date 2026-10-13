@@ -14,28 +14,40 @@ $tile  = function (string $label, $value, string $cls = '', string $href = '', s
 $count = fn(string $sql, array $p = []) => (int) db_val($sql, $p);
 
 if (can('clients.add') && !$all) {
-    $tile(t('dash.my_clients'), $count("SELECT COUNT(*) FROM clients WHERE created_by = ?", [$me]), '', 'clients.php');
+    $tile(t('dash.my_clients'), $count("SELECT COUNT(*) FROM clients WHERE created_by = ?", [$me]), '', 'clients.php?view=invitation');
     $tile(t('dash.added_month'), $count("SELECT COUNT(*) FROM clients WHERE created_by = ? AND created_at >= DATE_FORMAT(CURDATE(), '%Y-%m-01')", [$me]), 'accent');
-    $tile(t('tab.waiting_book'), $count("SELECT COUNT(*) FROM clients WHERE created_by = ? AND stage = 'new'", [$me]), '', 'clients.php?tab=waiting');
-    $tile(t('tab.won'), $count("SELECT COUNT(*) FROM clients WHERE created_by = ? AND stage = 'contracted'", [$me]), 'good', 'clients.php?tab=won');
+    $tile(t('tab.waiting_book'), $count("SELECT COUNT(*) FROM clients WHERE created_by = ? AND stage = 'new'", [$me]), '', 'clients.php?view=invitation&tab=waiting');
+    $tile(t('tab.won'), $count("SELECT COUNT(*) FROM clients WHERE created_by = ? AND stage = 'contracted'", [$me]), 'good', 'clients.php?view=invitation&tab=added_won');
 }
 if (can('clients.book')) {
-    $tile(t('tab.to_book'), $count("SELECT COUNT(*) FROM clients WHERE stage = 'new'"), 'accent', 'clients.php?tab=' . ($all ? 'new' : 'to_book'));
+    $tile(t('tab.to_book'), $count("SELECT COUNT(*) FROM clients WHERE stage = 'new'"), 'accent', 'clients.php?view=booking&tab=to_book');
 }
 if (can('clients.book') && !$all) {
     $tile(t('dash.booked_week'), $count("SELECT COUNT(*) FROM clients WHERE booker_id = ? AND booked_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)", [$me]));
 }
 if (can('clients.confirm')) {
-    $tile(t('tab.to_confirm'), $count("SELECT COUNT(*) FROM clients WHERE stage = 'booked'"), 'accent', 'clients.php?tab=' . ($all ? 'booked' : 'to_confirm'));
+    $tile(t('tab.to_confirm'), $count("SELECT COUNT(*) FROM clients WHERE stage = 'booked'"), 'accent', 'clients.php?view=booking&tab=to_confirm');
     $tile(t('dash.meetings_today'), $count("SELECT COUNT(*) FROM clients WHERE stage IN ('booked','confirmed') AND meeting_date = CURDATE()"));
 }
 if (can('clients.arrive')) {
-    $tile(t('tab.expected_today'), $count("SELECT COUNT(*) FROM clients WHERE stage IN ('booked','confirmed') AND meeting_date = CURDATE()"), 'accent', 'clients.php?tab=' . ($all ? 'confirmed' : 'today'));
-    $tile(t('tab.at_office'), $count("SELECT COUNT(*) FROM clients WHERE stage = 'arrived'"), 'purple', 'clients.php?tab=' . ($all ? 'arrived' : 'at_office'));
+    $tile(t('tab.expected_today'), $count("SELECT COUNT(*) FROM clients WHERE stage IN ('booked','confirmed') AND meeting_date = CURDATE()"), 'accent', 'clients.php?view=attendance&tab=today');
+    $tile(t('tab.arrived_today'), $count("SELECT COUNT(*) FROM clients WHERE arrived_at >= CURDATE()"), 'purple', 'clients.php?view=attendance&tab=arrived_today');
+}
+if (can('clients.assign_sales')) {
+    $tile(t('tab.no_rep'), $count("SELECT COUNT(*) FROM clients WHERE stage = 'arrived' AND sales_id IS NULL AND sales_rep_name IS NULL"), 'purple', 'clients.php?view=sales_attendance&tab=unassigned');
+}
+if (can('deals.all')) {
+    $tile(t('tab.ready_to_close'), $count("SELECT COUNT(*) FROM clients WHERE stage = 'arrived'"), 'accent', 'clients.php?view=deals&tab=ready');
+}
+if (can('owners.welcome')) {
+    $tile(t('welcome.pending'), $count("SELECT COUNT(*) FROM contracts WHERE welcome_status = 'pending'"), 'accent', 'welcome.php');
+}
+if (can('contracts.review')) {
+    $tile(t('review.pending'), $count("SELECT COUNT(*) FROM contracts WHERE finance_status = 'pending'"), 'accent', 'review.php');
 }
 if (can('clients.close') && !$all) {
-    $tile(t('tab.my_meetings'), $count("SELECT COUNT(*) FROM clients WHERE sales_id = ? AND stage = 'arrived'", [$me]), 'accent', 'clients.php?tab=meetings');
-    $tile(t('dash.won_month'), $count("SELECT COUNT(*) FROM clients WHERE sales_id = ? AND stage = 'contracted' AND closed_at >= DATE_FORMAT(CURDATE(), '%Y-%m-01')", [$me]), 'good', 'clients.php?tab=won');
+    $tile(t('tab.my_meetings'), $count("SELECT COUNT(*) FROM clients WHERE sales_id = ? AND stage = 'arrived'", [$me]), 'accent', 'clients.php?view=deals&tab=meetings');
+    $tile(t('dash.won_month'), $count("SELECT COUNT(*) FROM clients WHERE sales_id = ? AND stage = 'contracted' AND closed_at >= DATE_FORMAT(CURDATE(), '%Y-%m-01')", [$me]), 'good', 'clients.php?view=deals&tab=won');
     $won  = $count("SELECT COUNT(*) FROM clients WHERE sales_id = ? AND stage = 'contracted'", [$me]);
     $lost = $count("SELECT COUNT(*) FROM clients WHERE sales_id = ? AND stage = 'lost'", [$me]);
     $tile(t('dash.close_rate'), ($won + $lost) ? round($won / ($won + $lost) * 100) . '%' : '—', '', '', t('dash.won_lost', ['w' => (string) $won, 'l' => (string) $lost]));
@@ -55,7 +67,7 @@ if (can_any('contracts.view', 'payments.record')) {
     $tile(t('res.remaining'), money((float) $fin['total'] - (float) $fin['paid']));
 }
 if (can('stays.manage')) {
-    $tile(t('dash.stays_30'), $count("SELECT COUNT(*) FROM stays WHERE status = 'confirmed' AND check_in BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)"), '', 'stays.php?tab=upcoming');
+    $tile(t('dash.stays_30'), $count("SELECT COUNT(*) FROM stays WHERE status = 'confirmed' AND check_in BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)"), '', 'calendar.php');
 }
 
 /* Pipeline funnel for admin. */
@@ -102,7 +114,7 @@ page_head(t('dash.hello', ['name' => $ME['name']]), t('dash.sub.' . $role));
   <h2><?= e(t('dash.pipeline')) ?></h2>
   <div class="funnel">
     <?php foreach (STAGES as $s): ?>
-      <a class="funnel-step st-<?= e($s) ?>" href="clients.php?tab=<?= e($s) ?>">
+      <a class="funnel-step st-<?= e($s) ?>" href="clients.php?view=all&amp;tab=<?= e($s) ?>">
         <span class="fn-n"><?= (int) ($funnel[$s] ?? 0) ?></span><span class="fn-l"><?= e(t('stage.' . $s)) ?></span></a>
     <?php endforeach; ?>
   </div>

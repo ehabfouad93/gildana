@@ -60,8 +60,8 @@ if (($_GET['export'] ?? '') === 'csv' && can('export.csv')) {
 $projects = [];
 foreach (db_all("SELECT id, name FROM projects ORDER BY name") as $p) $projects[$p['id']] = $p['name'];
 
-layout_header(t('nav.reservations'), 'reservations');
-page_head(t('nav.reservations'), t('res.sub'),
+layout_header(t('nav.statements'), 'reservations');
+page_head(t('nav.statements'), t('res.sub'),
     '<a class="btn" href="?' . e(http_build_query(['q' => $q, 'project' => $project ?: '', 'f' => $filter, 'export' => 'csv'])) . '">' . e(t('ui.export_csv')) . '</a>');
 ?>
 <div class="stats-row">

@@ -62,7 +62,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $sources = array_combine(setting_list('lead_sources'), setting_list('lead_sources'));
 $marital = ['single' => t('marital.single'), 'married' => t('marital.married'), 'other' => t('marital.other')];
 
-layout_header($c ? t('client.edit') : t('nav.client_new'), $c ? 'clients' : 'client_new');
+layout_header($c ? t('client.edit') : t('nav.client_new'), $c ? 'clients' : 'clients:invitation');
 page_head($c ? t('client.edit') : t('nav.client_new'), t('client.new_sub'));
 ?>
 <?php if ($err !== ''): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>

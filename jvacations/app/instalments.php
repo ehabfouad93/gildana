@@ -27,8 +27,8 @@ $rows = db_all(
 $sumDue = 0.0;
 foreach ($rows as $r) $sumDue += $tab === 'paid' ? (float) $r['paid_amount'] : (float) $r['amount'] - (float) $r['paid_amount'];
 
-layout_header(t('nav.instalments'), 'instalments');
-page_head(t('nav.instalments'), t('inst.sub'));
+layout_header(t('nav.collection'), 'collection');
+page_head(t('nav.collection'), t('inst.sub'));
 echo tabs($tabData, $tab);
 ?>
 <div class="card card-flush">

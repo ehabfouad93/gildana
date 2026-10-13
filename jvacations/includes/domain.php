@@ -97,7 +97,9 @@ function can_view_client(array $u, array $c): bool
     if (can('clients.add', $u) && (int) $c['created_by'] === $me) return true;
     if (can('clients.book', $u) && ($c['stage'] === 'new' || (int) $c['booker_id'] === $me)) return true;
     if (can('clients.confirm', $u) && (in_array($c['stage'], ['booked', 'confirmed'], true) || (int) $c['communicator_id'] === $me)) return true;
-    if (can('clients.arrive', $u) && (in_array($c['stage'], ['booked', 'confirmed', 'arrived'], true) || (int) $c['manager_id'] === $me)) return true;
+    if (can('clients.arrive', $u) && (in_array($c['stage'], ['booked', 'confirmed', 'arrived'], true) || (int) $c['secretary_id'] === $me)) return true;
+    if (can('clients.assign_sales', $u) && ($c['stage'] === 'arrived' || (int) $c['manager_id'] === $me)) return true;
+    if (can('deals.all', $u) && in_array($c['stage'], ['arrived', 'contracted', 'lost'], true)) return true;
     if (can('clients.close', $u) && (int) $c['sales_id'] === $me) return true;
     return false;
 }
@@ -105,17 +107,32 @@ function can_view_client(array $u, array $c): bool
 /** Contract amounts: the assigned rep, plus whoever may view contracts. */
 function can_view_contract(array $u, array $c): bool
 {
-    if (can('contracts.view', $u)) return true;
+    if (can_any_u($u, 'contracts.view', 'contracts.review', 'owners.welcome', 'deals.all')) return true;
     return can('clients.close', $u) && (int) $c['sales_id'] === (int) $u['id'];
+}
+
+/** May $u close this client (contract or not closed)? */
+function can_close_client(array $u, array $c): bool
+{
+    if ($c['stage'] !== 'arrived') return false;
+    if (can('deals.all', $u)) return true;
+    return can('clients.close', $u) && (int) $c['sales_id'] === (int) $u['id'];
+}
+
+function can_any_u(array $u, string ...$caps): bool
+{
+    foreach ($caps as $cap) if (can($cap, $u)) return true;
+    return false;
 }
 
 function load_client(int $id): ?array
 {
     return db_row(
-        "SELECT c.*, a.name AS advisor_name, b.name AS booker_name, m.name AS communicator_name, s.name AS sales_name,
-                g.name AS manager_name
+        "SELECT c.*, a.name AS advisor_name, b.name AS booker_name, m.name AS communicator_name,
+                COALESCE(s.name, c.sales_rep_name) AS sales_name, g.name AS manager_name, r.name AS secretary_name
            FROM clients c
            LEFT JOIN users g ON g.id = c.manager_id
+           LEFT JOIN users r ON r.id = c.secretary_id
            LEFT JOIN users a ON a.id = c.created_by
            LEFT JOIN users b ON b.id = c.booker_id
            LEFT JOIN users m ON m.id = c.communicator_id
@@ -267,6 +284,29 @@ function wa_status_pill(string $status): string
 {
     $cls = ['sent' => 'green', 'failed' => 'red', 'skipped' => 'gray'][$status] ?? 'gray';
     return '<span class="pill ' . $cls . '">' . e(t('wa.status.' . $status)) . '</span>';
+}
+
+/** First two words of a name, for tight spaces such as calendar cells. */
+function excerpt_name(string $name): string
+{
+    $w = preg_split('/\s+/u', trim($name)) ?: [];
+    return implode(' ', array_slice($w, 0, 2));
+}
+
+function welcome_kinds(): array    { return ['call', 'whatsapp', 'note']; }
+function welcome_outcomes(): array { return ['reached', 'no_answer', 'call_back', 'wrong_number', 'issue']; }
+
+function welcome_pill(string $status): string
+{
+    return $status === 'done'
+        ? '<span class="pill green dot">' . e(t('welcome.status.done')) . '</span>'
+        : '<span class="pill gold dot">' . e(t('welcome.status.pending')) . '</span>';
+}
+
+function finance_pill(string $status): string
+{
+    $cls = ['approved' => 'green', 'returned' => 'red'][$status] ?? 'gray';
+    return '<span class="pill ' . $cls . ' dot">' . e(t('review.status.' . $status)) . '</span>';
 }
 
 function seq_label(int $seq): string

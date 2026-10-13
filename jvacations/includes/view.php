@@ -6,26 +6,56 @@ declare(strict_types=1);
  * Call layout_header(...), echo the page body, then layout_footer().
  */
 
-function nav_items(string $role): array
+/**
+ * The menu, grouped by department as in the system proposal. Each entry shows
+ * only to people whose permissions let them use it; empty groups disappear.
+ * Returns [group label|null => [key => item]].
+ */
+function nav_groups(string $role): array
 {
     $admin = $role === 'admin';
-    $all = [
-        'dashboard'    => ['label' => t('nav.dashboard'),    'url' => 'dashboard.php',    'icon' => 'grid',   'show' => true],
-        'search'       => ['label' => t('nav.search'),       'url' => 'search.php',       'icon' => 'search', 'show' => true],
-        'client_new'   => ['label' => t('nav.client_new'),   'url' => 'client_new.php',   'icon' => 'plus',   'show' => can('clients.add')],
-        'clients'      => ['label' => t('nav.clients.' . $role), 'url' => 'clients.php',  'icon' => 'users',
-                           'show' => can_any('clients.add', 'clients.book', 'clients.confirm', 'clients.arrive', 'clients.close', 'clients.view_all')],
-        'reservations' => ['label' => t('nav.reservations'), 'url' => 'reservations.php', 'icon' => 'doc',    'show' => can_any('contracts.view', 'payments.record')],
-        'instalments'  => ['label' => t('nav.instalments'),  'url' => 'instalments.php',  'icon' => 'cash',   'show' => can_any('contracts.view', 'payments.record')],
-        'stays'        => ['label' => t('nav.stays'),        'url' => 'stays.php',        'icon' => 'cal',    'show' => can('stays.manage')],
-        'projects'     => ['label' => t('nav.projects'),     'url' => 'projects.php',     'icon' => 'pin',    'show' => can('projects.manage')],
-        'whatsapp'     => ['label' => t('nav.whatsapp'),     'url' => 'whatsapp.php',     'icon' => 'chat',   'show' => $admin],
-        'templates'    => ['label' => t('nav.templates'),    'url' => 'contract_templates.php', 'icon' => 'doc', 'show' => $admin],
-        'users'        => ['label' => t('nav.users'),        'url' => 'users.php',        'icon' => 'team',   'show' => $admin],
-        'roles'        => ['label' => t('nav.roles'),        'url' => 'roles.php',        'icon' => 'key',    'show' => $admin],
-        'settings'     => ['label' => t('nav.settings'),     'url' => 'settings.php',     'icon' => 'gear',   'show' => $admin],
+    $C = fn(string $view) => 'clients.php?view=' . $view;
+    $groups = [
+        '' => [
+            'dashboard' => [t('nav.dashboard'), 'dashboard.php', 'grid', true],
+            'search'    => [t('nav.search'),    'search.php',    'search', true],
+        ],
+        'nav.grp.marketing' => [
+            'clients:invitation' => [t('nav.invitation'),     $C('invitation'), 'plus',  can('clients.add')],
+            'clients:booking'    => [t('nav.booking'),        $C('booking'),    'cal',   can_any('clients.book', 'clients.confirm')],
+            'clients:attendance' => [t('nav.attendance_mkt'), $C('attendance'), 'door',  can('clients.arrive')],
+        ],
+        'nav.grp.sales' => [
+            'clients:sales_attendance' => [t('nav.attendance_sales'), $C('sales_attendance'), 'users', can('clients.assign_sales')],
+            'clients:deals'            => [t('nav.deals'),            $C('deals'),            'doc',   can_any('clients.close', 'deals.all')],
+        ],
+        'nav.grp.owners' => [
+            'welcome'     => [t('nav.welcome'),     'welcome.php',     'phone', can('owners.welcome')],
+            'calendar'    => [t('nav.calendar'),    'calendar.php',    'cal',   can('stays.manage')],
+            'history'     => [t('nav.history'),     'history.php',     'clock', can_any('owners.welcome', 'stays.manage')],
+            'collection'  => [t('nav.collection'),  'instalments.php', 'cash',  can('payments.record')],
+            'clients:all' => [t('nav.all_clients'), $C('all'),         'users', can('clients.view_all')],
+        ],
+        'nav.grp.finance' => [
+            'review'       => [t('nav.review'),     'review.php',       'check', can('contracts.review')],
+            'reservations' => [t('nav.statements'), 'reservations.php', 'doc',   can('contracts.view')],
+            'collection_f' => [t('nav.collection'), 'instalments.php',  'cash',  can('contracts.view') && !can('payments.record')],
+        ],
+        'nav.grp.admin' => [
+            'projects'  => [t('nav.projects'),  'projects.php',           'pin',  can('projects.manage')],
+            'whatsapp'  => [t('nav.whatsapp'),  'whatsapp.php',           'chat', $admin],
+            'templates' => [t('nav.templates'), 'contract_templates.php', 'doc',  $admin],
+            'users'     => [t('nav.users'),     'users.php',              'team', $admin],
+            'roles'     => [t('nav.roles'),     'roles.php',              'key',  $admin],
+            'settings'  => [t('nav.settings'),  'settings.php',           'gear', $admin],
+        ],
     ];
-    return array_filter($all, fn($i) => $i['show']);
+    $out = [];
+    foreach ($groups as $g => $items) {
+        $items = array_filter($items, fn($i) => $i[3]);
+        if ($items) $out[$g] = $items;
+    }
+    return $out;
 }
 
 function nav_icon(string $key): string
@@ -43,6 +73,10 @@ function nav_icon(string $key): string
         'search'=> '<circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5l3.5 3.5"/>',
         'chat'  => '<path d="M2.5 3.5h11a1 1 0 011 1v6a1 1 0 01-1 1H6l-3 2.5V11.5H2.5a1 1 0 01-1-1v-6a1 1 0 011-1z"/>',
         'key'   => '<circle cx="5" cy="8" r="3"/><path d="M8 8h6.5M12 8v2.5M14 8v2"/>',
+        'door'  => '<path d="M3 14.5h10M4.5 14.5V2h7v12.5"/><circle cx="9.5" cy="8.5" r=".7" fill="currentColor"/>',
+        'phone' => '<path d="M4 2h2.5l1 3-1.5 1a8 8 0 004 4l1-1.5 3 1V12a2 2 0 01-2 2A10 10 0 012 4a2 2 0 012-2z"/>',
+        'clock' => '<circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/>',
+        'check' => '<circle cx="8" cy="8" r="6"/><path d="M5.5 8.2l1.7 1.7 3.3-3.6"/>',
         'gear'  => '<circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4"/>',
     ];
     return "<svg $s>" . ($icons[$key] ?? $icons['grid']) . '</svg>';
@@ -109,10 +143,13 @@ function layout_header(string $title, string $active): void
 <div class="shell">
   <aside class="sidebar">
     <nav class="sb-nav">
-      <?php foreach (nav_items($u['role']) as $key => $item): ?>
-        <a class="sb-link <?= $key === $active ? 'active' : '' ?>" href="<?= e($item['url']) ?>">
-          <?= nav_icon($item['icon']) ?> <span><?= e($item['label']) ?></span>
-        </a>
+      <?php foreach (nav_groups($u['role']) as $group => $items): ?>
+        <?php if ($group !== ''): ?><div class="sb-group"><?= e(t($group)) ?></div><?php endif; ?>
+        <?php foreach ($items as $key => [$label, $url, $icon]): ?>
+          <a class="sb-link <?= $key === $active || ($active === 'collection' && $key === 'collection_f') ? 'active' : '' ?>" href="<?= e($url) ?>">
+            <?= nav_icon($icon) ?> <span><?= e($label) ?></span>
+          </a>
+        <?php endforeach; ?>
       <?php endforeach; ?>
     </nav>
     <div class="sb-foot"><?= e(t('auth.signed_in_as')) ?><br>

@@ -11,12 +11,12 @@ require __DIR__ . '/_init.php';
  * contract data after that; the plan itself changes only through Reschedule
  * on the statement.
  */
-require_cap('clients.close', 'contracts.edit');
+require_cap('clients.close', 'deals.all', 'contracts.edit');
 
 $cid = (int) ($_GET['client'] ?? 0);
 $c   = client_or_403($cid, $ME);
 $editor = can('contracts.edit');
-if (!$editor && (int) $c['sales_id'] !== $ME['id']) { http_response_code(403); exit(t('err.forbidden')); }
+if (!$editor && !can('deals.all') && (int) $c['sales_id'] !== $ME['id']) { http_response_code(403); exit(t('err.forbidden')); }
 
 $ct = db_row("SELECT * FROM contracts WHERE client_id = ?", [$cid]);
 if (!$ct && $c['stage'] !== 'arrived') {
@@ -112,6 +112,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             [$val['official_name'], $val['national_id'], $val['nationality'] ?: null, $birth, $val['address'] ?: null, $val['phone'] ?: null,
              $val['email'] ?: null, $val['second_party'] ?: null, (int) $val['project_id'], $val['unit_type'] ?: null, $val['season'] ?: null,
              $wpy, $dur, $sy, $val['notes'] ?: null, $ct['id']]);
+        db_run("UPDATE contracts SET finance_status = 'pending' WHERE id = ? AND finance_status = 'returned'", [$ct['id']]);
         log_event($cid, 'contract_edited', t('contract.data_only'));
         flash(t('contract.saved_data'));
         redirect('contract.php?id=' . (int) $ct['id']);
@@ -134,6 +135,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         project_id=?, unit_type=?, season=?, weeks_per_year=?, duration_years=?, start_year=?, currency=?, total_amount=?, down_pct=?, down_amount=?,
                         months=?, monthly_amount=?, first_due_date=?, notes=?, updated_at=NOW() WHERE id=?", array_merge($data, [$contractId]));
                 db_run("DELETE FROM instalments WHERE contract_id = ?", [$contractId]);
+                // A contract Finance sent back goes back into their queue once corrected.
+                db_run("UPDATE contracts SET finance_status = 'pending' WHERE id = ? AND finance_status = 'returned'", [$contractId]);
             } else {
                 $contractId = db_insert("INSERT INTO contracts (contract_date, official_name, national_id, nationality, birth_date, address, phone, email, second_party,
                         project_id, unit_type, season, weeks_per_year, duration_years, start_year, currency, total_amount, down_pct, down_amount,

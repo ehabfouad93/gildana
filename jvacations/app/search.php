@@ -29,7 +29,7 @@ if ($active) {
     if ($to)   { $where[] = "$col <= ?"; $params[] = $to; }
 
     $found = db_all(
-        "SELECT c.*, a.name AS advisor_name, s.name AS sales_name, ct.id AS contract_id, ct.contract_no, ct.official_name, ct.national_id
+        "SELECT c.*, a.name AS advisor_name, COALESCE(s.name, c.sales_rep_name) AS sales_name, ct.id AS contract_id, ct.contract_no, ct.official_name, ct.national_id
            FROM clients c
            LEFT JOIN contracts ct ON ct.client_id = c.id
            LEFT JOIN users a ON a.id = c.created_by

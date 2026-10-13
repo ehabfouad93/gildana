@@ -15,6 +15,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     verify_csrf();
     if (($_POST['do'] ?? '') === 'reset') {
         save_setting('role_caps', '');
+        save_setting('role_caps_known', '');
         flash(t('roles.reset_done'));
         redirect('roles.php');
     }
@@ -23,6 +24,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $map[$r] = array_values(array_intersect($caps, (array) ($_POST['cap'][$r] ?? [])));
     }
     save_setting('role_caps', json_encode($map));
+    save_setting('role_caps_known', json_encode($caps));
     flash(t('ui.saved'));
     redirect('roles.php');
 }

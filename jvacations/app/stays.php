@@ -71,7 +71,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $ct) {
     redirect($back);
 }
 
-layout_header(t('nav.stays'), 'stays');
+layout_header(t('nav.stays'), 'calendar');
 
 /* ───────── one owner ───────── */
 if ($ct):

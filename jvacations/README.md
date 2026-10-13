@@ -41,6 +41,19 @@ client has **one number** (`#12`) shown on every step, the contract and the
 statement. The search box at the top finds a client by that number, contract
 number, any phone format, national ID or name.
 
+## Department tabs
+
+The menu follows the system interface proposal: one group per department.
+
+| Department | Tabs |
+|---|---|
+| **Marketing** | Invitation (add clients) · Booking / Confirmation · Attendance (the secretary records arrival; handing to a sales manager is optional) |
+| **Sales** | Attendance (the sales manager picks a sales user *or types the rep's name*; optional) · Deal / Contract |
+| **Owner Services** | Contract / Welcome call (review the contract; log calls, WhatsApp and comments; mark welcomed) · Usage calendar (month view of every stay) · Client history (everything about an owner on one page) · Collection |
+| **Finance** | Contract review (approve, or return to sales with a note; a corrected contract comes back) · Client statement · Collection |
+
+Every new contract starts as *welcome pending* and *finance: to review*.
+
 ## WhatsApp automations
 
 Admin → WhatsApp connects the **Meta WhatsApp Cloud API** (token, phone number

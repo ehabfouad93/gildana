@@ -9,8 +9,10 @@ require __DIR__ . '/_init.php';
  * ?lang=ar|en picks the contract language independently of the UI language.
  */
 $id = (int) ($_GET['id'] ?? 0);
-$ct = db_row("SELECT ct.*, p.name AS project_name, p.location AS project_location, u.name AS sales_name
+$ct = db_row("SELECT ct.*, p.name AS project_name, p.location AS project_location,
+                     COALESCE(su.name, cl.sales_rep_name, u.name) AS sales_name
                 FROM contracts ct JOIN projects p ON p.id = ct.project_id LEFT JOIN users u ON u.id = ct.created_by
+                JOIN clients cl ON cl.id = ct.client_id LEFT JOIN users su ON su.id = cl.sales_id
                WHERE ct.id = ?", [$id]);
 if (!$ct) { http_response_code(404); exit(t('err.not_found')); }
 $c = client_or_403((int) $ct['client_id'], $ME);

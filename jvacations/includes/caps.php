@@ -18,13 +18,17 @@ function cap_defaults(): array
         'clients.add'          => ['advisor'],
         'clients.book'         => ['booker'],
         'clients.confirm'      => ['communicator'],
-        'clients.arrive'       => ['sales_manager'],
+        'clients.arrive'       => ['secretary', 'sales_manager'],
+        'clients.assign_sales' => ['sales_manager'],
         'clients.close'        => ['sales'],
+        'deals.all'            => ['sales_manager'],
         'clients.view_all'     => ['owner_services', 'sales_manager'],
         'clients.edit'         => [],
         'contracts.view'       => ['accountant', 'owner_services', 'sales_manager'],
         'contracts.edit'       => [],
         'contracts.reschedule' => [],
+        'contracts.review'     => ['accountant'],
+        'owners.welcome'       => ['owner_services'],
         'payments.record'      => ['owner_services'],
         'stays.manage'         => ['owner_services'],
         'projects.manage'      => ['owner_services'],
@@ -46,10 +50,17 @@ function role_caps(): array
     }
     $saved = json_decode(setting('role_caps'), true);
     if (is_array($saved)) {
-        $known = array_keys(cap_defaults());
+        $all = array_keys(cap_defaults());
+        // Capabilities added after the admin last saved the Roles page keep their
+        // defaults until the admin decides otherwise.
+        $seen = json_decode(setting('role_caps_known'), true);
+        $seen = is_array($seen) ? $seen : ['clients.add', 'clients.book', 'clients.confirm', 'clients.arrive', 'clients.close',
+            'clients.view_all', 'clients.edit', 'contracts.view', 'contracts.edit', 'contracts.reschedule', 'payments.record',
+            'stays.manage', 'projects.manage', 'whatsapp.send', 'export.csv'];
         foreach ($saved as $role => $caps) {
             if (!isset($map[$role]) || $role === 'admin' || !is_array($caps)) continue;
-            $map[$role] = array_values(array_intersect($known, $caps));
+            $newer = array_values(array_intersect($map[$role], array_diff($all, $seen)));
+            $map[$role] = array_values(array_unique(array_merge(array_intersect($all, $caps), $newer)));
         }
     }
     return $map;

@@ -102,30 +102,36 @@ switch ($action) {
         wa_fire('cancelled', $id);
         done($id, $back);
 
-    case 'arrive': // sales manager: the client is at the office → hand to a sales rep
+    case 'arrive': // secretary: the client is at the office. Handing to a sales manager is optional.
         require_cap('clients.arrive');
         if (!in_array($c['stage'], ['booked', 'confirmed'], true)) fail(t('err.wrong_stage'), $back);
-        $sid = sales_input($back, true);
-        db_run("UPDATE clients SET stage='arrived', manager_id=?, arrived_at=NOW(), sales_id=?, updated_at=NOW() WHERE id=?", [$ME['id'], $sid, $id]);
-        $rep = (string) db_val("SELECT name FROM users WHERE id = ?", [$sid]);
-        log_event($id, 'arrived', $rep . ($note !== '' ? ' — ' . $note : ''));
-        flash(t('flash.arrived', ['name' => $rep]));
+        $mid = (int) ($_POST['manager_id'] ?? 0);
+        if ($mid && !db_val("SELECT 1 FROM users WHERE id = ? AND role = 'sales_manager' AND status = 'active'", [$mid])) fail(t('err.bad_manager'), $back);
+        db_run("UPDATE clients SET stage='arrived', secretary_id=?, arrived_at=NOW(), manager_id=?, updated_at=NOW() WHERE id=?",
+            [$ME['id'], $mid ?: ($c['manager_id'] ?: null), $id]);
+        $mgr = $mid ? (string) db_val("SELECT name FROM users WHERE id = ?", [$mid]) : '';
+        log_event($id, 'arrived', trim(($mgr !== '' ? t('event.to_manager', ['name' => $mgr]) : '') . ($note !== '' ? ' — ' . $note : ''), ' —'));
+        flash($mgr !== '' ? t('flash.arrived_mgr', ['name' => $mgr]) : t('flash.arrived_plain'));
         wa_fire('arrived', $id);
         done($id, $back);
 
-    case 'assign': // sales manager: change the rep on a client already at the office
-        require_cap('clients.arrive');
+    case 'assign': // sales manager: pick a sales user, or just write the rep's name
+        require_cap('clients.assign_sales');
         if ($c['stage'] !== 'arrived') fail(t('err.wrong_stage'), $back);
-        $sid = sales_input($back, true);
-        db_run("UPDATE clients SET sales_id=?, manager_id=?, updated_at=NOW() WHERE id=?", [$sid, $ME['id'], $id]);
-        log_event($id, 'sales_assigned', (string) db_val("SELECT name FROM users WHERE id = ?", [$sid]) . ($note !== '' ? ' — ' . $note : ''));
-        flash(t('ui.saved'));
+        $sid  = sales_input($back);
+        $name = mb_substr(post_str('sales_rep_name'), 0, 120);
+        if (!$sid && $name === '') fail(t('err.need_rep'), $back);
+        db_run("UPDATE clients SET sales_id=?, sales_rep_name=?, manager_id=?, updated_at=NOW() WHERE id=?",
+            [$sid, $sid ? null : $name, $ME['id'], $id]);
+        $rep = $sid ? (string) db_val("SELECT name FROM users WHERE id = ?", [$sid]) : $name;
+        log_event($id, 'sales_assigned', $rep . ($note !== '' ? ' — ' . $note : ''));
+        flash(t('flash.rep_assigned', ['name' => $rep]));
         done($id, $back);
 
-    case 'lost': // sales: the meeting did not close
-        require_cap('clients.close');
-        if (!$admin && (int) $c['sales_id'] !== $ME['id']) fail(t('err.forbidden'), $back);
+    case 'lost': // sales (own client) or sales manager: the meeting did not close
+        require_cap('clients.close', 'deals.all');
         if ($c['stage'] !== 'arrived') fail(t('err.wrong_stage'), $back);
+        if (!can_close_client($ME, $c)) fail(t('err.forbidden'), $back);
         if ($note === '') fail(t('err.need_reason'), $back);
         db_run("UPDATE clients SET stage='lost', closed_at=NOW(), lost_reason=?, updated_at=NOW() WHERE id=?", [mb_substr($note, 0, 255), $id]);
         log_event($id, 'lost', $note);

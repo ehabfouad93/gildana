@@ -7,7 +7,7 @@ declare(strict_types=1);
  * decided by can_view_client() in domain.php.
  */
 
-const ROLES = ['admin', 'advisor', 'booker', 'communicator', 'sales_manager', 'sales', 'accountant', 'owner_services'];
+const ROLES = ['admin', 'advisor', 'booker', 'communicator', 'secretary', 'sales_manager', 'sales', 'accountant', 'owner_services'];
 
 function attempt_login(string $email, string $password): bool
 {
