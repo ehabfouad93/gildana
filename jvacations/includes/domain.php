@@ -293,6 +293,28 @@ function excerpt_name(string $name): string
     return implode(' ', array_slice($w, 0, 2));
 }
 
+/** Who may see an owner's holiday reservations and print their confirmations. */
+function can_view_stays(array $u, array $c): bool
+{
+    return can_any_u($u, 'stays.manage', 'owners.welcome') || can_view_contract($u, $c);
+}
+
+/** Holiday reservation number shown on the confirmation, e.g. HR-000042. */
+function stay_code(int $id): string
+{
+    return 'HR-' . str_pad((string) $id, 6, '0', STR_PAD_LEFT);
+}
+
+/** View / print / Word buttons for one holiday reservation. */
+function stay_doc_buttons(int $stayId): string
+{
+    return '<span class="btn-row nowrap">'
+         . '<a class="btn btn-sm" href="stay_voucher.php?id=' . $stayId . '">' . e(t('voucher.view')) . '</a>'
+         . '<a class="btn btn-sm" href="stay_voucher.php?id=' . $stayId . '&amp;print=1" target="_blank" title="' . e(t('doc.print')) . '">🖨</a>'
+         . '<a class="btn btn-sm" href="stay_voucher.php?id=' . $stayId . '&amp;download=doc" title="' . e(t('doc.download')) . '">⬇</a>'
+         . '</span>';
+}
+
 function welcome_kinds(): array    { return ['call', 'whatsapp', 'note']; }
 function welcome_outcomes(): array { return ['reached', 'no_answer', 'call_back', 'wrong_number', 'issue']; }
 

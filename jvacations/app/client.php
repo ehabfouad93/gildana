@@ -114,6 +114,7 @@ $closed  = in_array($c['stage'], ['lost', 'cancelled'], true);
     </dl>
   </div>
   <?php endif; ?>
+  <?php if ($contract && can_view_stays($ME, $c)): ?><?= stays_card((int) $contract['id']) ?><?php endif; ?>
 </div>
 
 <div>

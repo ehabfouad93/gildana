@@ -211,3 +211,32 @@ function dl_row(string $label, ?string $value, bool $raw = false): string
     $v = ($value === null || $value === '') ? '<span class="text-muted">—</span>' : ($raw ? $value : e($value));
     return '<div class="dl-row"><dt>' . e($label) . '</dt><dd>' . $v . '</dd></div>';
 }
+
+/**
+ * "Holiday reservations" card for one contract: every stay with its own
+ * View / Print / Word buttons. Shared by the client profile and client history.
+ */
+function stays_card(int $contractId): string
+{
+    $stays = db_all("SELECT s.*, p.name AS project_name FROM stays s JOIN projects p ON p.id = s.project_id
+                      WHERE s.contract_id = ? ORDER BY s.check_in DESC", [$contractId]);
+    $head = '<div class="card-head"><h2>' . e(t('voucher.list')) . ' <span class="tab-count">' . count($stays) . '</span></h2>'
+          . (can('stays.manage') ? '<a class="btn btn-sm btn-primary" href="stays.php?contract=' . $contractId . '">' . e(t('stay.new')) . '</a>' : '')
+          . '</div>';
+    if (!$stays) return '<div class="card card-flush" id="holidays">' . $head . '<div class="empty">' . e(t('stay.empty')) . '</div></div>';
+
+    $rows = '';
+    foreach ($stays as $s) {
+        $status = $s['status'] === 'confirmed'
+            ? '<span class="pill green">' . e(t('stay.confirmed')) . '</span>'
+            : '<span class="pill gray">' . e(t('stay.cancelled_lbl')) . '</span>';
+        $rows .= '<tr class="' . ($s['status'] === 'cancelled' ? 'row-muted' : '') . '">'
+               . '<td class="mono nowrap">' . e(stay_code((int) $s['id'])) . '</td>'
+               . '<td class="nowrap"><strong>' . e(fmt_date($s['check_in'])) . '</strong> → ' . e(fmt_date($s['check_out']))
+               . '<div class="small text-muted">' . e(fmt_time($s['check_in_time'])) . ' · ' . e(t('stay.weeks_n', ['n' => (string) $s['weeks']])) . '</div></td>'
+               . '<td>' . e($s['project_name']) . ($s['unit_type'] ? '<div class="small text-muted">' . e($s['unit_type']) . '</div>' : '') . '</td>'
+               . '<td>' . $status . '</td>'
+               . '<td class="nowrap">' . stay_doc_buttons((int) $s['id']) . '</td></tr>';
+    }
+    return '<div class="card card-flush" id="holidays">' . $head . '<div class="table-wrap"><table class="data"><tbody>' . $rows . '</tbody></table></div></div>';
+}

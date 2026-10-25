@@ -592,3 +592,16 @@ table.data th { color: var(--accent); }
 .chips-row .chip.on { background: var(--brand); border-color: var(--brand); color: var(--on-brand); font-weight: 600; }
 table.data.roles-matrix th { text-transform: none; letter-spacing: 0; }
 table.data.roles-matrix th .pill { font-size: 11px; max-width: 100%; }
+
+/* ───── v4: calendar/table switch, holiday confirmations ───── */
+.view-switch { display: inline-flex; gap: 0; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; }
+.seg-link { padding: 7px 14px; font-size: 13px; text-decoration: none; color: var(--ink); background: var(--panel); }
+.seg-link + .seg-link { border-inline-start: 1px solid var(--line-strong); }
+.seg-link.on { background: var(--brand); color: var(--on-brand); font-weight: 600; }
+.stay-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; justify-content: flex-start; }
+.stay-filters select, .stay-filters input { width: auto; }
+.stay-filters .grow-input { flex: 1; min-width: 220px; }
+.mini-date { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--muted); }
+.mini-date input { padding: 6px 8px; font-size: 12.5px; }
+#holidays .btn-sm { padding: 4px 8px; }
+table.data td .btn-row { flex-wrap: nowrap; display: inline-flex; gap: 4px; vertical-align: middle; }

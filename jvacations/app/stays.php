@@ -25,7 +25,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $ct) {
     if (($_POST['action'] ?? '') === 'cancel') {
         $sid = (int) ($_POST['stay_id'] ?? 0);
         $n = db_run("UPDATE stays SET status = 'cancelled' WHERE id = ? AND contract_id = ? AND status = 'confirmed'", [$sid, $cid]);
-        if ($n) log_event((int) $ct['client_id'], 'stay_cancelled', '#' . $sid);
+        if ($n) log_event((int) $ct['client_id'], 'stay_cancelled', stay_code($sid));
         flash(t('stay.cancelled'));
         redirect($back);
     }
@@ -122,8 +122,9 @@ if ($ct):
             <?= $s['notes'] ? '<div class="small text-muted" dir="auto">' . e($s['notes']) . '</div>' : '' ?></td>
           <td><?= (int) $s['weeks'] ?><?= $s['guests'] ? ' · ' . e(t('stay.guests_n', ['n' => (string) $s['guests']])) : '' ?></td>
           <td><?= $s['status'] === 'confirmed' ? '<span class="pill green">' . e(t('stay.confirmed')) . '</span>' : '<span class="pill gray">' . e(t('stay.cancelled_lbl')) . '</span>' ?></td>
-          <td><?php if ($s['status'] === 'confirmed'): ?>
-            <form method="post" data-confirm-form="<?= e(t('stay.cancel_q')) ?>"><?= csrf_field() ?><input type="hidden" name="action" value="cancel"><input type="hidden" name="stay_id" value="<?= (int) $s['id'] ?>">
+          <td class="nowrap"><?= stay_doc_buttons((int) $s['id']) ?>
+            <?php if ($s['status'] === 'confirmed'): ?>
+            <form method="post" class="inline" data-confirm-form="<?= e(t('stay.cancel_q')) ?>"><?= csrf_field() ?><input type="hidden" name="action" value="cancel"><input type="hidden" name="stay_id" value="<?= (int) $s['id'] ?>">
               <button class="btn btn-sm btn-danger-ghost" type="submit"><?= e(t('ui.cancel')) ?></button></form>
           <?php endif; ?></td>
         </tr>
@@ -229,7 +230,7 @@ else:
         <td><?= e($s['project_name']) ?><?= $s['unit_type'] ? '<div class="small text-muted">' . e($s['unit_type']) . '</div>' : '' ?></td>
         <td><?= e($s['official_name']) ?><div class="small text-muted"><span class="mono"><?= e($s['contract_no']) ?></span> · <span dir="ltr"><?= e($s['phone']) ?></span></div></td>
         <td><?= (int) $s['weeks'] ?><?= $s['guests'] ? ' · ' . e(t('stay.guests_n', ['n' => (string) $s['guests']])) : '' ?></td>
-        <td><a class="btn btn-sm" href="stays.php?contract=<?= (int) $s['contract_id'] ?>"><?= e(t('ui.open')) ?></a></td>
+        <td class="nowrap"><?= stay_doc_buttons((int) $s['id']) ?> <a class="btn btn-sm btn-ghost" href="stays.php?contract=<?= (int) $s['contract_id'] ?>"><?= e(t('ui.open')) ?></a></td>
       </tr>
     <?php endforeach; ?>
     </tbody>

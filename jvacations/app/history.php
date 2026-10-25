@@ -61,6 +61,7 @@ if ($cid):
   <div class="stat-tile"><span class="lbl"><?= e(t('nav.welcome')) ?></span><span class="val small-val"><?= welcome_pill($ct['welcome_status']) ?></span><span class="sub"><?= finance_pill($ct['finance_status']) ?></span></div>
 </div>
 <?php endif; ?>
+<?php if ($ct): ?><?= stays_card((int) $ct['id']) ?><?php endif; ?>
 <div class="chips-row">
   <a class="chip <?= $type === '' ? 'on' : '' ?>" href="?client=<?= $cid ?>"><?= e(t('tab.all')) ?> (<?= array_sum($counts) ?>)</a>
   <?php foreach (['pipeline', 'contract', 'payment', 'stay', 'welcome', 'whatsapp', 'note'] as $g): if (empty($counts[$g])) continue; ?>
