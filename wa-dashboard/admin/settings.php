@@ -89,6 +89,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         redirect('settings.php#google');
     }
 
+    if ($action === 'save_apps') {
+        // Connected apps: the platform's Shopify app and Zoho client. Secrets: blank = keep.
+        setting_set('shopify_api_key', trim((string) ($_POST['shopify_api_key'] ?? '')));
+        $sec = trim((string) ($_POST['shopify_api_secret'] ?? ''));
+        if ($sec !== '') setting_set('shopify_api_secret', encrypt_secret($sec));
+        setting_set('zoho_client_id', trim((string) ($_POST['zoho_client_id'] ?? '')));
+        $sec = trim((string) ($_POST['zoho_client_secret'] ?? ''));
+        if ($sec !== '') setting_set('zoho_client_secret', encrypt_secret($sec));
+        flash('Connected apps settings saved.');
+        redirect('settings.php#apps');
+    }
+
     if ($action === 'save_meta') {
         setting_set('meta_app_id', preg_replace('/\D+/', '', (string) ($_POST['meta_app_id'] ?? '')));
         $sec = trim((string) ($_POST['meta_app_secret'] ?? ''));
@@ -352,6 +364,44 @@ if ($ok):  ?><div class="alert success"><?= e($ok) ?></div><?php endif; ?>
       <code>calendar.events</code> scope on the consent screen (Google reviews apps that use it). Clients reconnect Google once after you turn it on.
       Without it, meetings use the salesperson's own room link or a free Jitsi room.</p>
     <button type="submit" class="btn btn-primary">Save Google settings</button>
+  </form>
+</div>
+
+<?php
+  require_once __DIR__ . '/../includes/integrations.php';
+  $shC = shopify_cfg(); $zC = zoho_cfg();
+  $appsN = [];
+  try { foreach (db_all("SELECT provider, COUNT(*) n FROM integrations WHERE status<>'disconnected' GROUP BY provider") as $r) $appsN[$r['provider']] = (int) $r['n']; } catch (Throwable $e) {}
+?>
+<div class="card" id="apps">
+  <h2>Connected apps — Shopify &amp; Zoho</h2>
+  <p class="text-muted" style="font-size:12.5px;margin:-6px 0 14px">Gives clients a one-click <strong>Connect</strong> button under Connected apps.
+    Without these, clients can still connect with their own keys (a Shopify custom app or a Zoho Self Client).
+    In use: <?= (int) ($appsN['shopify'] ?? 0) ?> Shopify store(s), <?= (int) ($appsN['zoho_crm'] ?? 0) ?> Zoho CRM, <?= (int) (($appsN['zoho_books'] ?? 0) + ($appsN['zoho_inventory'] ?? 0)) ?> Zoho Books / Inventory.</p>
+  <form method="post">
+    <?= csrf_field() ?><input type="hidden" name="action" value="save_apps">
+    <div class="alert info" style="font-size:12.5px;margin-bottom:12px"><strong>Shopify app</strong> — in the Shopify Partner Dashboard (or Dev Dashboard), create an app, then:
+      <ol style="margin:8px 0 0;padding-inline-start:18px;line-height:1.8">
+        <li>App URL and allowed redirection URL: <span class="mono"><?= e(shopify_redirect_uri()) ?></span></li>
+        <li>Compliance webhooks (customer data request, customer erasure, shop erasure): <span class="mono"><?= e(shopify_webhook_url()) ?></span></li>
+        <li>Request access to <strong>protected customer data</strong> (name, email, phone, address) — Shopify must approve it before orders carry customer details.</li>
+        <li>Paste the app's Client ID and Client secret below.</li></ol></div>
+    <div class="grid2">
+      <div class="field"><span class="lbl">Shopify Client ID (API key)</span><input type="text" name="shopify_api_key" value="<?= e($shC['api_key']) ?>" autocomplete="off"></div>
+      <div class="field"><span class="lbl">Shopify Client secret <?= $shC['api_secret'] !== '' ? '<span class="pill green" style="margin-inline-start:6px">••• set</span>' : '' ?></span>
+        <input type="text" name="shopify_api_secret" autocomplete="off" placeholder="<?= $shC['api_secret'] !== '' ? 'Leave blank to keep current' : 'Paste the client secret' ?>"></div>
+    </div>
+    <div class="alert info" style="font-size:12.5px;margin:6px 0 12px"><strong>Zoho client</strong> — at <span class="mono">api-console.zoho.com</span>: <strong>Add client → Server-based Applications</strong>, then:
+      <ol style="margin:8px 0 0;padding-inline-start:18px;line-height:1.8">
+        <li>Authorized Redirect URI: <span class="mono"><?= e(zoho_redirect_uri()) ?></span></li>
+        <li>In the client's <strong>Settings</strong>, turn on <strong>Multi-DC</strong> for every data centre your clients use (EU, India, Australia, Japan, Canada, Saudi Arabia).</li>
+        <li>Paste the Client ID and Client Secret below. One client serves Zoho CRM, Books and Inventory.</li></ol></div>
+    <div class="grid2">
+      <div class="field"><span class="lbl">Zoho Client ID</span><input type="text" name="zoho_client_id" value="<?= e($zC['client_id']) ?>" autocomplete="off" placeholder="1000.…"></div>
+      <div class="field"><span class="lbl">Zoho Client Secret <?= $zC['client_secret'] !== '' ? '<span class="pill green" style="margin-inline-start:6px">••• set</span>' : '' ?></span>
+        <input type="text" name="zoho_client_secret" autocomplete="off" placeholder="<?= $zC['client_secret'] !== '' ? 'Leave blank to keep current' : 'Paste the client secret' ?>"></div>
+    </div>
+    <button type="submit" class="btn btn-primary">Save Connected apps settings</button>
   </form>
 </div>
 

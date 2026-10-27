@@ -93,6 +93,7 @@
 | Automations / qualifier / agent | `flows` (`kind`: bot, qualifier, agent), `flow_steps`, `flow_triggers`, `flow_runs`, `flow_step_events`, `flow_messages`, `flow_collected`, `flow_exports`, `flow_templates` |
 | CRM | `crm_stages`, `crm_substatuses`, `crm_projects`, `crm_options`, `crm_fields`, `crm_events`, `crm_notes`, `crm_visits`, `crm_rules`, `crm_teams`, `crm_targets`, `crm_transfers`, `crm_requests`, `crm_views`, `crm_settings`, `crm_audit`, `crm_imports`, `crm_import_items`, `crm_materials`, `crm_notices`, `crm_stage_msgs`, `crm_sequences`, `crm_seq_steps`, `crm_seq_runs`, `crm_msg_queue`, `sales_events`, `sales_event_guests` |
 | CRM integrations | `crm_api_keys` (hashed, scopes `crm,sms`), `crm_webhooks`, `crm_webhook_deliveries`, `crm_inbound_hooks`, `crm_capi_events` |
+| Connected apps | `integrations`, `integration_links`, `integration_jobs`, `integration_log`, `integration_oauth_state`, `ext_orders` (§5.4) |
 | Meta | `meta_pages` (tokens encrypted; switches `leads_on`, `msg_on`, `ig_msg_on`, `comments_on`, `ig_comments_on`; `social_synced_at`, `last_event_at`), `meta_forms`, `meta_lead_log`, `meta_oauth_state`, `meta_ad_accounts`, `meta_ad_spend`, `social_comments`, `social_rules`, `social_optins` |
 | SMS | `sms_gateways` (platform or client-owned, config encrypted), `sms_messages`; client columns `sms_mode`, `sms_gateway_id`, `sms_allowed_gateways`, `sms_choice`, `sms_senders`, `sms_rate` |
 | Platform | `app_settings` (key/value), `push_subscriptions`, `push_outbox`, `push_outbox_user`, `access_requests`, `support_tickets`, `faq_items`, `google_oauth_state` |
@@ -204,6 +205,9 @@ Overview, clients (credentials, modules, channels, Facebook status, SMS card, se
 | `webhook_personal.php?k=` | Evolution API (personal WhatsApp) | per-client secret (rotatable, previous accepted during rotation) |
 | `crm_hook.php?t=` | Any external form/system → CRM lead | token (48 hex), stored hashed |
 | `meta_oauth.php`, `google_oauth.php` | OAuth callbacks | single-use `state` (1 hour) |
+| `webhook_shopify.php` | Shopify store events + the three privacy webhooks | `X-Shopify-Hmac-Sha256` (base64 HMAC of the body) with the app secret; shop must be connected; `X-Shopify-Event-Id` dedupe |
+| `webhook_zoho.php?t=` | Zoho CRM Notifications API | per-connection 48-hex token in the URL, echoed by Zoho in the body; records re-read from Zoho |
+| `shopify_oauth.php`, `zoho_oauth.php` | Connected apps OAuth callbacks | single-use `state`; Shopify query HMAC + shop match; Zoho accounts server from a fixed list |
 
 ### 5.2 REST API — `api.php/v1`
 `Authorization: Bearer <key>` or `X-Api-Key`; keys hashed (`crm_api_keys`), access `read`/`write`, scopes `crm`, `sms`; per-key rate limit (`api_rate_per_minute`). JSON `{data, meta}` / `{error:{status,message}}`.
@@ -222,8 +226,21 @@ Overview, clients (credentials, modules, channels, Facebook status, SMS card, se
 ### 5.3 Outgoing webhooks
 Events: `lead.created`, `lead.updated`, `lead.stage_changed`, `lead.won`, `lead.lost`, `lead.assigned`, `lead.deleted`, `activity.logged`, `visit.booked`, `sms.status`. Signed `X-Revenect-Signature` (HMAC-SHA256 of the body); retries logged in `crm_webhook_deliveries`; private-network targets refused (`safe_http_request()`).
 
-### 5.4 External services
-Meta Graph API (version `graph_version`), WhatsApp Cloud API, Meta Marketing API (ad spend), Conversions API, Google Sheets/Drive, Anthropic / OpenAI, SMS providers, Evolution API, Web Push (VAPID).
+### 5.4 Connected apps (Shopify, Zoho) — `client/apps.php`, `includes/integrations.php`, `includes/shopify.php`, `includes/zoho.php`
+Built-in connections, module `integrations` ("Connected apps" in the menu). Client Admins connect; others with the module can look.
+
+- **Tables (migration 067):** `integrations` (one store / Zoho org per row; tokens and secrets encrypted; `settings` JSON; `cursor_data` for polls), `integration_links` (outside id ↔ contact, with a fingerprint `sync_hash` to ignore echoes), `ext_orders` (orders, carts, invoices, sales orders; `notified` = events already handled, claimed atomically so nothing is sent twice), `integration_jobs` (outbound calls, 6 tries with backoff), `integration_log` (Log tab; unique event key drops repeated webhooks), `integration_oauth_state`.
+- **Connecting:** a Connect button through the platform's Shopify app / Zoho client (Admin → Settings → Connected apps), or keys: Shopify Admin API token, or client ID + secret (client-credentials tokens renewed automatically); Zoho Self Client ID + secret + grant code (or refresh token). Zoho data centres: com, eu, in, com.au, jp, ca, sa.
+- **Shopify:** webhooks (orders create/updated/paid/fulfilled/cancelled, fulfillments, customers, checkouts, app/uninstalled) registered by REST `webhooks.json`; customers → contacts (opt-in only with marketing consent, otherwise `opt_in_status='unknown'`: order updates yes, campaigns no); buyers (or everyone) → CRM with stage; first import of customers and N days of orders is quiet. Messages per event (placed, paid, shipped with tracking, cancelled, abandoned cart with optional second reminder) by WhatsApp template / SMS / WhatsApp-then-SMS via `crm_queue()` with `any_time` (skips working hours). Paid-at-checkout orders get one message, not two. Carts bought after a reminder are counted as recovered. 15-minute safety poll. Privacy webhooks erase stored orders / links.
+- **Zoho CRM:** every lead change (`crm_hook` → `crm_zoho_queue`) queues a push: Lead (or Contact) upsert with field and stage mapping and owner by email; Won converts the lead into a Contact + Deal (Closed Won), Lost / chosen stages keep a Deal. Zoho → Revenect via Notifications API (renewed every 6 days) plus a 5-minute `If-Modified-Since` poll; changes from Zoho carry origin `zoho_crm` and are never pushed back. Conversations, notes, calls and visits are batched into one Zoho Note per lead every 15 minutes.
+- **Zoho Books / Inventory:** invoices and sales orders polled every 10 minutes → invoice sent, payment received, order confirmed, shipped messages; what existed when connecting is recorded but not messaged.
+- **Automation triggers:** `shopify_order`, `shopify_paid`, `shopify_fulfilled`, `shopify_cancelled`, `shopify_abandoned`, `zoho_lead`, `zoho_invoice`, `zoho_payment`, `zoho_salesorder`, `zoho_shipped` (minimum total / product filter); offered only once the app is connected; steps can use `{{order_number}}`, `{{total}}`, `{{items}}`, `{{tracking_url}}`, `{{order_url}}`.
+- **Lead page:** "Orders & connected apps" card with orders, total spent and the Zoho record ids.
+- **Worker:** `integrations_tick()` in the automation section, before the CRM clock.
+- **Config (tests only):** `shopify_api_base`, `zoho_base`, `shopify_api_version` (default 2026-07), `zoho_crm_version` (default v7).
+
+### 5.5 External services
+Meta Graph API (version `graph_version`), WhatsApp Cloud API, Meta Marketing API (ad spend), Conversions API, Google Sheets/Drive, Shopify Admin API, Zoho CRM / Books / Inventory, Anthropic / OpenAI, SMS providers, Evolution API, Web Push (VAPID).
 
 ---
 

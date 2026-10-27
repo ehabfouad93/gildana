@@ -782,6 +782,32 @@ $ownerName = crm_user_name($lead['owner_user_id'] !== null ? (int) $lead['owner_
     </dl>
   </div>
 
+  <?php // Orders, carts, invoices and sales orders from Connected apps (Shopify, Zoho Books / Inventory), and the Zoho CRM record.
+  $extOrders = []; $extLinks = [];
+  try {
+      $extOrders = db_all("SELECT o.*, i.display_name app FROM ext_orders o JOIN integrations i ON i.id=o.integration_id WHERE o.contact_id=? AND o.client_id=? ORDER BY COALESCE(o.placed_at,o.created_at) DESC LIMIT 15", [$id, $cid]);
+      $extLinks = db_all("SELECT l.kind, l.ext_id, i.provider, i.display_name FROM integration_links l JOIN integrations i ON i.id=l.integration_id WHERE l.contact_id=? AND l.client_id=? AND i.status<>'disconnected'", [$id, $cid]);
+  } catch (Throwable $e) { /* migration 067 not applied */ }
+  if ($extOrders || $extLinks):
+      $kindL_ = ['order' => 'Order', 'checkout' => 'Cart', 'invoice' => 'Invoice', 'salesorder' => 'Sales order'];
+      $spent_ = 0.0; $cur_ = '';
+      foreach ($extOrders as $o_) if ($o_['kind'] === 'order' && !in_array($o_['status'], ['cancelled', 'refunded'], true)) { $spent_ += (float) $o_['total']; $cur_ = (string) $o_['currency']; } ?>
+  <details class="card lead-fold" id="orders" open>
+    <summary><h2 class="lead-card-h">Orders &amp; connected apps</h2></summary>
+    <?php if ($spent_ > 0): ?><div class="fold-row"><span>Spent</span><strong style="font-variant-numeric:tabular-nums"><?= e(trim($cur_ . ' ' . number_format($spent_, 2))) ?></strong></div><?php endif; ?>
+    <?php foreach ($extOrders as $o_): ?>
+      <div class="fold-row"><span><?= e($kindL_[$o_['kind']] ?? $o_['kind']) ?> <?= e((string) ($o_['number'] ?? '')) ?>
+          <?php if ($o_['total'] !== null): ?>· <?= e(trim(($o_['currency'] ?? '') . ' ' . number_format((float) $o_['total'], 2))) ?><?php endif; ?>
+          <?php if ($o_['items']): ?><small class="text-muted" style="display:block"><?= e(mb_substr((string) $o_['items'], 0, 100)) ?></small><?php endif; ?></span>
+        <span class="text-muted"><?= e(ucfirst((string) $o_['status'])) ?><?= $o_['placed_at'] ? ' · ' . e(date('j M', strtotime((string) $o_['placed_at']))) : '' ?>
+          <?php if ($o_['tracking_url']): ?> · <a href="<?= e((string) $o_['tracking_url']) ?>" target="_blank" rel="noopener noreferrer">Tracking</a><?php endif; ?></span></div>
+    <?php endforeach; ?>
+    <?php foreach ($extLinks as $l_): if ($l_['provider'] !== 'zoho_crm') continue; ?>
+      <div class="fold-row"><span>Zoho CRM <?= e(ucfirst((string) $l_['kind'])) ?></span><span class="text-muted ltr"><?= e((string) $l_['ext_id']) ?></span></div>
+    <?php endforeach; ?>
+  </details>
+  <?php endif; ?>
+
   <?php if ($hideBefore === null): ?>
   <details class="card lead-fold">
     <summary><h2 class="lead-card-h">Stage history</h2></summary>

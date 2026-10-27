@@ -47,6 +47,17 @@ function auto_trigger_kinds(): array
         'ig_comment'          => ['Instagram — a comment on your post or reel',    'ig_comments', 'posts'],
         'lead_form'           => ['Meta — a lead form is submitted',               '',            'forms'],
         'crm_stage'           => ['CRM — a lead reaches a stage',                  '',            'stage'],
+        // Connected apps (CRM → Connected apps). Shown only once the app is connected.
+        'shopify_order'       => ['Shopify — an order is placed',                  '',            'order'],
+        'shopify_paid'        => ['Shopify — an order is paid',                    '',            'order'],
+        'shopify_fulfilled'   => ['Shopify — an order ships',                      '',            'order'],
+        'shopify_cancelled'   => ['Shopify — an order is cancelled',               '',            'order'],
+        'shopify_abandoned'   => ['Shopify — a cart is abandoned',                 '',            'order'],
+        'zoho_lead'           => ['Zoho CRM — a lead comes in from Zoho',          '',            ''],
+        'zoho_invoice'        => ['Zoho — an invoice is sent',                     '',            'order'],
+        'zoho_payment'        => ['Zoho — a payment is received',                  '',            'order'],
+        'zoho_salesorder'     => ['Zoho — a sales order is confirmed',             '',            'order'],
+        'zoho_shipped'        => ['Zoho — a sales order ships',                    '',            'order'],
     ];
 }
 
@@ -56,10 +67,26 @@ function auto_trigger_kinds_for(array $client): array
     $out = [];
     foreach (auto_trigger_kinds() as $k => $t) {
         if ($t[1] !== '' && function_exists('client_has_channel') && !client_has_channel($client, $t[1])) continue;
-        if (in_array($k, ['lead_form', 'crm_stage'], true) && function_exists('crm_enabled') && !crm_enabled($client)) continue;
+        if (in_array($k, ['lead_form', 'crm_stage', 'zoho_lead'], true) && function_exists('crm_enabled') && !crm_enabled($client)) continue;
+        if (preg_match('/^(shopify|zoho)_/', $k) && !in_array(auto_trigger_app($k), $apps ??= auto_connected_apps($client), true)) continue;
         $out[$k] = $t;
     }
     return $out;
+}
+
+/** Which connected app a trigger kind needs: shopify, zoho_crm, or zoho_books / zoho_inventory ('zoho_orders'). */
+function auto_trigger_app(string $kind): string
+{
+    return str_starts_with($kind, 'shopify_') ? 'shopify' : ($kind === 'zoho_lead' ? 'zoho_crm' : 'zoho_orders');
+}
+
+/** The apps this client has connected (CRM → Connected apps), as auto_trigger_app() names them. */
+function auto_connected_apps(array $client): array
+{
+    try {
+        $p = db_all("SELECT DISTINCT provider FROM integrations WHERE client_id=? AND status<>'disconnected'", [(int) $client['id']]);
+    } catch (Throwable $e) { return []; }
+    return array_map(fn($r) => in_array($r['provider'], ['zoho_books', 'zoho_inventory'], true) ? 'zoho_orders' : (string) $r['provider'], $p);
 }
 
 function auto_flow_triggers(int $flowId): array
@@ -89,6 +116,7 @@ function auto_save_triggers(array $client, int $flowId, array $rows): void
                            'match_type' => in_array($c['match_type'] ?? '', ['exact', 'starts', 'contains'], true) ? $c['match_type'] : 'contains'],
             'forms'    => ['forms' => $list($c['forms'] ?? [])],
             'stage'    => ['stage_id' => (int) ($c['stage_id'] ?? 0)],
+            'order'    => ['min_total' => max(0, (float) ($c['min_total'] ?? 0)), 'contains' => $list($c['contains'] ?? [])],
             default    => [],
         };
         db_insert("INSERT INTO flow_triggers (flow_id,client_id,kind,config,active,sort) VALUES (?,?,?,?,?,?)",
@@ -270,7 +298,7 @@ function automation_handle_comment(array $client, array $comment, array $contact
     return true;
 }
 
-/** A Meta lead form came in, or a lead reached a stage: start the flows that wait for that. */
+/** A Meta lead form came in, a lead reached a stage, or a connected app sent an event: start the flows that wait for that. */
 function automation_handle_crm_event(array $client, int $contactId, string $kind, array $data): int
 {
     if (!db_has_column('flow_runs', 'channel')) return 0;
@@ -285,9 +313,15 @@ function automation_handle_crm_event(array $client, int $contactId, string $kind
         $c = json_decode((string) $f['trig_config'], true) ?: [];
         if ($kind === 'lead_form' && !empty($c['forms']) && !in_array((string) ($data['form_id'] ?? ''), (array) $c['forms'], true)) continue;
         if ($kind === 'crm_stage' && (int) ($c['stage_id'] ?? 0) !== (int) ($data['stage_id'] ?? 0)) continue;
+        // An order from a connected app: a minimum total, and/or products it must contain.
+        if (!empty($c['min_total']) && (float) ($data['total'] ?? 0) < (float) $c['min_total']) continue;
+        if (!empty($c['contains'])) {
+            $items = mb_strtolower((string) ($data['fields']['items'] ?? ''));
+            if (!array_filter((array) $c['contains'], fn($w) => $w !== '' && str_contains($items, mb_strtolower((string) $w)))) continue;
+        }
         // A person reached on WhatsApp when they have a number, else where they last wrote to us.
         $ch = !empty($contact['phone_e164']) ? 'whatsapp' : (!empty($contact['ig_sid']) ? 'instagram' : (!empty($contact['fb_psid']) ? 'messenger' : 'whatsapp'));
-        auto_start($client, $contact, $f, '', [], $ch, ['trigger_kind' => $kind]);
+        auto_start($client, $contact, $f, '', (array) ($data['fields'] ?? []), $ch, ['trigger_kind' => $kind]);   // fields: {{order_number}}, {{total}}…
         channel_route(null, true);
         $n++;
     }

@@ -469,12 +469,17 @@ try {
             // Lead-form safety net: re-read connected forms for leads Meta never announced.
             // Throttled per form inside meta_poll(), so this is cheap on most passes.
             $formLeads = function_exists('meta_poll') ? meta_poll()['imported'] : 0;
+            // Connected apps (Shopify, Zoho): their queued calls, polls, abandoned carts and Zoho notes.
+            // Before the CRM's clock, so order messages they queue go out in this same pass.
+            $apps = [];
+            try { require_once __DIR__ . '/../includes/integrations.php'; $apps = integrations_tick(); }
+            catch (Throwable $e) { out('Connected apps: ' . $e->getMessage()); }
             // The CRM's clock: follow-up reminders, the morning summary, response-time alerts,
             // taking back leads nobody contacted, stale leads, and fresh scores.
             $crm = function_exists('crm_auto_tick') ? crm_auto_tick() : [];
             // One push per client with pending inbound, however many messages arrived.
             $pushes   = push_dispatch() + push_dispatch_users();   // + "a lead was assigned to you"
-            out("Automation: resumed={$resumed} sheet_leads={$leads} campaign_followups={$followed} outreach_sent={$outreach} no_answer={$noAns} rescored={$rescored} social_fetched={$socialIn} form_leads={$formLeads} crm=" . json_encode($crm) . " pushes={$pushes}.");
+            out("Automation: resumed={$resumed} sheet_leads={$leads} campaign_followups={$followed} outreach_sent={$outreach} no_answer={$noAns} rescored={$rescored} social_fetched={$socialIn} form_leads={$formLeads} crm=" . json_encode($crm) . " apps=" . json_encode($apps) . " pushes={$pushes}.");
         } finally {
             $pdo->query("SELECT RELEASE_LOCK('wa_automation')");
         }

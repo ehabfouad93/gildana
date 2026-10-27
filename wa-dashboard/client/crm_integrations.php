@@ -111,6 +111,11 @@ client_header('Integrations', 'crm', $CLIENT);
 page_head('Integrations');
 if (!$ready): ?><div class="card"><p>Run the latest update (migration 058) to use integrations.</p></div><?php layout_footer(); exit; endif; ?>
 
+<?php if (can_use('integrations')): ?>
+<a class="card int-apps" href="apps.php" style="display:flex;gap:14px;align-items:center;justify-content:space-between;text-decoration:none;color:inherit">
+  <span><strong>Shopify and Zoho are built in.</strong> <span class="text-muted">Connect them with one button under Connected apps — orders to WhatsApp and SMS, abandoned carts, Zoho CRM both ways, Zoho Books and Inventory.</span></span>
+  <span class="btn btn-primary btn-sm">Connected apps →</span></a>
+<?php endif; ?>
 <p class="text-muted" style="margin-top:-6px">Connect the CRM to another CRM — or n8n, Zapier, Make, or your own system — in both directions.
   <strong>Send</strong> pushes each lead to the other side the moment something happens to it. <strong>Receive</strong> lets the other side add and update leads here.</p>
 

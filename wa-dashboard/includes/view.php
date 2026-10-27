@@ -110,6 +110,7 @@ function nav_items(string $role): array
         'automations' => ['label' => 'Automations',    'url' => 'automations.php', 'icon' => 'bot'],
         'qualifier'   => ['label' => 'Lead Qualifier', 'url' => 'qualifiers.php',  'icon' => 'target'],
         'agents'      => ['label' => 'AI Chat Agent',  'url' => 'agents.php',       'icon' => 'bot'],
+        'integrations'=> ['label' => 'Connected apps', 'url' => 'apps.php',         'icon' => 'plug'],
         'reports'     => ['label' => 'Reports',        'url' => 'reports.php',      'icon' => 'chart'],
         'billing'     => ['label' => 'Billing',        'url' => 'billing.php',      'icon' => 'doc'],
         'team'        => ['label' => 'Team',           'url' => 'team.php',         'icon' => 'team'],
@@ -169,10 +170,12 @@ function nav_children(string $group): array
                   ['Facebook & Instagram', 'meta_leads.php', 'meta_leads.php'],
                   ['Projects & lists', 'crm_setup.php', 'crm_setup.php'],
                   ['Integrations',     'crm_integrations.php', 'crm_integrations.php'],
+                  ['Connected apps',   'apps.php',      'apps.php'],
                   ['Stages',           'crm.php?stages=1', 'crm.php?stages'],
                   ['Requests & bin',   'crm_manage.php', 'crm_manage.php']] as $it)
             $items[] = [$it[0], $it[1], $it[2], 0, false, 'Administration'];
     }
+    if (function_exists('can_use') && !can_use('integrations')) $items = array_values(array_filter($items, fn($it) => $it[1] !== 'apps.php'));
     // Only the CRM pages this person was given (Team → under the CRM tick).
     if (function_exists('can_crm')) {
         $items = array_values(array_filter($items, function ($it) {
@@ -260,6 +263,7 @@ function nav_icon(string $key): string
         'target'=> "<circle cx=\"8\" cy=\"8\" r=\"6\"/><circle cx=\"8\" cy=\"8\" r=\"3\"/><circle cx=\"8\" cy=\"8\" r=\".6\" fill=\"currentColor\"/>",
         'inbox' => "<path d=\"M2 9.5l1.6-6a1 1 0 011-.8h6.8a1 1 0 011 .8l1.6 6v3a1 1 0 01-1 1H3a1 1 0 01-1-1v-3z\"/><path d=\"M2 9.5h3.5l1 1.5h3l1-1.5H14\"/>",
         'globe' => "<circle cx=\"8\" cy=\"8\" r=\"6.2\"/><path d=\"M1.8 8h12.4M8 1.8c1.8 1.9 2.6 3.9 2.6 6.2S9.8 12.3 8 14.2C6.2 12.3 5.4 10.3 5.4 8S6.2 3.7 8 1.8z\"/>",
+        'plug'  => "<path d=\"M6 1.5v3M10 1.5v3M4 4.5h8v3a4 4 0 01-8 0v-3zM8 11.5v3\"/>",
         'chat'  => "<path d=\"M2.5 3.5h11a1 1 0 011 1v6a1 1 0 01-1 1H6l-3 2.5V11.5H2.5a1 1 0 01-1-1v-6a1 1 0 011-1z\"/><path d=\"M5 6.5h6M5 9h4\"/>",
     ];
     return "<svg $s>" . ($icons[$key] ?? $icons['grid']) . "</svg>";

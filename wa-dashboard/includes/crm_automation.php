@@ -236,9 +236,11 @@ function crm_queue_tick(int $limit = 50): int
         if (!$c) { $done('skipped', 'The lead no longer exists.'); continue; }
         if (($c['opt_in_status'] ?? '') === 'out') { $done('skipped', 'They opted out of messages.'); continue; }
 
-        // Outside working hours: wait for the morning rather than message someone at midnight.
+        // Outside working hours: wait for the morning rather than message someone at midnight —
+        // except transactional messages (an order confirmation, a shipping update), which go at once.
+        $ctx = json_decode((string) ($q['context'] ?? ''), true) ?: [];
         $s = crm_settings($cid);
-        $next = crm_next_working_time($s, time());
+        $next = empty($ctx['any_time']) ? crm_next_working_time($s, time()) : time();
         if ($next > time() + 60) {
             db_run("UPDATE crm_msg_queue SET status='queued', due_at=? WHERE id=?", [date('Y-m-d H:i:s', $next), (int) $q['id']]);
             continue;
@@ -249,7 +251,6 @@ function crm_queue_tick(int $limit = 50): int
             if ($st === 'stopped') { $done('cancelled', 'The sequence was stopped.'); continue; }
         }
 
-        $ctx = json_decode((string) ($q['context'] ?? ''), true) ?: [];
         $by = (string) ($q['send_by'] ?? 'whatsapp');
         if ($by === 'sms') {
             if (!empty($c['sms_opt_out_at'])) { $done('skipped', 'They opted out of SMS.'); continue; }

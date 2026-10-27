@@ -77,6 +77,7 @@ function crm_hook(string $event, int $clientId, int $contactId, array $extra = [
 {
     if (!crm_int_ready()) return;
     if (!empty($GLOBALS['__crm_adding'][$contactId]) && $event !== 'lead.created') return;   // folded into "created"
+    crm_zoho_queue($event, $clientId, $contactId);
     static $hooks = [];
     try {
         $hooks[$clientId] ??= db_all("SELECT id, events, skip_api FROM crm_webhooks WHERE client_id=? AND active=1", [$clientId]);
@@ -92,6 +93,28 @@ function crm_hook(string $event, int $clientId, int $contactId, array $extra = [
         db_insert("INSERT INTO crm_webhook_deliveries (webhook_id,client_id,event,contact_id,payload,status,next_at,created_at) VALUES (?,?,?,?,?,'queued',NOW(),NOW())",
                   [(int) $h['id'], $clientId, $event, $contactId, $body]);
     }
+}
+
+/**
+ * A connected Zoho CRM (CRM → Connected apps) hears about every lead change: queue a push for the
+ * worker. Changes that came from Zoho itself are not sent back. Bursts (created, assigned, staged
+ * in one request) become one push, 20 seconds later.
+ */
+function crm_zoho_queue(string $event, int $clientId, int $contactId): void
+{
+    $zoho = &$GLOBALS['__crm_zoho'];                         // per request; integration_save() and friends clear it
+    if (crm_int_origin() === 'zoho_crm' || !in_array($event, ['lead.created', 'lead.updated', 'lead.stage_changed', 'lead.assigned', 'lead.won', 'lead.lost'], true)) return;
+    try {
+        $zoho ??= [];
+        $zoho[$clientId] ??= db_all("SELECT id, settings FROM integrations WHERE client_id=? AND provider='zoho_crm' AND status IN ('active','error')", [$clientId]);
+        foreach ($zoho[$clientId] as $z) {
+            $s = json_decode((string) $z['settings'], true) ?: [];
+            if (isset($s['push_leads']) && !$s['push_leads']) continue;
+            if (db_val("SELECT 1 FROM integration_jobs WHERE integration_id=? AND kind='push_lead' AND ref_id=? AND status='queued' LIMIT 1", [(int) $z['id'], $contactId])) continue;
+            db_insert("INSERT INTO integration_jobs (integration_id,client_id,kind,ref_id,status,attempts,next_at,created_at) VALUES (?,?,'push_lead',?,'queued',0,NOW() + INTERVAL 20 SECOND,NOW())",
+                      [(int) $z['id'], $clientId, $contactId]);
+        }
+    } catch (Throwable $e) { /* migration 067 not applied: nothing connected */ }
 }
 
 /** Forget the cached webhook list (after the Integrations page changes it, and in tests). */
@@ -282,7 +305,7 @@ function crm_int_map(array $payload, array $mapping): array
 function crm_int_upsert(array $client, array $d, array $o = []): array
 {
     $cid = (int) $client['id'];
-    $prev = crm_int_origin(); crm_int_origin('api');
+    $prev = crm_int_origin(); crm_int_origin((string) ($o['origin'] ?? 'api'));   // a connected app passes its own name
     try {
         $s = fn(string $k, int $len = 255) => mb_substr(trim((string) (is_scalar($d[$k] ?? null) ? $d[$k] : '')), 0, $len);
         $system = mb_substr(trim((string) ($o['system'] ?? '')), 0, 40);
@@ -303,8 +326,8 @@ function crm_int_upsert(array $client, array $d, array $o = []): array
         if ($c && $c['stage_id'] !== null && isset($o['update']) && !$o['update']) return ['ok' => false, 'error' => 'That lead already exists.', 'id' => (int) $c['id']];
         if (!$c) {
             if ($phone === '') return ['ok' => false, 'error' => 'A phone number is needed to add a lead.'];
-            $id = db_insert("INSERT INTO contacts (client_id,phone_e164,name,email,opt_in_status,source,created_at) VALUES (?,?,?,?,'in',?,NOW())",
-                            [$cid, $phone, $name, $email !== '' ? $email : null, $s('source', 30) ?: ($o['source'] ?? 'api')]);
+            $id = db_insert("INSERT INTO contacts (client_id,phone_e164,name,email,opt_in_status,source,created_at) VALUES (?,?,?,?,?,?,NOW())",
+                            [$cid, $phone, $name, $email !== '' ? $email : null, (string) ($o['opt_in'] ?? 'in'), $s('source', 30) ?: ($o['source'] ?? 'api')]);
             $c = db_row("SELECT * FROM contacts WHERE id=?", [$id]);
         }
         $id = (int) $c['id'];
