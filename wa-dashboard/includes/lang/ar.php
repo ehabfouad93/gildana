@@ -493,4 +493,7 @@ return [
     'Orders &amp; connected apps' => 'الطلبات والتطبيقات المتصلة', 'Orders & connected apps' => 'الطلبات والتطبيقات المتصلة', 'Spent' => 'إجمالي الإنفاق', 'Tracking' => 'التتبع',
     'Date' => 'التاريخ', 'What' => 'ما', 'Customer' => 'العميل', 'Total' => 'الإجمالي', 'Status' => 'الحالة', 'Sent' => 'أُرسل', 'When' => 'متى', 'Event' => 'الحدث',
     'What happened' => 'ما حدث', 'Copy' => 'نسخ', 'Messages saved.' => 'تم حفظ الرسائل.', 'Saved.' => 'تم الحفظ.',
+    'Connect WooCommerce' => 'ربط WooCommerce', 'Consumer key' => 'مفتاح المستهلك (Consumer key)', 'Consumer secret' => 'سر المستهلك (Consumer secret)',
+    'Orders' => 'الطلبات', 'Order completed / shipped (with tracking link if any)' => 'اكتمل الطلب / تم الشحن (مع رابط التتبع إن وُجد)',
+    'Order left unpaid (reminder with the payment link)' => 'طلب لم يُدفع (تذكير برابط الدفع)', 'Unpaid orders paid after a reminder' => 'طلبات دُفعت بعد التذكير',
 ];

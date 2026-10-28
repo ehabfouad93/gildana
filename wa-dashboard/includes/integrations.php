@@ -2,7 +2,7 @@
 declare(strict_types=1);
 
 /**
- * Connected apps: built-in connections to Shopify, Zoho CRM, Zoho Books and Zoho Inventory.
+ * Connected apps: built-in connections to Shopify, WooCommerce, Zoho CRM, Zoho Books and Zoho Inventory.
  *
  *   integrations       one connected store / Zoho org per row; tokens encrypted; settings JSON
  *   integration_links  outside id ↔ Revenect contact (a person can be a Shopify customer and a Zoho lead)
@@ -11,7 +11,7 @@ declare(strict_types=1);
  *   integration_jobs   calls to make to an app, retried by the worker (integrations_tick)
  *   integration_log    what happened, for the Log tab
  *
- * Provider code lives in shopify.php and zoho.php; this file is what they share. Everything here
+ * Provider code lives in shopify.php, woocommerce.php and zoho.php; this file is what they share. Everything here
  * tolerates migration 067 not having run.
  */
 require_once __DIR__ . '/crm_integrations.php';     // crm_int_upsert, crm_int_origin
@@ -23,6 +23,7 @@ function integrations_catalog(): array
 {
     return [
         'shopify' => ['label' => 'Shopify', 'group' => 'Store', 'blurb' => 'Order confirmations and shipping updates by WhatsApp or SMS, abandoned-cart recovery, customers into your contacts and CRM, and Shopify events as automation triggers.'],
+        'woocommerce' => ['label' => 'WooCommerce', 'group' => 'Store', 'blurb' => 'Order confirmations and "completed" updates by WhatsApp or SMS, a reminder with the payment link when an order is left unpaid, customers into your contacts and CRM, and WooCommerce orders as automation triggers.'],
         'zoho_crm' => ['label' => 'Zoho CRM', 'group' => 'CRM', 'blurb' => 'Leads, contacts and deals kept in step both ways, and every WhatsApp, Messenger, Instagram and SMS conversation, note, call and visit logged on the Zoho record.'],
         'zoho_books' => ['label' => 'Zoho Books', 'group' => 'Finance', 'blurb' => 'Invoices, payments and sales orders: send the invoice link, thank customers for payment, and start automations from them.'],
         'zoho_inventory' => ['label' => 'Zoho Inventory', 'group' => 'Operations', 'blurb' => 'Sales orders and shipments: confirmations and "on its way" messages with the tracking link.'],
@@ -137,6 +138,16 @@ function integration_default_settings(string $provider): array
                 'cart_abandoned'  => $rule('Hi {{first_name}}, you left something in your cart at {{shop_name}}. Complete your order here: {{checkout_url}}') + ['delay' => 60, 'second_delay' => 0],
             ],
         ],
+        'woocommerce' => [
+            'sync_customers' => 1, 'to_crm' => 'buyers', 'crm_stage_id' => 0, 'import_days' => 60,
+            'messages' => [
+                'order_placed'    => $rule('Hi {{first_name}}, thank you for your order {{order_number}} ({{total}}). We will let you know when it is on its way.'),
+                'order_paid'      => $rule('Hi {{first_name}}, we received your payment for order {{order_number}}. Thank you!'),
+                'order_shipped'   => $rule('Good news {{first_name}}: order {{order_number}} is on its way. {{tracking_url}}'),
+                'order_cancelled' => $rule('Hi {{first_name}}, order {{order_number}} was cancelled. Reply to this message if you have any question.'),
+                'payment_pending' => $rule('Hi {{first_name}}, your order {{order_number}} at {{shop_name}} is waiting for payment. Complete it here: {{checkout_url}}') + ['delay' => 60],
+            ],
+        ],
         'zoho_crm' => [
             'push_leads' => 1, 'pull_leads' => 1, 'module' => 'Leads', 'deals' => 1, 'deal_stages' => [], 'notes' => 1,
             'field_map' => [], 'stage_map' => [], 'won_stage' => 'Closed Won', 'lost_stage' => 'Closed Lost',
@@ -169,6 +180,8 @@ function integration_message_events(string $provider): array
     return match ($provider) {
         'shopify' => ['order_placed' => 'Order placed', 'order_paid' => 'Payment received', 'order_shipped' => 'Order shipped (with tracking link)',
                       'order_cancelled' => 'Order cancelled', 'cart_abandoned' => 'Abandoned cart (recovery message)'],
+        'woocommerce' => ['order_placed' => 'Order placed', 'order_paid' => 'Payment received', 'order_shipped' => 'Order completed / shipped (with tracking link if any)',
+                          'order_cancelled' => 'Order cancelled', 'payment_pending' => 'Order left unpaid (reminder with the payment link)'],
         'zoho_books' => ['invoice_sent' => 'Invoice sent (with link)', 'payment_received' => 'Payment received', 'order_confirmed' => 'Sales order confirmed'],
         'zoho_inventory' => ['order_confirmed' => 'Sales order confirmed', 'order_shipped' => 'Shipped (with tracking link)'],
         default => [],
@@ -208,7 +221,7 @@ function integration_state_take(string $state, string $provider): ?array
  * A call to a connected app. Hosts come from fixed patterns (a *.myshopify.com shop, Zoho's own
  * domains, or the test override), never from free text. Returns ['ok','http','json','body','error','headers'].
  */
-function integration_http(string $method, string $url, array $headers = [], $body = null, int $timeout = 25): array
+function integration_http(string $method, string $url, array $headers = [], $body = null, int $timeout = 25, array $curlOpts = []): array
 {
     $ch = curl_init($url);
     $hdrs = [];
@@ -216,6 +229,7 @@ function integration_http(string $method, string $url, array $headers = [], $bod
              CURLOPT_HTTPHEADER => $headers, CURLOPT_FOLLOWLOCATION => false,
              CURLOPT_HEADERFUNCTION => function ($c, $h) use (&$hdrs) { $p = explode(':', $h, 2); if (count($p) === 2) $hdrs[strtolower(trim($p[0]))] = trim($p[1]); return strlen($h); }];
     if ($body !== null) $opts[CURLOPT_POSTFIELDS] = is_array($body) ? http_build_query($body) : (string) $body;
+    $opts = $curlOpts + $opts;                               // e.g. WooCommerce: pinned address, HTTPS only
     curl_setopt_array($ch, $opts);
     $raw = curl_exec($ch);
     $http = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -249,6 +263,7 @@ function integration_jobs_tick(int $limit = 40): int
         try {
             $r = match ((string) $it['provider']) {
                 'shopify' => shopify_job($it, $j, $payload),
+                'woocommerce' => woo_job($it, $j, $payload),
                 'zoho_crm', 'zoho_books', 'zoho_inventory' => zoho_job($it, $j, $payload),
                 default => ['ok' => false, 'error' => 'Unknown app', 'retry' => false],
             };
@@ -462,6 +477,7 @@ function integrations_tick(): array
         $it = integration_load($row);
         try {
             if ($it['provider'] === 'shopify') $out['shopify'] = ($out['shopify'] ?? 0) + shopify_tick($it);
+            elseif ($it['provider'] === 'woocommerce') $out['woocommerce'] = ($out['woocommerce'] ?? 0) + woo_tick($it);
             else $out['zoho'] = ($out['zoho'] ?? 0) + zoho_tick($it);
         } catch (Throwable $e) { integration_error($it, $e->getMessage()); }
     }
@@ -488,3 +504,4 @@ function integration_url(string $path): string
 
 require_once __DIR__ . '/shopify.php';
 require_once __DIR__ . '/zoho.php';
+require_once __DIR__ . '/woocommerce.php';

@@ -53,6 +53,11 @@ function auto_trigger_kinds(): array
         'shopify_fulfilled'   => ['Shopify — an order ships',                      '',            'order'],
         'shopify_cancelled'   => ['Shopify — an order is cancelled',               '',            'order'],
         'shopify_abandoned'   => ['Shopify — a cart is abandoned',                 '',            'order'],
+        'woo_order'           => ['WooCommerce — an order is placed',              '',            'order'],
+        'woo_paid'            => ['WooCommerce — an order is paid',                '',            'order'],
+        'woo_completed'       => ['WooCommerce — an order is completed',           '',            'order'],
+        'woo_cancelled'       => ['WooCommerce — an order is cancelled',           '',            'order'],
+        'woo_unpaid'          => ['WooCommerce — an order is left unpaid',         '',            'order'],
         'zoho_lead'           => ['Zoho CRM — a lead comes in from Zoho',          '',            ''],
         'zoho_invoice'        => ['Zoho — an invoice is sent',                     '',            'order'],
         'zoho_payment'        => ['Zoho — a payment is received',                  '',            'order'],
@@ -68,16 +73,16 @@ function auto_trigger_kinds_for(array $client): array
     foreach (auto_trigger_kinds() as $k => $t) {
         if ($t[1] !== '' && function_exists('client_has_channel') && !client_has_channel($client, $t[1])) continue;
         if (in_array($k, ['lead_form', 'crm_stage', 'zoho_lead'], true) && function_exists('crm_enabled') && !crm_enabled($client)) continue;
-        if (preg_match('/^(shopify|zoho)_/', $k) && !in_array(auto_trigger_app($k), $apps ??= auto_connected_apps($client), true)) continue;
+        if (preg_match('/^(shopify|woo|zoho)_/', $k) && !in_array(auto_trigger_app($k), $apps ??= auto_connected_apps($client), true)) continue;
         $out[$k] = $t;
     }
     return $out;
 }
 
-/** Which connected app a trigger kind needs: shopify, zoho_crm, or zoho_books / zoho_inventory ('zoho_orders'). */
+/** Which connected app a trigger kind needs: shopify, woocommerce, zoho_crm, or zoho_books / zoho_inventory ('zoho_orders'). */
 function auto_trigger_app(string $kind): string
 {
-    return str_starts_with($kind, 'shopify_') ? 'shopify' : ($kind === 'zoho_lead' ? 'zoho_crm' : 'zoho_orders');
+    return str_starts_with($kind, 'shopify_') ? 'shopify' : (str_starts_with($kind, 'woo_') ? 'woocommerce' : ($kind === 'zoho_lead' ? 'zoho_crm' : 'zoho_orders'));
 }
 
 /** The apps this client has connected (CRM → Connected apps), as auto_trigger_app() names them. */

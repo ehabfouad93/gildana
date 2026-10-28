@@ -20,6 +20,17 @@ $it = $open && $ready ? integration_get($open, $cid) : null;
 if ($it && $it['status'] === 'disconnected') $it = null;
 $here = fn(string $h = '') => 'apps.php' . ($it ? '?app=' . (int) $it['id'] : '') . $h;
 
+// Back from WooCommerce's approval screen. The key itself arrived separately (woo_auth.php).
+if (isset($_GET['woo']) && $ready && !$it) {
+    if (($_GET['success'] ?? '1') === '0') flash('You did not approve the connection in WooCommerce — nothing was changed.', 'error');
+    else {
+        $w = db_row("SELECT id, display_name FROM integrations WHERE client_id=? AND provider='woocommerce' AND status<>'disconnected' AND updated_at > NOW() - INTERVAL 15 MINUTE ORDER BY updated_at DESC LIMIT 1", [$cid]);
+        if ($w) { flash('Connected ' . $w['display_name'] . '. Importing now — this page fills in over the next minutes.'); redirect('apps.php?app=' . (int) $w['id']); }
+        flash('WooCommerce did not send the key back. Your store must use https:// and reach this site — or connect with keys instead.', 'error');
+    }
+    redirect('apps.php#woocommerce');
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $ready) {
     verify_csrf();
     if (!$isAdmin) { flash('Only an Admin can change connected apps.', 'error'); redirect($here()); }
@@ -40,11 +51,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $ready) {
     if ($a === 'shopify_keys') {
         $done(shopify_connect_keys($cid, $uid, (string) ($_POST['shop'] ?? ''), trim((string) ($_POST['token'] ?? '')), trim((string) ($_POST['app_id'] ?? '')), trim((string) ($_POST['secret'] ?? ''))));
     }
-    if ($a === 'zoho_connect' && isset($cat[$prov]) && $prov !== 'shopify') {
+    if ($a === 'woo_connect') {
+        $store = woo_store((string) ($_POST['store'] ?? ''));
+        if ($store === '') { flash('Enter your store address, like https://shop.example.com.', 'error'); redirect('apps.php#woocommerce'); }
+        if (($bad = crm_hook_url_ok($store)) !== '') { flash($bad, 'error'); redirect('apps.php#woocommerce'); }
+        redirect(woo_auth_url($cid, $uid, $store));
+    }
+    if ($a === 'woo_keys') {
+        $done(woo_connect_keys($cid, $uid, (string) ($_POST['store'] ?? ''), trim((string) ($_POST['ck'] ?? '')), trim((string) ($_POST['cs'] ?? ''))));
+    }
+    $isZoho = str_starts_with($prov, 'zoho_') && isset($cat[$prov]);
+    if ($a === 'zoho_connect' && $isZoho) {
         if (!zoho_configured()) { flash('The Connect button is not set up on this platform yet — connect with a Self Client instead.', 'error'); redirect('apps.php#' . $prov); }
         redirect(zoho_auth_url($cid, $uid, $prov, $dc));
     }
-    if ($a === 'zoho_keys' && isset($cat[$prov]) && $prov !== 'shopify') {
+    if ($a === 'zoho_keys' && $isZoho) {
         $done(zoho_connect_keys($cid, $uid, $prov, $dc, trim((string) ($_POST['zid'] ?? '')), trim((string) ($_POST['zsecret'] ?? '')),
                                 trim((string) ($_POST['code'] ?? '')), trim((string) ($_POST['refresh'] ?? ''))));
     }
@@ -53,12 +74,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $ready) {
     if (!$it) redirect('apps.php');
     $s = integration_settings($it);
     if ($a === 'disconnect') {
-        $it['provider'] === 'shopify' ? shopify_disconnect($it) : zoho_disconnect($it);
+        match ($it['provider']) { 'shopify' => shopify_disconnect($it), 'woocommerce' => woo_disconnect($it), default => zoho_disconnect($it) };
         flash($it['display_name'] . ' disconnected. Orders and contacts already received stay.'); redirect('apps.php');
     }
     if ($a === 'sync') {
         $cur = $it['cursor'];
-        if ($it['provider'] === 'shopify') { integration_job($it, 'register_webhooks', 0); integration_job($it, 'backfill', 0, ['what' => 'customers']); }
+        if (in_array($it['provider'], ['shopify', 'woocommerce'], true)) { integration_job($it, 'register_webhooks', 0); integration_job($it, 'backfill', 0, ['what' => 'customers']); $cur['poll_at'] = 0; }
         elseif ($it['provider'] === 'zoho_crm') { $cur['poll_at'] = 0; $cur['since'] = date('c', time() - 86400); integration_job($it, 'watch', 0); integration_job($it, 'users', 0); integration_job($it, 'fields', 0); }
         else $cur['poll_at'] = 0;
         integration_cursor_save($it, $cur);
@@ -76,7 +97,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $ready) {
         flash($n . ' leads queued for Zoho — they go over the next few minutes.'); redirect($here('#log'));
     }
     if ($a === 'save_data') {
-        if ($it['provider'] === 'shopify') {
+        if (in_array($it['provider'], ['shopify', 'woocommerce'], true)) {
             $s['sync_customers'] = !empty($_POST['sync_customers']) ? 1 : 0;
             $s['to_crm'] = in_array($_POST['to_crm'] ?? '', ['none', 'buyers', 'all'], true) ? $_POST['to_crm'] : 'buyers';
             $s['crm_stage_id'] = (int) ($_POST['crm_stage_id'] ?? 0);
@@ -136,7 +157,7 @@ $pill = function (array $x): string {
         default => '<span class="pill green">Connected</span>',
     };
 };
-$mark = ['shopify' => ['S', 'ap-shopify'], 'zoho_crm' => ['Z', 'ap-zoho'], 'zoho_books' => ['B', 'ap-zoho'], 'zoho_inventory' => ['I', 'ap-zoho']];
+$mark = ['shopify' => ['S', 'ap-shopify'], 'woocommerce' => ['W', 'ap-woo'], 'zoho_crm' => ['Z', 'ap-zoho'], 'zoho_books' => ['B', 'ap-zoho'], 'zoho_inventory' => ['I', 'ap-zoho']];
 
 client_header('Connected apps', 'integrations', $CLIENT);
 ?>
@@ -145,7 +166,7 @@ client_header('Connected apps', 'integrations', $CLIENT);
   .ap-card { display: flex; flex-direction: column; gap: 10px; margin: 0; }
   .ap-head { display: flex; gap: 12px; align-items: center; }
   .ap-mark { width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; font-weight: 800; font-size: 18px; color: #fff; flex: none; }
-  .ap-shopify { background: #5E8E3E; } .ap-zoho { background: #C8202B; }
+  .ap-shopify { background: #5E8E3E; } .ap-woo { background: #7F54B3; } .ap-zoho { background: #C8202B; }
   .ap-head h2 { margin: 0; border: 0; padding: 0; font-size: 16px; }
   .ap-group { font-size: 11.5px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
   .ap-blurb { font-size: 13px; color: var(--slate); margin: 0; }
@@ -189,7 +210,7 @@ if (!$it):
     <p class="ap-blurb"><?= e($c['blurb']) ?></p>
     <?php foreach ($mine[$prov] ?? [] as $x): ?>
       <div class="ap-acct"><div><strong><?= e((string) ($x['display_name'] ?: $x['account'])) ?></strong>
-        <small><?= $prov === 'shopify' ? e((string) $x['account']) : e($dcs[zoho_dc((string) $x['data_center'])]['label'] ?? '') ?> · last activity <?= e($ago($x['last_event_at'] ?? $x['last_sync_at'] ?? null)) ?></small></div>
+        <small><?= in_array($prov, ['shopify', 'woocommerce'], true) ? e((string) $x['account']) : e($dcs[zoho_dc((string) $x['data_center'])]['label'] ?? '') ?> · last activity <?= e($ago($x['last_event_at'] ?? $x['last_sync_at'] ?? null)) ?></small></div>
         <div style="display:flex;gap:8px;align-items:center"><?= $pill($x) ?><a class="btn btn-ghost btn-sm" href="apps.php?app=<?= (int) $x['id'] ?>">Open</a></div></div>
     <?php endforeach; ?>
     <?php if ($isAdmin): ?>
@@ -206,6 +227,19 @@ if (!$it):
             <div class="field"><span class="lbl">Admin API access token</span><input name="token" maxlength="200" placeholder="shpat_…" dir="ltr" autocomplete="off"></div>
             <div class="field"><span class="lbl">…or the app's client ID</span><input name="app_id" maxlength="200" dir="ltr" autocomplete="off"></div>
             <div class="field"><span class="lbl">API secret key</span><input name="secret" type="password" required maxlength="200" dir="ltr" autocomplete="off"></div>
+            <button class="btn btn-primary btn-sm mt10">Connect with keys</button></form></details>
+      <?php elseif ($prov === 'woocommerce'): ?>
+        <form method="post" class="ap-connect"><?= csrf_field() ?><input type="hidden" name="action" value="woo_connect">
+          <input name="store" required maxlength="190" placeholder="https://shop.example.com" aria-label="Your WooCommerce store address" autocomplete="off" dir="ltr">
+          <button class="btn btn-primary btn-sm"><?= empty($mine[$prov]) ? 'Connect WooCommerce' : 'Connect another store' ?></button></form>
+        <details class="ap-keys"><summary>Connect with keys instead</summary>
+          <ol><li>In WordPress: <strong>WooCommerce → Settings → Advanced → REST API → Add key</strong>.</li>
+            <li>Description "Revenect", a user who is an Administrator or Shop manager, Permissions <strong>Read/Write</strong> (Write is needed to add the order notifications).</li>
+            <li>Paste the <strong>consumer key</strong> and <strong>consumer secret</strong> below. The store must use https://.</li></ol>
+          <form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="woo_keys">
+            <div class="field"><span class="lbl">Store address</span><input name="store" required maxlength="190" placeholder="https://shop.example.com" dir="ltr" autocomplete="off"></div>
+            <div class="field"><span class="lbl">Consumer key</span><input name="ck" required maxlength="60" placeholder="ck_…" dir="ltr" autocomplete="off"></div>
+            <div class="field"><span class="lbl">Consumer secret</span><input name="cs" type="password" required maxlength="60" placeholder="cs_…" dir="ltr" autocomplete="off"></div>
             <button class="btn btn-primary btn-sm mt10">Connect with keys</button></form></details>
       <?php else: ?>
         <form method="post" class="ap-connect"><?= csrf_field() ?><input type="hidden" name="action" value="zoho_connect"><input type="hidden" name="provider" value="<?= e($prov) ?>">
@@ -270,6 +304,14 @@ page_head((string) ($it['display_name'] ?: $it['account']), '<a class="btn btn-g
       <div class="ap-stat"><b><?= (int) $rc['n'] ?></b><span>Carts recovered by a reminder</span></div>
       <div class="ap-stat"><b><?= e(trim($cur . ' ' . number_format((float) $rc['t']))) ?></b><span>Recovered sales</span></div>
       <div class="ap-stat"><b><?= (int) ($linkN['customer'] ?? 0) ?></b><span>Customers linked to contacts</span></div>
+    <?php elseif ($prov === 'woocommerce'):
+      $o = db_row("SELECT COUNT(*) n, COALESCE(SUM(total),0) t FROM ext_orders WHERE integration_id=? AND kind='order' AND placed_at > NOW() - INTERVAL 30 DAY AND status NOT IN ('cancelled','refunded','failed')", [(int) $it['id']]);
+      $up = db_row("SELECT COUNT(*) n, SUM(status IN ('paid','shipped')) p FROM ext_orders WHERE integration_id=? AND kind='order' AND FIND_IN_SET('payment_pending', notified) AND placed_at > NOW() - INTERVAL 30 DAY", [(int) $it['id']]);
+      $cur = (string) ($s['currency'] ?? ''); ?>
+      <div class="ap-stat"><b><?= (int) $o['n'] ?></b><span>Orders, 30 days</span></div>
+      <div class="ap-stat"><b><?= e(trim($cur . ' ' . number_format((float) $o['t']))) ?></b><span>Sales, 30 days</span></div>
+      <div class="ap-stat"><b><?= (int) $up['p'] ?></b><span>Unpaid orders paid after a reminder</span></div>
+      <div class="ap-stat"><b><?= (int) ($linkN['customer'] ?? 0) ?></b><span>Customers linked to contacts</span></div>
     <?php elseif ($prov === 'zoho_crm'): ?>
       <div class="ap-stat"><b><?= (int) ($linkN['lead'] ?? 0) ?></b><span>Leads linked</span></div>
       <div class="ap-stat"><b><?= (int) ($linkN['contact'] ?? 0) ?></b><span>Contacts linked</span></div>
@@ -283,15 +325,15 @@ page_head((string) ($it['display_name'] ?: $it['account']), '<a class="btn btn-g
   </div>
 </div>
 
-<nav class="int-tabs" aria-label="Sections"><a href="#data">Data</a><?php if ($events): ?><a href="#messages">Messages</a><?php endif; ?><?php if ($hasOrders): ?><a href="#orders"><?= $prov === 'shopify' ? 'Orders & carts' : 'Documents' ?></a><?php endif; ?><a href="#log">Log</a><a href="#setup">Setup details</a></nav>
+<nav class="int-tabs" aria-label="Sections"><a href="#data">Data</a><?php if ($events): ?><a href="#messages">Messages</a><?php endif; ?><?php if ($hasOrders): ?><a href="#orders"><?= $prov === 'shopify' ? 'Orders & carts' : ($prov === 'woocommerce' ? 'Orders' : 'Documents') ?></a><?php endif; ?><a href="#log">Log</a><a href="#setup">Setup details</a></nav>
 
 <!-- ═══ DATA ═══ -->
 <div class="card" id="data">
   <h2>What syncs</h2>
   <form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="save_data">
   <fieldset <?= $isAdmin ? '' : 'disabled' ?> style="border:0;padding:0;margin:0">
-  <?php if ($prov === 'shopify'): ?>
-    <label class="mod-all"><input type="checkbox" name="sync_customers" value="1" <?= !empty($s['sync_customers']) ? 'checked' : '' ?>> Add Shopify customers to Contacts (matched by phone, then email)</label>
+  <?php if (in_array($prov, ['shopify', 'woocommerce'], true)): ?>
+    <label class="mod-all"><input type="checkbox" name="sync_customers" value="1" <?= !empty($s['sync_customers']) ? 'checked' : '' ?>> Add <?= e($c['label']) ?> customers to Contacts (matched by phone, then email)</label>
     <div class="grid2 mt10">
       <div class="field"><span class="lbl">Put in the CRM pipeline</span><select name="to_crm" <?= $crmOn ? '' : 'disabled' ?>>
         <?php foreach (['none' => 'Nobody — contacts only', 'buyers' => 'People who place an order', 'all' => 'Every customer'] as $k => $l): ?><option value="<?= $k ?>" <?= ($s['to_crm'] ?? 'buyers') === $k ? 'selected' : '' ?>><?= e($l) ?></option><?php endforeach; ?></select>
@@ -301,7 +343,7 @@ page_head((string) ($it['display_name'] ?: $it['account']), '<a class="btn btn-g
       <div class="field"><span class="lbl">On connecting, import orders from the last</span><select name="import_days">
         <?php foreach ([7, 30, 60, 90, 180, 365] as $d): ?><option value="<?= $d ?>" <?= (int) ($s['import_days'] ?? 60) === $d ? 'selected' : '' ?>><?= $d ?> days</option><?php endforeach; ?></select></div>
     </div>
-    <p class="text-muted" style="font-size:12.5px">Customers who agreed to marketing in Shopify are opted in for campaigns. Everyone else still gets their own order updates, but not campaigns. A buyer's lead shows their orders and what they have spent.</p>
+    <p class="text-muted" style="font-size:12.5px"><?= $prov === 'woocommerce' ? 'WooCommerce does not record marketing consent, so its customers are not opted in to campaigns.' : 'Customers who agreed to marketing in Shopify are opted in for campaigns.' ?> Everyone else still gets their own order updates, but not campaigns. A buyer's lead shows their orders and what they have spent.</p>
   <?php elseif ($prov === 'zoho_crm'):
     $zf = (array) ($it['cursor']['fields'] ?? []);
     $leadStatus = (array) ($zf['Leads']['Lead_Status']['pick'] ?? []);
@@ -436,7 +478,7 @@ page_head((string) ($it['display_name'] ?: $it['account']), '<a class="btn btn-g
   $kindL = ['order' => 'Order', 'checkout' => 'Cart', 'invoice' => 'Invoice', 'salesorder' => 'Sales order']; ?>
 <!-- ═══ ORDERS ═══ -->
 <div class="card card-flush" id="orders">
-  <div style="padding:14px 18px"><h2 style="margin:0;border:0;padding:0"><?= $prov === 'shopify' ? 'Orders & carts' : 'Invoices & sales orders' ?></h2>
+  <div style="padding:14px 18px"><h2 style="margin:0;border:0;padding:0"><?= $prov === 'shopify' ? 'Orders & carts' : ($prov === 'woocommerce' ? 'Orders' : 'Invoices & sales orders') ?></h2>
     <p class="text-muted" style="font-size:12.5px;margin:4px 0 0">The newest 60. Messages already sent for each are listed under it.</p></div>
   <?php if (!$orders): ?><p class="text-muted" style="padding:0 18px 16px;margin:0">Nothing yet.</p><?php else: ?>
   <div class="table-wrap"><table class="data">
@@ -477,6 +519,11 @@ page_head((string) ($it['display_name'] ?: $it['account']), '<a class="btn btn-g
     <p class="text-muted" style="font-size:13px">Shopify sends this store's orders, fulfilments, customers and checkouts to Revenect the moment they happen; every 15 minutes we also check for anything missed.
       Abandoned carts need the store's checkout to collect a phone number (Shopify → Settings → Checkout → Customer contact method).</p>
     <div class="int-copy"><code id="sh-hook"><?= e(shopify_webhook_url()) ?></code><button type="button" class="btn btn-ghost btn-sm" data-copy="sh-hook">Copy</button></div>
+  <?php elseif ($prov === 'woocommerce'): ?>
+    <p class="text-muted" style="font-size:13px">The store sends new and changed orders and customers to Revenect as they happen (WooCommerce → Settings → Advanced → Webhooks shows them); every 15 minutes we also check for anything missed.
+      WooCommerce keeps no record of abandoned carts, so the reminder goes for orders left <strong>pending payment</strong>, with the store's own payment link. "Completed" is treated as shipped;
+      a tracking link is included when a shipment-tracking plugin adds one to the order. Customers are not opted in to campaigns, because WooCommerce does not record marketing consent.</p>
+    <div class="int-copy"><code id="woo-hook"><?= e(woo_webhook_url($it)) ?></code><button type="button" class="btn btn-ghost btn-sm" data-copy="woo-hook">Copy</button></div>
   <?php elseif ($prov === 'zoho_crm'): ?>
     <p class="text-muted" style="font-size:13px">Zoho tells Revenect about changes to leads, contacts and deals as they happen (renewed every few days), and we check every 5 minutes as well.
       Changes that came from Zoho are never sent back to it, so the two systems do not echo each other.</p>
