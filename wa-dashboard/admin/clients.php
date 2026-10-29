@@ -115,8 +115,8 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 
     <div class="section-label">Client Login</div>
     <div class="grid2">
-      <div class="field"><span class="lbl">Login Email *</span><input type="email" name="email" required></div>
-      <div class="field"><span class="lbl">Login Password *</span><input type="text" name="password" required minlength="8"><div class="hint">Share with the client. Min 8 chars.</div></div>
+      <div class="field"><span class="lbl">Login Email *</span><input type="email" name="email" autocomplete="off" required></div>
+      <div class="field"><span class="lbl">Login Password *</span><input autocomplete="new-password" type="password" name="password" required minlength="8"><div class="hint">Share with the client. Min 8 chars.</div></div>
     </div>
 
     <div class="modal-actions">

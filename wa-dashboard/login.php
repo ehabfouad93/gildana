@@ -73,7 +73,7 @@ $appName = brand_name();
     </div>
     <div class="field">
       <span class="lbl">Password</span>
-      <input type="password" name="password" required>
+      <input type="password" name="password" autocomplete="current-password" required>
     </div>
     <?php if (captcha_enabled()): ?>
     <div class="field">
@@ -89,5 +89,6 @@ $appName = brand_name();
     <p class="login-back"><a href="index.php">&larr; Back to <?= e($appName) ?></a></p>
   </form>
 <?= pwa_script('./') ?>
+<?php require_once __DIR__ . '/includes/view.php'; echo pw_reveal_script(); ?>
 </body>
 </html>

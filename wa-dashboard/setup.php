@@ -85,14 +85,15 @@ $appName = brand_name();
     </div>
     <div class="field">
       <span class="lbl">Password (min 8 chars)</span>
-      <input type="password" name="password" required>
+      <input type="password" name="password" autocomplete="new-password" required>
     </div>
     <div class="field">
       <span class="lbl">Confirm Password</span>
-      <input type="password" name="confirm" required>
+      <input type="password" name="confirm" autocomplete="new-password" required>
     </div>
     <button type="submit" class="btn btn-primary">Create Admin &amp; Continue</button>
   </form>
 <?= pwa_script('./') ?>
+<?php require_once __DIR__ . '/includes/view.php'; echo pw_reveal_script(); ?>
 </body>
 </html>

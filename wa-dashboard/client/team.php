@@ -204,7 +204,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
     <h2 id="t-title">Add a person</h2>
 
     <div class="field"><span class="lbl">Name</span><input type="text" name="name" id="t-name" placeholder="Ahmed Mahmoud"></div>
-    <div class="field" id="t-email-wrap"><span class="lbl">Email</span><input type="email" name="email" id="t-email" placeholder="ahmed@company.com"></div>
+    <div class="field" id="t-email-wrap"><span class="lbl">Email</span><input type="email" name="email" id="t-email" autocomplete="off" placeholder="ahmed@company.com"></div>
     <div class="field"><span class="lbl" id="t-pass-lbl">Password</span>
       <input type="password" name="password" id="t-pass" minlength="8" autocomplete="new-password" placeholder="At least 8 characters"></div>
 

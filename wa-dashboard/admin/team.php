@@ -91,8 +91,8 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 <div class="modal-back" id="m-add">
   <form class="modal" method="post"><?= csrf_field() ?><input type="hidden" name="action" value="add_admin">
     <h2>Add Admin User</h2>
-    <div class="field"><span class="lbl">Email</span><input type="email" name="email" required></div>
-    <div class="field"><span class="lbl">Password (min 8)</span><input type="text" name="password" required minlength="8"><div class="hint">Share with the new admin.</div></div>
+    <div class="field"><span class="lbl">Email</span><input type="email" name="email" autocomplete="off" required></div>
+    <div class="field"><span class="lbl">Password (min 8)</span><input autocomplete="new-password" type="password" name="password" required minlength="8"><div class="hint">Share with the new admin.</div></div>
     <div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="document.getElementById('m-add').classList.remove('open')">Cancel</button><button class="btn btn-primary">Add Admin</button></div>
   </form>
 </div>
@@ -101,7 +101,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
   <form class="modal" method="post"><?= csrf_field() ?><input type="hidden" name="action" value="reset_admin_pw"><input type="hidden" name="user_id" id="r-id">
     <h2>Reset Password</h2>
     <p class="text-muted" style="font-size:12.5px;margin-bottom:12px" id="r-email"></p>
-    <div class="field"><span class="lbl">New Password (min 8)</span><input type="text" name="new_password" required minlength="8"></div>
+    <div class="field"><span class="lbl">New Password (min 8)</span><input autocomplete="new-password" type="password" name="new_password" required minlength="8"></div>
     <div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="document.getElementById('m-reset').classList.remove('open')">Cancel</button><button class="btn btn-primary">Reset</button></div>
   </form>
 </div>

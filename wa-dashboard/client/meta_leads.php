@@ -375,7 +375,7 @@ page_head('Facebook & Instagram', '<a class="btn btn-ghost btn-sm" href="crm.php
     <div class="grid2" style="margin-top:10px">
       <div class="field"><span class="lbl">Dataset ID</span><input type="text" name="dataset" inputmode="numeric" value="<?= e((string) ($cs['capi_dataset'] ?? '')) ?>" placeholder="1234567890123456"></div>
       <div class="field"><span class="lbl">Access token <?= !empty($cs['capi_token_enc']) ? '<span class="pill green" style="margin-inline-start:6px">••• saved</span>' : '' ?></span>
-        <input type="text" name="token" autocomplete="off" placeholder="<?= !empty($cs['capi_token_enc']) ? 'Leave blank to keep the saved one' : 'Paste the token' ?>"></div>
+        <input type="password" name="token" autocomplete="new-password" placeholder="<?= !empty($cs['capi_token_enc']) ? 'Leave blank to keep the saved one' : 'Paste the token' ?>"></div>
       <div class="field"><span class="lbl">Test code (optional)</span><input type="text" name="test_code" value="<?= e((string) ($cs['capi_test_code'] ?? '')) ?>" placeholder="TEST12345"></div>
     </div>
     <p class="lbl" style="margin:8px 0 6px">Event to send when a lead reaches…</p>

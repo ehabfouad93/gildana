@@ -425,12 +425,12 @@ $isPersonal = channel_is_personal($CLIENT); ?>
           <input type="text" name="waba_id" value="<?= e((string) $CLIENT['waba_id']) ?>"></div>
         <div class="field"><span class="lbl">Access Token
           <?= $CLIENT['access_token_enc'] ? '<span class="pill green" style="margin-inline-start:6px">••• set</span>' : '' ?></span>
-          <input type="text" name="access_token" autocomplete="off"
+          <input type="password" name="access_token" autocomplete="new-password"
                  placeholder="<?= $CLIENT['access_token_enc'] ? 'Leave blank to keep the current one' : 'Permanent / system-user token' ?>"></div>
         <div class="field"><span class="lbl">App Secret
           <?= $CLIENT['app_secret_enc'] ? '<span class="pill green" style="margin-inline-start:6px">••• set</span>'
                                         : '<span class="pill red" style="margin-inline-start:6px">not set</span>' ?></span>
-          <input type="text" name="app_secret" autocomplete="off"
+          <input type="password" name="app_secret" autocomplete="new-password"
                  placeholder="<?= $CLIENT['app_secret_enc'] ? 'Leave blank to keep the current one' : 'Meta app → Settings → Basic' ?>"></div>
       </div>
 
@@ -528,7 +528,7 @@ $isPersonal = channel_is_personal($CLIENT); ?>
     </div>
     <div class="field">
       <span class="lbl">API Key <?= $CLIENT['ai_api_key_enc'] ? '<span class="pill green" style="margin-inline-start:6px">••• set</span>' : '' ?></span>
-      <input type="text" name="ai_api_key" autocomplete="off" placeholder="<?= $CLIENT['ai_api_key_enc'] ? 'Leave blank to keep current key' : 'Paste your provider API key' ?>">
+      <input type="password" name="ai_api_key" autocomplete="new-password" placeholder="<?= $CLIENT['ai_api_key_enc'] ? 'Leave blank to keep current key' : 'Paste your provider API key' ?>">
       <div class="hint">Stored encrypted. Never shown again after saving.</div>
     </div>
     <div class="row-between mt10">

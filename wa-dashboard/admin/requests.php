@@ -168,8 +168,8 @@ page_head('Requests');
     <div class="grid2">
       <div class="field"><span class="lbl">Starting credits</span><input type="number" name="credits" min="0" value="<?= $pv('credits', '0') ?>"></div>
       <div class="field"><span class="lbl">Low-credit alert below</span><input type="number" name="low_credit_threshold" min="0" value="<?= $pv('low_credit_threshold', '100') ?>"></div>
-      <div class="field"><span class="lbl">Login email *</span><input type="email" name="email" required value="<?= $pv('email', strtolower($R['email'])) ?>"></div>
-      <div class="field"><span class="lbl">Login password *</span><input type="text" name="password" required minlength="8" value="<?= $pv('password', client_account_password()) ?>"><div class="hint">You will see it once more after creating, to send to them.</div></div>
+      <div class="field"><span class="lbl">Login email *</span><input type="email" name="email" autocomplete="off" required value="<?= $pv('email', strtolower($R['email'])) ?>"></div>
+      <div class="field"><span class="lbl">Login password *</span><input autocomplete="new-password" type="password" name="password" required minlength="8" value="<?= $pv('password', client_account_password()) ?>"><div class="hint">You will see it once more after creating, to send to them.</div></div>
     </div>
     <div class="dlg-btns">
       <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">Cancel</button>

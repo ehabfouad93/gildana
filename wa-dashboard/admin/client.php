@@ -561,8 +561,8 @@ function chToggle(){ document.getElementById('ch-personal').style.display =
       <div class="field"><span class="lbl">App ID</span><input type="text" name="app_id" value="<?= e((string) $client['app_id']) ?>"></div>
       <div class="field"><span class="lbl">Phone Number ID</span><input type="text" name="phone_number_id" value="<?= e((string) $client['phone_number_id']) ?>"></div>
       <div class="field"><span class="lbl">WhatsApp Business Account ID</span><input type="text" name="waba_id" value="<?= e((string) $client['waba_id']) ?>"></div>
-      <div class="field"><span class="lbl">Access Token <?= $client['access_token_enc'] ? '<span class="pill green" style="margin-inline-start:6px">••• set</span>' : '' ?></span><input type="text" name="access_token" placeholder="<?= $client['access_token_enc'] ? 'Leave blank to keep current' : 'Permanent / system-user token' ?>" autocomplete="off"></div>
-      <div class="field"><span class="lbl">App Secret <?= $client['app_secret_enc'] ? '<span class="pill green" style="margin-inline-start:6px">••• set</span>' : '<span class="pill red" style="margin-inline-start:6px">not set</span>' ?></span><input type="text" name="app_secret" placeholder="<?= $client['app_secret_enc'] ? 'Leave blank to keep current' : 'From this client\'s Meta app → Settings → Basic' ?>" autocomplete="off"></div>
+      <div class="field"><span class="lbl">Access Token <?= $client['access_token_enc'] ? '<span class="pill green" style="margin-inline-start:6px">••• set</span>' : '' ?></span><input autocomplete="new-password" type="password" name="access_token" placeholder="<?= $client['access_token_enc'] ? 'Leave blank to keep current' : 'Permanent / system-user token' ?>" autocomplete="off"></div>
+      <div class="field"><span class="lbl">App Secret <?= $client['app_secret_enc'] ? '<span class="pill green" style="margin-inline-start:6px">••• set</span>' : '<span class="pill red" style="margin-inline-start:6px">not set</span>' ?></span><input autocomplete="new-password" type="password" name="app_secret" placeholder="<?= $client['app_secret_enc'] ? 'Leave blank to keep current' : 'From this client\'s Meta app → Settings → Basic' ?>" autocomplete="off"></div>
     </div>
     <?php /* Each client has their own Meta app, so each callback is signed with THAT app's
              secret — there is no single platform-wide value that could verify them all. */ ?>
@@ -693,8 +693,8 @@ function chToggle(){ document.getElementById('ch-personal').style.display =
 <div class="modal-back" id="m-adduser">
   <form class="modal" method="post"><?= csrf_field() ?><input type="hidden" name="action" value="add_login_user">
     <h2>Add Login User</h2>
-    <div class="field"><span class="lbl">Email</span><input type="email" name="email" required></div>
-    <div class="field"><span class="lbl">Password (min 8)</span><input type="text" name="password" required minlength="8"></div>
+    <div class="field"><span class="lbl">Email</span><input type="email" name="email" autocomplete="off" required></div>
+    <div class="field"><span class="lbl">Password (min 8)</span><input autocomplete="new-password" type="password" name="password" required minlength="8"></div>
     <div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="document.getElementById('m-adduser').classList.remove('open')">Cancel</button><button class="btn btn-primary">Add</button></div>
   </form>
 </div>
@@ -703,8 +703,8 @@ function chToggle(){ document.getElementById('ch-personal').style.display =
 <div class="modal-back" id="m-edituser">
   <form class="modal" method="post"><?= csrf_field() ?><input type="hidden" name="action" value="update_user"><input type="hidden" name="user_id" id="eu-id">
     <h2>Edit Login</h2>
-    <div class="field"><span class="lbl">Email</span><input type="email" name="email" id="eu-email" required></div>
-    <div class="field"><span class="lbl">New Password <span class="text-muted">(leave blank to keep)</span></span><input type="text" name="new_password" minlength="8"></div>
+    <div class="field"><span class="lbl">Email</span><input type="email" name="email" id="eu-email" autocomplete="off" required></div>
+    <div class="field"><span class="lbl">New Password <span class="text-muted">(leave blank to keep)</span></span><input autocomplete="new-password" type="password" name="new_password" minlength="8"></div>
     <div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="document.getElementById('m-edituser').classList.remove('open')">Cancel</button><button class="btn btn-primary">Save</button></div>
   </form>
 </div>

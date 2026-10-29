@@ -302,7 +302,7 @@ if ($ok):  ?><div class="alert success"><?= e($ok) ?></div><?php endif; ?>
         <input type="text" name="pw_auth_header" value="<?= e($gwHdr) ?>" placeholder="apikey">
         <span class="text-muted" style="font-size:11.5px">Header name the gateway expects, or <code>bearer</code>.</span></div>
       <div class="field"><span class="lbl">API key <?= $gwKey !== '' ? '<span class="pill green" style="margin-inline-start:6px">••• set</span>' : '' ?></span>
-        <input type="text" name="pw_api_key" autocomplete="off" placeholder="<?= $gwKey !== '' ? 'Leave blank to keep current' : 'Gateway API key' ?>"></div>
+        <input type="password" name="pw_api_key" autocomplete="new-password" placeholder="<?= $gwKey !== '' ? 'Leave blank to keep current' : 'Gateway API key' ?>"></div>
       <div class="field"><span class="lbl">Callback base URL <span class="text-muted">(optional)</span></span>
         <input type="text" name="pw_hook_base" value="<?= e($gwHook) ?>" placeholder="<?= e(app_base_url()) ?>">
         <span class="text-muted" style="font-size:11.5px">Where the gateway calls back to deliver
@@ -354,9 +354,9 @@ if ($ok):  ?><div class="alert success"><?= e($ok) ?></div><?php endif; ?>
       <div class="field"><span class="lbl">Client ID</span>
         <input type="text" name="google_client_id" value="<?= e($gCfg['client_id']) ?>" placeholder="…apps.googleusercontent.com"></div>
       <div class="field"><span class="lbl">Client Secret <?= $gCfg['client_secret'] !== '' ? '<span class="pill green" style="margin-inline-start:6px">••• set</span>' : '' ?></span>
-        <input type="text" name="google_client_secret" autocomplete="off" placeholder="<?= $gCfg['client_secret'] !== '' ? 'Leave blank to keep current' : 'Paste the client secret' ?>"></div>
+        <input type="password" name="google_client_secret" autocomplete="new-password" placeholder="<?= $gCfg['client_secret'] !== '' ? 'Leave blank to keep current' : 'Paste the client secret' ?>"></div>
       <div class="field"><span class="lbl">API key <span class="text-muted">(optional — for the sheet picker)</span></span>
-        <input type="text" name="google_api_key" value="<?= e($gCfg['api_key']) ?>" placeholder="AIza…"></div>
+        <input autocomplete="new-password" type="password" name="google_api_key" value="<?= e($gCfg['api_key']) ?>" placeholder="AIza…"></div>
     </div>
     <label class="mod-all" style="margin:4px 0 12px"><input type="checkbox" name="google_meet" value="1" <?= google_meet_enabled() ? 'checked' : '' ?>>
       Create Google Meet links for online meetings</label>
@@ -389,7 +389,7 @@ if ($ok):  ?><div class="alert success"><?= e($ok) ?></div><?php endif; ?>
     <div class="grid2">
       <div class="field"><span class="lbl">Shopify Client ID (API key)</span><input type="text" name="shopify_api_key" value="<?= e($shC['api_key']) ?>" autocomplete="off"></div>
       <div class="field"><span class="lbl">Shopify Client secret <?= $shC['api_secret'] !== '' ? '<span class="pill green" style="margin-inline-start:6px">••• set</span>' : '' ?></span>
-        <input type="text" name="shopify_api_secret" autocomplete="off" placeholder="<?= $shC['api_secret'] !== '' ? 'Leave blank to keep current' : 'Paste the client secret' ?>"></div>
+        <input type="password" name="shopify_api_secret" autocomplete="new-password" placeholder="<?= $shC['api_secret'] !== '' ? 'Leave blank to keep current' : 'Paste the client secret' ?>"></div>
     </div>
     <div class="alert info" style="font-size:12.5px;margin:6px 0 12px"><strong>Zoho client</strong> — at <span class="mono">api-console.zoho.com</span>: <strong>Add client → Server-based Applications</strong>, then:
       <ol style="margin:8px 0 0;padding-inline-start:18px;line-height:1.8">
@@ -399,7 +399,7 @@ if ($ok):  ?><div class="alert success"><?= e($ok) ?></div><?php endif; ?>
     <div class="grid2">
       <div class="field"><span class="lbl">Zoho Client ID</span><input type="text" name="zoho_client_id" value="<?= e($zC['client_id']) ?>" autocomplete="off" placeholder="1000.…"></div>
       <div class="field"><span class="lbl">Zoho Client Secret <?= $zC['client_secret'] !== '' ? '<span class="pill green" style="margin-inline-start:6px">••• set</span>' : '' ?></span>
-        <input type="text" name="zoho_client_secret" autocomplete="off" placeholder="<?= $zC['client_secret'] !== '' ? 'Leave blank to keep current' : 'Paste the client secret' ?>"></div>
+        <input type="password" name="zoho_client_secret" autocomplete="new-password" placeholder="<?= $zC['client_secret'] !== '' ? 'Leave blank to keep current' : 'Paste the client secret' ?>"></div>
     </div>
     <button type="submit" class="btn btn-primary">Save Connected apps settings</button>
   </form>
@@ -444,7 +444,7 @@ if ($ok):  ?><div class="alert success"><?= e($ok) ?></div><?php endif; ?>
       <div class="field"><span class="lbl">App ID</span>
         <input type="text" name="meta_app_id" value="<?= e($mCfg['app_id']) ?>" inputmode="numeric" placeholder="1234567890123456"></div>
       <div class="field"><span class="lbl">App Secret <?= $mCfg['app_secret'] !== '' ? '<span class="pill green" style="margin-inline-start:6px">••• set</span>' : '' ?></span>
-        <input type="text" name="meta_app_secret" autocomplete="off" placeholder="<?= $mCfg['app_secret'] !== '' ? 'Leave blank to keep current' : 'Paste the app secret' ?>"></div>
+        <input type="password" name="meta_app_secret" autocomplete="new-password" placeholder="<?= $mCfg['app_secret'] !== '' ? 'Leave blank to keep current' : 'Paste the app secret' ?>"></div>
       <div class="field"><span class="lbl">Login configuration ID <span class="text-muted">(optional)</span></span>
         <input type="text" name="meta_config_id" value="<?= e($mCfg['config_id']) ?>" inputmode="numeric" placeholder="Only if Facebook says Invalid Scopes">
         <span class="text-muted" style="font-size:12px">From Facebook Login for Business → Configurations. When set, it decides the permissions asked for.</span></div>
@@ -457,9 +457,9 @@ if ($ok):  ?><div class="alert success"><?= e($ok) ?></div><?php endif; ?>
   <h2>Change Password</h2>
   <form method="post" style="max-width:420px">
     <?= csrf_field() ?><input type="hidden" name="action" value="change_password">
-    <div class="field"><span class="lbl">Current Password</span><input type="password" name="current_password" required></div>
-    <div class="field"><span class="lbl">New Password (min 8)</span><input type="password" name="new_password" required minlength="8"></div>
-    <div class="field"><span class="lbl">Confirm New Password</span><input type="password" name="confirm_password" required></div>
+    <div class="field"><span class="lbl">Current Password</span><input type="password" name="current_password" autocomplete="current-password" required></div>
+    <div class="field"><span class="lbl">New Password (min 8)</span><input type="password" name="new_password" autocomplete="new-password" required minlength="8"></div>
+    <div class="field"><span class="lbl">Confirm New Password</span><input type="password" name="confirm_password" autocomplete="new-password" required></div>
     <button class="btn btn-primary">Change Password</button>
   </form>
 </div>

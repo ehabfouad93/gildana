@@ -483,6 +483,44 @@ $barH   = max(58, $logoH + 22);
     <?php
 }
 
+/**
+ * Every password, secret, token and key field is hidden while typed (type="password", never sent
+ * back to the page). This adds an eye button to each, so an admin can still check what they typed
+ * or read a password to hand to a client — shown only while they ask, then hidden again.
+ */
+function pw_reveal_script(): string
+{
+    return <<<'HTML'
+<style>.pw-wrap{position:relative;display:block}.pw-wrap>input{padding-inline-end:42px;width:100%}
+.pw-eye{position:absolute;inset-inline-end:6px;top:50%;transform:translateY(-50%);border:0;background:none;padding:6px;border-radius:6px;cursor:pointer;color:var(--muted,#6b7280);line-height:0}
+.pw-eye:hover,.pw-eye:focus-visible{color:var(--brand,#7C3AED)}.pw-eye[aria-pressed=true] .pw-off,.pw-eye[aria-pressed=false] .pw-on{display:none}</style>
+<script>
+(function(){
+  var eye='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    +'<g class="pw-off"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></g>'
+    +'<g class="pw-on"><path d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6A17 17 0 0 0 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.4-1.6M9.9 9.9a3 3 0 0 0 4.2 4.2"/></g></svg>';
+  function add(inp){
+    if(inp.dataset.pwEye) return; inp.dataset.pwEye='1';
+    var w=document.createElement('span'); w.className='pw-wrap';
+    inp.parentNode.insertBefore(w, inp); w.appendChild(inp);
+    var b=document.createElement('button'); b.type='button'; b.className='pw-eye'; b.setAttribute('aria-pressed','false');
+    b.setAttribute('aria-label','Show'); b.title='Show'; b.innerHTML=eye; w.appendChild(b);
+    b.addEventListener('click', function(){
+      var show = inp.type === 'password'; inp.type = show ? 'text' : 'password';
+      b.setAttribute('aria-pressed', show ? 'true' : 'false'); b.title = b.getAttribute('aria-label') === 'Show' ? 'Hide' : 'Show'; b.setAttribute('aria-label', b.title);
+    });
+    // Hidden again before the form leaves the page, so the browser never stores it as plain text.
+    if(inp.form) inp.form.addEventListener('submit', function(){ inp.type='password'; });
+  }
+  function scan(root){ (root.querySelectorAll ? root : document).querySelectorAll('input[type=password]').forEach(add); }
+  scan(document);
+  new MutationObserver(function(ms){ ms.forEach(function(m){ m.addedNodes.forEach(function(n){ if(n.nodeType===1){ if(n.matches && n.matches('input[type=password]')) add(n); else scan(n); } }); }); })
+    .observe(document.body, {childList:true, subtree:true});
+})();
+</script>
+HTML;
+}
+
 function layout_footer(): void
 {
     ?>
@@ -615,6 +653,7 @@ function layout_footer(): void
   echo help_launcher_html($helpBase);
 ?>
 <?= pwa_script($tabSub ? '../' : './') ?>
+<?= pw_reveal_script() ?>
 <script>
 /* ── install prompt ──
    Android/Chrome fires beforeinstallprompt, so we can offer a real Install button.

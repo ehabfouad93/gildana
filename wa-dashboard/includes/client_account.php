@@ -43,7 +43,7 @@ function client_account_create(array $f): array
         );
         db_insert("INSERT INTO users (client_id, email, name, password_hash, role, status, created_at)
                    VALUES (?,?,?,?, 'client', 'active', NOW())",
-                  [$clientId, $email, $s('login_name') ?: null, password_hash($pass, PASSWORD_DEFAULT)]);
+                  [$clientId, $email, $s('login_name') ?: $s('contact_person'), password_hash($pass, PASSWORD_DEFAULT)]);   // name is NOT NULL: '' when blank
         $pdo->commit();
     } catch (Throwable $ex) {
         if ($pdo->inTransaction()) $pdo->rollBack();

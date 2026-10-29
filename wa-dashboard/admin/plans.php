@@ -111,7 +111,7 @@ layout_header('Plans & pricing', 'admin', 'plans');
     <?= csrf_field() ?><input type="hidden" name="action" value="save_platform">
     <div class="field"><span class="lbl">WhatsApp access token
       <?= $get('wa_platform_token') ? '<span class="pill green">••• set</span>' : '' ?></span>
-      <input type="text" name="wa_platform_token" placeholder="<?= $get('wa_platform_token') ? 'Leave blank to keep' : 'System-user token' ?>" autocomplete="off"></div>
+      <input autocomplete="new-password" type="password" name="wa_platform_token" placeholder="<?= $get('wa_platform_token') ? 'Leave blank to keep' : 'System-user token' ?>" autocomplete="off"></div>
     <div class="field"><span class="lbl">WhatsApp phone number ID</span>
       <input type="text" name="wa_platform_phone_id" value="<?= e($get('wa_platform_phone_id')) ?>"></div>
     <div class="field"><span class="lbl">AI provider</span>

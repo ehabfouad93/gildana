@@ -224,7 +224,7 @@ if (!$it):
             <li>Paste the <strong>Admin API access token</strong> (shpat_…) — or the app's <strong>client ID</strong> — and its <strong>API secret key</strong> below.</li></ol>
           <form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="shopify_keys">
             <div class="field"><span class="lbl">Store address</span><input name="shop" required maxlength="120" placeholder="mystore.myshopify.com" dir="ltr" autocomplete="off"></div>
-            <div class="field"><span class="lbl">Admin API access token</span><input name="token" maxlength="200" placeholder="shpat_…" dir="ltr" autocomplete="off"></div>
+            <div class="field"><span class="lbl">Admin API access token</span><input type="password" name="token" maxlength="200" placeholder="shpat_…" dir="ltr" autocomplete="new-password"></div>
             <div class="field"><span class="lbl">…or the app's client ID</span><input name="app_id" maxlength="200" dir="ltr" autocomplete="off"></div>
             <div class="field"><span class="lbl">API secret key</span><input name="secret" type="password" required maxlength="200" dir="ltr" autocomplete="off"></div>
             <button class="btn btn-primary btn-sm mt10">Connect with keys</button></form></details>
