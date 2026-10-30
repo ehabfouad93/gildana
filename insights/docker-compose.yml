@@ -1,0 +1,29 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: insights
+      POSTGRES_PASSWORD: insights
+      POSTGRES_DB: insights
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD", "pg_isready", "-U", "insights"], interval: 5s, retries: 10 }
+
+  web:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://insights:insights@db:5432/insights
+    ports: ["3000:3000"]
+    depends_on: { db: { condition: service_healthy } }
+
+  worker:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://insights:insights@db:5432/insights
+    command: ["npx", "tsx", "--tsconfig", "tsconfig.json", "src/worker/index.ts"]
+    depends_on: { db: { condition: service_healthy } }
+    restart: unless-stopped
+
+volumes:
+  pgdata:

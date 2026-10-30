@@ -1,0 +1,53 @@
+/**
+ * Creates the first admin, and — unless SEED_DEMO=false — a demo agency
+ * client with two companies and a demo login on every platform, so the
+ * dashboards have data straight away. Safe to run more than once.
+ */
+import bcrypt from "bcryptjs";
+import { PLATFORMS } from "../src/lib/platforms";
+import { db } from "../src/lib/db";
+import { enqueueInitialSync } from "../src/lib/jobs";
+import { demoAccounts } from "../src/platforms/demo";
+
+async function main() {
+  const email = (process.env.SEED_ADMIN_EMAIL || "admin@gildana.net").toLowerCase();
+  const password = process.env.SEED_ADMIN_PASSWORD || "change-me-now";
+  await db.user.upsert({
+    where: { email },
+    create: { email, name: "Gildana Admin", role: "ADMIN", passwordHash: await bcrypt.hash(password, 12) },
+    update: {},
+  });
+  console.log(`admin: ${email}`);
+
+  if (process.env.SEED_DEMO === "false") return;
+  if (await db.client.findFirst({ where: { name: "Demo Agency" } })) {
+    console.log("demo client already exists");
+    return;
+  }
+
+  const client = await db.client.create({ data: { name: "Demo Agency", isAgency: true, reportingCurrency: "USD" } });
+  const companies = await Promise.all(
+    ["Nile Heights Developments", "Cairo Fit Clubs"].map((name, i) =>
+      db.company.create({ data: { clientId: client.id, name, website: i ? "https://cairofit.example" : "https://nileheights.example", industry: i ? "Fitness" : "Real estate" } })),
+  );
+  await db.user.create({
+    data: { email: "client@demo.local", name: "Demo Client", role: "CLIENT", clientId: client.id, passwordHash: await bcrypt.hash("demo1234", 12) },
+  });
+
+  for (const platform of PLATFORMS) {
+    const conn = await db.adConnection.create({
+      data: { clientId: client.id, platform, label: `${platform} demo login`, isDemo: true, externalUser: "demo" },
+    });
+    const accounts = demoAccounts(platform, `demo-token-${platform}`);
+    for (const [i, a] of accounts.entries()) {
+      const acc = await db.adAccount.create({
+        data: { connectionId: conn.id, platform, externalId: a.externalId, name: a.name, currency: a.currency, timezone: a.timezone, companyId: companies[i % 2].id },
+      });
+      await enqueueInitialSync(acc.id);
+    }
+  }
+  console.log("demo agency created — run `npm run worker -- --once` to load its data");
+  console.log("client login: client@demo.local / demo1234");
+}
+
+main().finally(() => db.$disconnect());

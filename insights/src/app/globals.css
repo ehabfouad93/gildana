@@ -1,0 +1,51 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --ink: #111827;
+  --muted: #6b7280;
+  --line: #e5e7eb;
+  --accent: #c4973a;
+  --accent-ink: #ffffff;
+  --side: #0f172a;
+  --side-ink: #cbd5e1;
+  --good: #15803d;
+  --bad: #b91c1c;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-side: var(--side);
+  --color-side-ink: var(--side-ink);
+  --color-good: var(--good);
+  --color-bad: var(--bad);
+  --font-sans: "Inter", "Segoe UI", "Noto Sans Arabic", system-ui, sans-serif;
+}
+
+body { background: var(--bg); color: var(--ink); }
+
+@layer components {
+  .card { @apply rounded-xl border border-line bg-panel p-4 shadow-sm; }
+  .btn { @apply inline-flex items-center gap-2 rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50; }
+  .btn-ghost { @apply inline-flex items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2 text-sm hover:bg-bg; }
+  .input { @apply w-full rounded-lg border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent; }
+  .label { @apply mb-1 block text-xs font-medium text-muted; }
+  .tbl { @apply w-full text-sm; }
+  .tbl th { @apply border-b border-line px-3 py-2 text-start text-xs font-semibold uppercase tracking-wide text-muted whitespace-nowrap; }
+  .tbl td { @apply border-b border-line px-3 py-2 whitespace-nowrap; }
+  .tbl tr:hover td { @apply bg-bg; }
+  .num { @apply text-end tabular-nums; }
+  .pill { @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium; }
+}
+
+@media print {
+  .no-print { display: none !important; }
+  body { background: white; }
+  .card { box-shadow: none; break-inside: avoid; }
+}

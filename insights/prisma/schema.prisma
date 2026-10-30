@@ -1,0 +1,451 @@
+// Gildana Insights — data model.
+//
+// Tenancy: Client is the tenant. A client (brand or agency) owns many
+// Companies; each company owns ad accounts on any platform and websites.
+// Every warehouse row carries accountId so a query can be scoped to the
+// accounts a user may see with one join.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  CLIENT
+  VIEWER
+}
+
+enum Platform {
+  META
+  GOOGLE
+  LINKEDIN
+  SNAPCHAT
+  TIKTOK
+}
+
+enum Level {
+  ACCOUNT
+  CAMPAIGN
+  ADSET
+  AD
+}
+
+enum SyncStatus {
+  QUEUED
+  RUNNING
+  DONE
+  FAILED
+}
+
+enum ShareScope {
+  CLIENT
+  COMPANY
+  PLATFORM
+  CAMPAIGN
+}
+
+// ───────────────────────── Tenancy ─────────────────────────
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String    @default("")
+  passwordHash String
+  role         Role      @default(CLIENT)
+  clientId     String?
+  client       Client?   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  locale       String    @default("en")
+  active       Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+
+  connections AdConnection[]
+
+  @@index([clientId])
+}
+
+model Client {
+  id                String   @id @default(cuid())
+  name              String
+  isAgency          Boolean  @default(false)
+  reportingCurrency String   @default("USD")
+  timezone          String   @default("Africa/Cairo")
+  logoUrl           String   @default("")
+  active            Boolean  @default(true)
+  createdAt         DateTime @default(now())
+
+  users       User[]
+  companies   Company[]
+  connections AdConnection[]
+  shareLinks  ShareLink[]
+}
+
+model Company {
+  id        String   @id @default(cuid())
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  name      String
+  website   String   @default("")
+  industry  String   @default("")
+  createdAt DateTime @default(now())
+
+  accounts AdAccount[]
+  budgets  Budget[]
+
+  @@index([clientId])
+}
+
+/// One OAuth login on one platform. A single login usually exposes many ad
+/// accounts, which are then assigned to companies individually.
+model AdConnection {
+  id          String    @id @default(cuid())
+  clientId    String
+  client      Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  userId      String?
+  user        User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  platform    Platform
+  label       String    @default("")
+  externalUser String   @default("") // platform user/login id
+  tokenEnc    String?
+  refreshEnc  String?
+  expiresAt   DateTime?
+  scopes      String    @default("")
+  isDemo      Boolean   @default(false)
+  status      String    @default("active") // active | expired | revoked | error
+  lastError   String    @default("")
+  createdAt   DateTime  @default(now())
+
+  accounts AdAccount[]
+
+  @@index([clientId, platform])
+}
+
+model AdAccount {
+  id           String       @id @default(cuid())
+  connectionId String
+  connection   AdConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  companyId    String?
+  company      Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  platform     Platform
+  externalId   String
+  name         String
+  currency     String       @default("USD")
+  timezone     String       @default("UTC")
+  enabled      Boolean      @default(true)
+  lastSyncAt   DateTime?
+  syncError    String       @default("")
+  createdAt    DateTime     @default(now())
+
+  campaigns Campaign[]
+  adSets    AdSet[]
+  ads       Ad[]
+  stats     StatDaily[]
+  breakdown StatBreakdown[]
+  keywords  Keyword[]
+  terms     SearchTerm[]
+  placements Placement[]
+  leads     Lead[]
+  syncRuns  SyncRun[]
+
+  @@unique([connectionId, externalId])
+  @@index([companyId])
+}
+
+// ───────────────────────── Ads structure ─────────────────────────
+
+model Campaign {
+  id          String    @id @default(cuid())
+  accountId   String
+  account     AdAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  platform    Platform
+  externalId  String
+  name        String
+  objective   String    @default("")
+  status      String    @default("")
+  dailyBudget Decimal?  @db.Decimal(14, 2)
+  totalBudget Decimal?  @db.Decimal(14, 2)
+  startDate   DateTime?
+  endDate     DateTime?
+  raw         Json?
+  updatedAt   DateTime  @updatedAt
+
+  adSets AdSet[]
+  ads    Ad[]
+
+  @@unique([accountId, externalId])
+}
+
+/// Meta ad set · Google ad group · LinkedIn campaign · Snapchat ad squad · TikTok ad group.
+model AdSet {
+  id               String    @id @default(cuid())
+  accountId        String
+  account          AdAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  campaignId       String
+  campaign         Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  platform         Platform
+  externalId       String
+  name             String
+  status           String    @default("")
+  optimizationGoal String    @default("")
+  bidStrategy      String    @default("")
+  dailyBudget      Decimal?  @db.Decimal(14, 2)
+  targetingRaw     Json?
+  updatedAt        DateTime  @updatedAt
+
+  ads       Ad[]
+  targeting TargetingItem[]
+
+  @@unique([accountId, externalId])
+  @@index([campaignId])
+}
+
+model Ad {
+  id          String    @id @default(cuid())
+  accountId   String
+  account     AdAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  campaignId  String
+  campaign    Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  adSetId     String
+  adSet       AdSet     @relation(fields: [adSetId], references: [id], onDelete: Cascade)
+  platform    Platform
+  externalId  String
+  name        String
+  status      String    @default("")
+  format      String    @default("") // image | video | carousel | text | search | responsive …
+  headline    String    @default("")
+  body        String    @default("")
+  cta         String    @default("")
+  thumbUrl    String    @default("")
+  landingUrl  String    @default("")
+  previewUrl  String    @default("")
+  previewHtml String?
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([accountId, externalId])
+  @@index([adSetId])
+  @@index([campaignId])
+}
+
+/// One selected targeting option of an ad set, flattened so it can be grouped
+/// and ranked across ad sets ("which interest brings the cheapest leads").
+model TargetingItem {
+  id         String @id @default(cuid())
+  adSetId    String
+  adSet      AdSet  @relation(fields: [adSetId], references: [id], onDelete: Cascade)
+  type       String // interest | behavior | audience | lookalike | age | gender | geo | placement | keyword | job_title | seniority | industry | company_size | language | device
+  value      String
+  externalId String @default("")
+  exclude    Boolean @default(false)
+
+  @@index([adSetId])
+  @@index([type, value])
+}
+
+// ───────────────────────── Metrics ─────────────────────────
+
+/// Daily metrics at one level. entityId is the internal id of the account,
+/// campaign, ad set or ad. Money is in the ad account's currency.
+model StatDaily {
+  id          String    @id @default(cuid())
+  accountId   String
+  account     AdAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  platform    Platform
+  level       Level
+  entityId    String
+  campaignId  String?
+  adSetId     String?
+  date        DateTime  @db.Date
+  spend       Decimal   @default(0) @db.Decimal(14, 2)
+  impressions Int       @default(0)
+  reach       Int       @default(0)
+  clicks      Int       @default(0)
+  linkClicks  Int       @default(0)
+  conversions Decimal   @default(0) @db.Decimal(12, 2)
+  leads       Int       @default(0)
+  purchases   Int       @default(0)
+  value       Decimal   @default(0) @db.Decimal(14, 2)
+  videoViews  Int       @default(0)
+  engagements Int       @default(0)
+  extra       Json?
+
+  @@unique([level, entityId, date])
+  @@index([accountId, level, date])
+  @@index([campaignId, date])
+}
+
+/// Metrics split by one dimension (age, gender, country, placement, hour …)
+/// for one entity over one day.
+model StatBreakdown {
+  id          String    @id @default(cuid())
+  accountId   String
+  account     AdAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  platform    Platform
+  level       Level
+  entityId    String
+  campaignId  String?
+  date        DateTime  @db.Date
+  dimension   String
+  value       String
+  spend       Decimal   @default(0) @db.Decimal(14, 2)
+  impressions Int       @default(0)
+  reach       Int       @default(0)
+  clicks      Int       @default(0)
+  conversions Decimal   @default(0) @db.Decimal(12, 2)
+  leads       Int       @default(0)
+  convValue   Decimal   @default(0) @db.Decimal(14, 2)
+
+  @@unique([level, entityId, date, dimension, value])
+  @@index([accountId, dimension, date])
+  @@index([campaignId, dimension])
+}
+
+/// Google Ads keyword with its metrics summed per day.
+model Keyword {
+  id           String    @id @default(cuid())
+  accountId    String
+  account      AdAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  campaignId   String
+  adSetId      String
+  externalId   String
+  text         String
+  matchType    String
+  status       String    @default("")
+  qualityScore Int?
+  date         DateTime  @db.Date
+  spend        Decimal   @default(0) @db.Decimal(14, 2)
+  impressions  Int       @default(0)
+  clicks       Int       @default(0)
+  conversions  Decimal   @default(0) @db.Decimal(12, 2)
+  value        Decimal   @default(0) @db.Decimal(14, 2)
+
+  @@unique([accountId, externalId, date])
+  @@index([campaignId, date])
+}
+
+model SearchTerm {
+  id          String    @id @default(cuid())
+  accountId   String
+  account     AdAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  campaignId  String
+  adSetId     String
+  term        String
+  keywordText String    @default("")
+  matchType   String    @default("")
+  date        DateTime  @db.Date
+  spend       Decimal   @default(0) @db.Decimal(14, 2)
+  impressions Int       @default(0)
+  clicks      Int       @default(0)
+  conversions Decimal   @default(0) @db.Decimal(12, 2)
+
+  @@unique([accountId, adSetId, term, date])
+  @@index([campaignId, date])
+}
+
+/// Where Display / YouTube / app / audience-network traffic was served.
+model Placement {
+  id          String    @id @default(cuid())
+  accountId   String
+  account     AdAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  campaignId  String
+  kind        String // website | youtube_channel | youtube_video | mobile_app | publisher
+  target      String
+  display     String    @default("")
+  date        DateTime  @db.Date
+  spend       Decimal   @default(0) @db.Decimal(14, 2)
+  impressions Int       @default(0)
+  clicks      Int       @default(0)
+  conversions Decimal   @default(0) @db.Decimal(12, 2)
+
+  @@unique([accountId, campaignId, kind, target, date])
+  @@index([campaignId, date])
+}
+
+model Lead {
+  id         String    @id @default(cuid())
+  accountId  String
+  account    AdAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  platform   Platform
+  externalId String
+  campaignId String?
+  adSetId    String?
+  adId       String?
+  formName   String    @default("")
+  createdAt  DateTime
+  fields     Json
+
+  @@unique([accountId, externalId])
+  @@index([adSetId])
+  @@index([campaignId])
+}
+
+model FxRate {
+  id    String   @id @default(cuid())
+  date  DateTime @db.Date
+  base  String
+  quote String
+  rate  Decimal  @db.Decimal(18, 8)
+
+  @@unique([date, base, quote])
+}
+
+model Budget {
+  id        String    @id @default(cuid())
+  companyId String
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  platform  Platform?
+  month     DateTime  @db.Date
+  amount    Decimal   @db.Decimal(14, 2)
+  currency  String    @default("USD")
+
+  @@unique([companyId, platform, month])
+}
+
+// ───────────────────────── Jobs ─────────────────────────
+
+/// Also the job queue: the worker claims QUEUED rows with SKIP LOCKED.
+model SyncRun {
+  id         String     @id @default(cuid())
+  accountId  String
+  account    AdAccount  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  kind       String // full | stats | backfill
+  fromDate   DateTime   @db.Date
+  toDate     DateTime   @db.Date
+  status     SyncStatus @default(QUEUED)
+  attempts   Int        @default(0)
+  runAfter   DateTime   @default(now())
+  error      String     @default("")
+  log        String     @default("")
+  createdAt  DateTime   @default(now())
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  @@index([status, runAfter])
+  @@index([accountId, createdAt])
+}
+
+// ───────────────────────── Sharing ─────────────────────────
+
+model ShareLink {
+  id           String     @id @default(cuid())
+  token        String     @unique
+  clientId     String
+  client       Client     @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  title        String     @default("")
+  scope        ShareScope
+  companyId    String?
+  platform     Platform?
+  campaignId   String?
+  rangeDays    Int?       // rolling window; null = fixed range below
+  fromDate     DateTime?  @db.Date
+  toDate       DateTime?  @db.Date
+  passwordHash String?
+  expiresAt    DateTime?
+  views        Int        @default(0)
+  createdById  String?
+  createdAt    DateTime   @default(now())
+}
