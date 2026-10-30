@@ -4,8 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000",
-    "build": "npm run build:tracker && next build",
+    "build": "npm run vendor && npm run build:tracker && next build",
     "build:tracker": "esbuild tracker/src/t.ts --bundle --minify --format=iife --target=es2018 --outfile=public/t.js",
+    "vendor": "mkdir -p public/vendor && cp node_modules/rrweb/dist/record/rrweb-record.min.js public/vendor/ && cp node_modules/rrweb-player/dist/index.js public/vendor/rrweb-player.js && cp node_modules/rrweb-player/dist/style.css public/vendor/rrweb-player.css",
+    "postinstall": "npm run vendor && npm run build:tracker && prisma generate",
     "start": "next start -p 3000",
     "worker": "tsx --tsconfig tsconfig.json src/worker/index.ts",
     "lint": "next lint",
@@ -23,8 +25,11 @@
     "echarts": "^6.0.0",
     "next": "^15.5.28",
     "next-auth": "^5.0.0-beta.32",
+    "playwright-core": "^1.63.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
+    "rrweb": "^2.0.0-alpha.4",
+    "rrweb-player": "^1.0.0-alpha.4",
     "server-only": "^0.0.1",
     "zod": "^4.6.7"
   },

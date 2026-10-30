@@ -63,7 +63,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     },
     authorized({ auth, request }) {
       const p = request.nextUrl.pathname;
-      const open = p === "/login" || p.startsWith("/s/") || p.startsWith("/api/collect") || p.startsWith("/api/auth") || p.startsWith("/api/share");
+      const open = p === "/login" || p.startsWith("/s/") || p.startsWith("/api/collect") || p.startsWith("/api/auth") || p.startsWith("/api/share") || p.startsWith("/demo-site");
       return open || !!auth;
     },
   },

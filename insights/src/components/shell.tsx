@@ -28,6 +28,7 @@ export async function Shell({ children }: { children: React.ReactNode }) {
             <NavLink href="/campaigns">{t.campaigns}</NavLink>
             <NavLink href="/audiences">{t.audiences}</NavLink>
             <NavLink href="/google">{t.google}</NavLink>
+            <NavLink href="/sites">{t.sites}</NavLink>
             <NavLink href="/reports">{t.reports}</NavLink>
             <NavLink href="/connections">{t.connections}</NavLink>
             <NavLink href="/companies">{t.companies}</NavLink>

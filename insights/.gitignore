@@ -9,3 +9,4 @@ storage/
 coverage/
 test-results/
 playwright-report/
+public/vendor/

@@ -96,6 +96,7 @@ model Company {
 
   accounts AdAccount[]
   budgets  Budget[]
+  sites    Site[]
 
   @@index([clientId])
 }
@@ -450,4 +451,254 @@ model ShareLink {
   views        Int        @default(0)
   createdById  String?
   createdAt    DateTime   @default(now())
+}
+
+// ───────────────────────── Websites ─────────────────────────
+
+model Site {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name        String
+  domain      String   // host without scheme, e.g. example.com — subdomains are accepted too
+  trackingKey String   @unique
+  replay      Boolean  @default(false) // record sessions for replay
+  replayRate  Int      @default(20)    // percent of sessions recorded
+  isDemo      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  sessions  TrackSession[]
+  goals     Goal[]
+  snapshots PageSnapshot[]
+  crawls    SeoCrawl[]
+  geoAudits GeoAudit[]
+  prompts   AiPrompt[]
+
+  @@index([companyId])
+}
+
+model TrackSession {
+  id          String   @id // "<siteId>:<client session id>"
+  siteId      String
+  site        Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  visitorId   String
+  isNew       Boolean  @default(true)
+  startedAt   DateTime
+  lastSeenAt  DateTime
+  landingPath String   @default("")
+  exitPath    String   @default("")
+  referrer    String   @default("")
+  refHost     String   @default("")
+  utmSource   String   @default("")
+  utmMedium   String   @default("")
+  utmCampaign String   @default("")
+  utmContent  String   @default("")
+  utmTerm     String   @default("")
+  clickIdType String   @default("") // gclid | fbclid | ttclid | li_fat_id | ScCid | msclkid
+  channel     String   @default("Direct")
+  device      String   @default("desktop")
+  browser     String   @default("")
+  os          String   @default("")
+  country     String   @default("")
+  city        String   @default("")
+  pageviews   Int      @default(0)
+  events      Int      @default(0)
+  durationSec Int      @default(0)
+  maxScroll   Int      @default(0)
+  converted   Boolean  @default(false)
+  hasReplay   Boolean  @default(false)
+
+  views   TrackPageview[]
+  evs     TrackEvent[]
+  replays TrackReplay[]
+
+  @@index([siteId, startedAt])
+  @@index([siteId, visitorId])
+}
+
+model TrackPageview {
+  id         String       @id @default(cuid())
+  sessionId  String
+  session    TrackSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  siteId     String
+  path       String
+  title      String       @default("")
+  ts         DateTime
+  activeSec  Int          @default(0)
+  scrollPct  Int          @default(0) // deepest point seen, % of page height
+  viewportW  Int          @default(0)
+  viewportH  Int          @default(0)
+  docH       Int          @default(0)
+  device     String       @default("desktop")
+  pvKey      String       @default("") // client page-view id, so the leave beacon can find it
+
+  @@index([siteId, ts])
+  @@index([siteId, path, ts])
+  @@index([sessionId, pvKey])
+}
+
+model TrackEvent {
+  id        String       @id @default(cuid())
+  sessionId String
+  session   TrackSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  siteId    String
+  path      String
+  type      String // click | rage_click | dead_click | form_start | form_submit | custom | conversion
+  name      String       @default("")
+  value     Float?
+  ts        DateTime
+  xPct      Float? // click x as % of document width
+  yPx       Int? // click y from document top, in CSS px
+  docW      Int?
+  docH      Int?
+  selector  String       @default("")
+  text      String       @default("")
+  device    String       @default("desktop")
+
+  @@index([siteId, path, type, ts])
+  @@index([siteId, type, ts])
+}
+
+model TrackReplay {
+  id        String       @id @default(cuid())
+  sessionId String
+  session   TrackSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  seq       Int
+  ts        DateTime
+  data      Bytes // gzipped rrweb events (JSON array)
+
+  @@unique([sessionId, seq])
+}
+
+/// A session converts when it views a matching path or fires a matching event.
+model Goal {
+  id     String @id @default(cuid())
+  siteId String
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  name   String
+  kind   String // path | event
+  match  String // path prefix (e.g. /thank-you) or event name
+
+  @@index([siteId])
+}
+
+/// A full-page screenshot used as the heatmap background.
+model PageSnapshot {
+  id        String   @id @default(cuid())
+  siteId    String
+  site      Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  path      String
+  device    String
+  width     Int
+  height    Int
+  image     Bytes
+  createdAt DateTime @default(now())
+
+  @@unique([siteId, path, device])
+}
+
+// ───────────────────────── SEO ─────────────────────────
+
+model SeoCrawl {
+  id         String    @id @default(cuid())
+  siteId     String
+  site       Site      @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  status     String    @default("queued") // queued | running | done | failed
+  maxPages   Int       @default(200)
+  pagesDone  Int       @default(0)
+  score      Int?
+  summary    Json?
+  error      String    @default("")
+  createdAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  pages  SeoPage[]
+  issues SeoIssue[]
+
+  @@index([siteId, createdAt])
+}
+
+model SeoPage {
+  id            String   @id @default(cuid())
+  crawlId       String
+  crawl         SeoCrawl @relation(fields: [crawlId], references: [id], onDelete: Cascade)
+  url           String
+  status        Int
+  redirectTo    String   @default("")
+  ms            Int      @default(0)
+  bytes         Int      @default(0)
+  title         String   @default("")
+  description   String   @default("")
+  h1            String   @default("")
+  h1Count       Int      @default(0)
+  canonical     String   @default("")
+  robots        String   @default("")
+  lang          String   @default("")
+  wordCount     Int      @default(0)
+  internalLinks Int      @default(0)
+  externalLinks Int      @default(0)
+  images        Int      @default(0)
+  imagesNoAlt   Int      @default(0)
+  schemaTypes   String   @default("")
+  hreflang      String   @default("")
+  ogTitle       String   @default("")
+  depth         Int      @default(0)
+
+  @@index([crawlId])
+}
+
+model SeoIssue {
+  id       String   @id @default(cuid())
+  crawlId  String
+  crawl    SeoCrawl @relation(fields: [crawlId], references: [id], onDelete: Cascade)
+  url      String
+  code     String
+  severity String // error | warning | notice
+  detail   String   @default("")
+
+  @@index([crawlId, code])
+}
+
+// ───────────────────────── GEO (AI search) ─────────────────────────
+
+model GeoAudit {
+  id        String   @id @default(cuid())
+  siteId    String
+  site      Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  status    String   @default("queued")
+  score     Int?
+  checks    Json?
+  aiReview  String   @default("")
+  error     String   @default("")
+  createdAt DateTime @default(now())
+  finishedAt DateTime?
+
+  @@index([siteId, createdAt])
+}
+
+/// A question the brand wants to be the answer to in AI assistants.
+model AiPrompt {
+  id        String   @id @default(cuid())
+  siteId    String
+  site      Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  prompt    String
+  brand     String
+  createdAt DateTime @default(now())
+
+  results AiVisibility[]
+}
+
+model AiVisibility {
+  id         String   @id @default(cuid())
+  promptId   String
+  prompt     AiPrompt @relation(fields: [promptId], references: [id], onDelete: Cascade)
+  engine     String
+  mentioned  Boolean
+  position   Int?     // 1-based order of the brand among brands named, when listed
+  cited      Boolean  @default(false) // the brand's domain appears as a source
+  competitors String  @default("")
+  answer     String
+  checkedAt  DateTime @default(now())
+
+  @@index([promptId, checkedAt])
 }
