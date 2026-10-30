@@ -133,6 +133,8 @@ model AdAccount {
   company      Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
   platform     Platform
   externalId   String
+  /// Manager account the login reaches this one through (Google MCC login-customer-id).
+  parentId     String       @default("")
   name         String
   currency     String       @default("USD")
   timezone     String       @default("UTC")

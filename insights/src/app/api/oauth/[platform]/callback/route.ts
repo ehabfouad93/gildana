@@ -24,7 +24,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ platform
   const isDemo = url.searchParams.get("demo") === "1";
   const connector = connectorFor(platform, isDemo);
   try {
-    const tok = await connector.exchange(url.searchParams.get("code") ?? "", redirectUri(slug));
+    const tok = await connector.exchange(url.searchParams.get("code") ?? url.searchParams.get("auth_code") ?? "", redirectUri(slug));
     const accounts = await connector.listAccounts(tok.accessToken);
     const conn = await db.adConnection.create({
       data: {
@@ -36,7 +36,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ platform
     // Accounts start unassigned; nothing syncs until someone puts them in a company.
     await db.adAccount.createMany({
       skipDuplicates: true,
-      data: accounts.map((a) => ({ connectionId: conn.id, platform, externalId: a.externalId, name: a.name, currency: a.currency, timezone: a.timezone })),
+      data: accounts.map((a) => ({ connectionId: conn.id, platform, externalId: a.externalId, parentId: a.parentId ?? "", name: a.name, currency: a.currency, timezone: a.timezone })),
     });
     return back(`connected=${conn.id}`);
   } catch (e) {

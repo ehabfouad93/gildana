@@ -1,9 +1,13 @@
 import type { Platform } from "@prisma/client";
 import { demoConnector } from "./demo";
+import { google } from "./google";
+import { linkedin } from "./linkedin";
 import { meta } from "./meta";
+import { snapchat } from "./snapchat";
+import { tiktok } from "./tiktok";
 import type { Connector } from "./types";
 
-const REAL: Partial<Record<Platform, Connector>> = { META: meta };
+const REAL: Partial<Record<Platform, Connector>> = { META: meta, GOOGLE: google, LINKEDIN: linkedin, SNAPCHAT: snapchat, TIKTOK: tiktok };
 
 export function registerConnector(c: Connector) {
   REAL[c.platform] = c;

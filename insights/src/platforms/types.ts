@@ -15,7 +15,7 @@ export type TokenSet = {
   label?: string;
 };
 
-export type RemoteAccount = { externalId: string; name: string; currency: string; timezone: string; status?: string };
+export type RemoteAccount = { externalId: string; name: string; currency: string; timezone: string; status?: string; parentId?: string };
 
 export type RemoteCampaign = {
   externalId: string; name: string; objective: string; status: string;
@@ -69,7 +69,7 @@ export type RemoteLead = {
 
 export type SyncContext = {
   accessToken: string;
-  account: { externalId: string; currency: string; timezone: string };
+  account: { externalId: string; currency: string; timezone: string; parentId?: string };
 };
 
 export type StatsBundle = {

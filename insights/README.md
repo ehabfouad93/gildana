@@ -50,11 +50,15 @@ Logins after seeding: `admin@gildana.net` / `change-me-now` (from `SEED_ADMIN_*`
 
 With `DEMO_MODE=true`, every platform offers a **demo login** that generates realistic, deterministic data — so the whole product works before API approvals arrive. When a platform's app credentials are set in `.env`, its **Connect** button runs the real OAuth flow instead.
 
-| Platform | Status | Needs |
+| Platform | Connector | App credentials (`.env`) · OAuth redirect `{APP_URL}/api/oauth/<slug>/callback` |
 |---|---|---|
-| Meta | Live connector (`src/platforms/meta`) — structure, daily insights at 4 levels, 8 breakdowns, ad set targeting, lead ads, live ad previews | `META_APP_ID`, `META_APP_SECRET`; app with `ads_read`, `leads_retrieval`, `business_management`. OAuth redirect: `{APP_URL}/api/oauth/meta/callback` |
-| Google Ads | Demo now; live connector next phase | developer token, OAuth client, MCC id |
-| LinkedIn / Snapchat / TikTok | Demo now; live connectors next phase | each platform's marketing API app |
+| Meta | `src/platforms/meta` — campaigns/ad sets/ads, daily insights at 4 levels, 8 breakdowns (age, gender, age×gender, country, region, device, placement, hour), ad set targeting (interests, behaviours, audiences, geo…), lead ads, live ad previews | `META_APP_ID`, `META_APP_SECRET`; scopes `ads_read`, `leads_retrieval`, `business_management` |
+| Google Ads | `src/platforms/google` — GAQL; MCC-aware account discovery; campaigns/ad groups/ads, ad group + campaign criteria, daily stats, age/gender/country/device/network/hour, keywords with quality score, search terms, Display/YouTube/app placements; token refresh | `GOOGLE_ADS_CLIENT_ID`, `GOOGLE_ADS_CLIENT_SECRET`, `GOOGLE_ADS_DEVELOPER_TOKEN`, optional `GOOGLE_ADS_LOGIN_CUSTOMER_ID` |
+| LinkedIn | `src/platforms/linkedin` — campaign groups/campaigns/creatives, targeting criteria (job titles, seniority, industry, company size, geo…), adAnalytics daily at 4 levels, job title/seniority/industry/company size/country pivots | `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET`; Marketing API access with `r_ads`, `r_ads_reporting` |
+| Snapchat | `src/platforms/snapchat` — campaigns/ad squads/ads/creatives, targeting, daily stats at 4 levels, age/gender/country/OS | `SNAPCHAT_CLIENT_ID`, `SNAPCHAT_CLIENT_SECRET` |
+| TikTok | `src/platforms/tiktok` — campaigns/ad groups/ads, targeting, BASIC reports at 4 levels, AUDIENCE reports (age, gender, country, platform, interest category) | `TIKTOK_APP_ID`, `TIKTOK_APP_SECRET` |
+
+The connectors are written against each platform's current documentation and covered by unit tests on their normalisers. Meta is the first to run against live accounts; expect small field adjustments on the others when their API access is approved and the first real sync runs (errors show on `/admin/health`).
 
 Connectors implement one interface (`src/platforms/types.ts`); `src/worker/sync.ts` maps any of them onto the warehouse.
 

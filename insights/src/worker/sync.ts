@@ -1,9 +1,9 @@
-import { Prisma, type Level } from "@prisma/client";
+import { Prisma, type AdConnection, type Level } from "@prisma/client";
 import { db } from "@/lib/db";
-import { decrypt } from "@/lib/crypto";
+import { decrypt, encrypt } from "@/lib/crypto";
 import { toDate } from "@/lib/dates";
 import { connectorFor } from "@/platforms";
-import type { Metrics, SyncContext } from "@/platforms/types";
+import type { Connector, Metrics, SyncContext } from "@/platforms/types";
 
 /**
  * Pulls one ad account for one date window and writes it into the warehouse.
@@ -15,8 +15,8 @@ export async function syncAccount(accountId: string, from: string, to: string, l
   const conn = account.connection;
   const connector = connectorFor(account.platform, conn.isDemo);
   const ctx: SyncContext = {
-    accessToken: conn.isDemo ? "demo" : decrypt(conn.tokenEnc),
-    account: { externalId: account.externalId, currency: account.currency, timezone: account.timezone },
+    accessToken: conn.isDemo ? "demo" : await freshToken(conn, connector),
+    account: { externalId: account.externalId, currency: account.currency, timezone: account.timezone, parentId: account.parentId },
   };
   const platform = account.platform;
 
@@ -127,18 +127,18 @@ export async function syncAccount(accountId: string, from: string, to: string, l
     }));
   }
   if (bundle.searchTerms) {
-    await replace("searchTerm", accountId, range, bundle.searchTerms.flatMap((k) => {
+    await replace("searchTerm", accountId, range, sumDupes(["adSetId", "term", "date"], bundle.searchTerms.flatMap((k) => {
       const c = campId.get(k.campaignExternalId), g = setId.get(k.adSetExternalId);
       if (!c || !g) return [];
       return [{ accountId, campaignId: c, adSetId: g, term: k.term, keywordText: k.keywordText ?? "", matchType: k.matchType ?? "", date: toDate(k.date), spend: k.spend ?? 0, impressions: k.impressions ?? 0, clicks: k.clicks ?? 0, conversions: k.conversions ?? 0 }];
-    }));
+    })));
   }
   if (bundle.placements) {
-    await replace("placement", accountId, range, bundle.placements.flatMap((k) => {
+    await replace("placement", accountId, range, sumDupes(["campaignId", "kind", "target", "date"], bundle.placements.flatMap((k) => {
       const c = campId.get(k.campaignExternalId);
       if (!c) return [];
       return [{ accountId, campaignId: c, kind: k.kind, target: k.target, display: k.display ?? "", date: toDate(k.date), spend: k.spend ?? 0, impressions: k.impressions ?? 0, clicks: k.clicks ?? 0, conversions: k.conversions ?? 0 }];
-    }));
+    })));
   }
   log(`metrics: ${statRows.length} daily rows, ${bdRows.length} breakdown rows`);
 
@@ -160,6 +160,44 @@ export async function syncAccount(accountId: string, from: string, to: string, l
   }
 
   await db.adAccount.update({ where: { id: accountId }, data: { lastSyncAt: new Date(), syncError: "" } });
+}
+
+/**
+ * Access token for a real connection, refreshed first when it is within ten
+ * minutes of expiry (Google, LinkedIn, Snapchat and TikTok tokens are short-lived).
+ */
+async function freshToken(conn: AdConnection, connector: Connector): Promise<string> {
+  const soon = conn.expiresAt && conn.expiresAt.getTime() < Date.now() + 10 * 60_000;
+  if (!soon || !conn.refreshEnc || !connector.refresh) return decrypt(conn.tokenEnc);
+  try {
+    const t = await connector.refresh(decrypt(conn.refreshEnc));
+    await db.adConnection.update({
+      where: { id: conn.id },
+      data: {
+        tokenEnc: encrypt(t.accessToken), expiresAt: t.expiresAt ?? null, status: "active", lastError: "",
+        ...(t.refreshToken ? { refreshEnc: encrypt(t.refreshToken) } : {}),
+      },
+    });
+    return t.accessToken;
+  } catch (e) {
+    await db.adConnection.update({ where: { id: conn.id }, data: { status: "expired", lastError: `Token refresh failed: ${(e as Error).message}`.slice(0, 500) } });
+    throw e;
+  }
+}
+
+/**
+ * Platforms can return several rows for one unique key (a search term matched
+ * by two keywords, say); sum them so nothing is dropped by skipDuplicates.
+ */
+function sumDupes<T extends Record<string, any>>(keys: string[], rows: T[]): T[] {
+  const out = new Map<string, T>();
+  for (const r of rows) {
+    const k = keys.map((x) => (r[x] instanceof Date ? r[x].toISOString() : r[x])).join("|");
+    const prev = out.get(k);
+    if (!prev) { out.set(k, { ...r }); continue; }
+    for (const f of ["spend", "impressions", "clicks", "conversions"]) (prev as any)[f] = Number(prev[f] ?? 0) + Number(r[f] ?? 0);
+  }
+  return [...out.values()];
 }
 
 type Table = "statDaily" | "statBreakdown" | "keyword" | "searchTerm" | "placement";

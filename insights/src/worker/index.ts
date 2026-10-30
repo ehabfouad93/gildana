@@ -68,7 +68,7 @@ async function schedule() {
   }
 
   // Tokens past their expiry stop syncing until someone reconnects.
-  await db.adConnection.updateMany({ where: { isDemo: false, status: "active", expiresAt: { lt: new Date() } }, data: { status: "expired", lastError: "Access token expired — reconnect this login." } });
+  await db.adConnection.updateMany({ where: { isDemo: false, status: "active", refreshEnc: null, expiresAt: { lt: new Date() } }, data: { status: "expired", lastError: "Access token expired — reconnect this login." } });
 }
 
 async function main() {
