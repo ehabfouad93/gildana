@@ -1,6 +1,6 @@
 # Gildana Insights
 
-One dashboard for every client's paid media — **Meta, Google Ads, LinkedIn, Snapchat and TikTok** — with deep campaign drill-downs, client reports and live share links. Website analytics, heatmaps, SEO and GEO modules are built on the same base in later phases.
+One dashboard for every client's paid media — **Meta, Google Ads, LinkedIn, Snapchat and TikTok** — with deep campaign drill-downs, client reports and live share links, plus each company's **website**: GA-style analytics, click/scroll heatmaps, session replay, SEO audits and GEO (AI-search) readiness.
 
 Next.js 15 (App Router) · TypeScript · PostgreSQL + Prisma · Auth.js · Tailwind · ECharts. A separate worker process runs the sync queue.
 
@@ -25,6 +25,7 @@ Roles: **Admin** (Gildana — sees every client, opens any client's dashboard), 
 | Audiences | `/audiences` every interest, audience, job title, keyword and placement ranked across all campaigns |
 | Google | `/google` keyword (with quality score), search term and Display/YouTube placement performance |
 | Reports | `/reports` build a report for the whole client, one company, one platform or one campaign; rolling or fixed range; optional password and expiry → live link `/s/[token]` with *Download PDF* |
+| Websites | `/sites` → per site: **Setup** (tracking code, goals, replay) · **Analytics** (realtime, users/sessions/bounce/conversions vs previous period, channels incl. *AI assistants*, acquisition, pages, audience, events, funnels, **Ads → site**: ad spend joined to on-site behaviour by `utm_campaign`) · **Heatmaps** (clicks, rage and dead clicks, scroll reach, top elements; per device, over a live frame or a captured snapshot) · **Recordings** (journey timeline + rrweb replay) · **SEO** (crawler, issues, pages, Core Web Vitals, Search Console queries/pages) · **GEO** (AI-crawler access, llms.txt, schema, answer-ready content, trust; Claude review; weekly AI-visibility checks of buyer questions) |
 | Setup | `/connections` connect logins (OAuth) and assign each ad account to a company · `/companies` |
 | Admin | `/admin/clients`, `/admin/clients/[id]` (users, settings), `/admin/health` (sync jobs, expired tokens) |
 
@@ -61,6 +62,31 @@ With `DEMO_MODE=true`, every platform offers a **demo login** that generates rea
 The connectors are written against each platform's current documentation and covered by unit tests on their normalisers. Meta is the first to run against live accounts; expect small field adjustments on the others when their API access is approved and the first real sync runs (errors show on `/admin/health`).
 
 Connectors implement one interface (`src/platforms/types.ts`); `src/worker/sync.ts` maps any of them onto the warehouse.
+
+## Website tracking
+
+Each site gets a snippet from its Setup tab:
+
+```html
+<script async src="https://YOUR-APP/t.js" data-key="SITE_KEY"></script>
+```
+
+`t.js` is 2.6 KB gzipped and sends `text/plain` beacons (no CORS preflight) to `/api/collect`, which accepts only the site's domain and subdomains, drops bots and rate-limits per IP. Session replay uses rrweb served from this app (`/vendor`, copied from `node_modules` by `npm run vendor`), records a configurable share of sessions and masks every input. `gildana("event", name)` and `gildana("conversion", name, value)` track custom events; goals (a page prefix or an event name) mark sessions as converted.
+
+A demo landing page ships at `/demo-site` with 30 days of generated visits (seed) — visiting it records real data too.
+
+## SEO and GEO
+
+Crawls and audits are queued from the site pages and run in the worker. The crawler respects robots.txt, follows the sitemap and internal links, and records per-page facts and issues. Optional:
+
+| Env | Enables |
+|---|---|
+| `CHROMIUM_PATH` | heatmap page snapshots and the GEO "readable without JavaScript" render check (any Chrome/Chromium binary; `npx playwright-core install chromium` also works) |
+| `PAGESPEED_API_KEY` | higher PageSpeed Insights quota for Core Web Vitals (works without a key at low volume; public sites only) |
+| `GSC_CLIENT_ID`, `GSC_CLIENT_SECRET` | Search Console connect (falls back to the Google Ads OAuth client); redirect URI `{APP_URL}/api/oauth/gsc/callback` |
+| `ANTHROPIC_API_KEY` | Claude GEO review and AI-visibility checks (`CLAUDE_MODEL`, default `claude-opus-5-5`); refused requests use the API's server-side fallback |
+
+AI visibility asks each tracked question with web search and from model knowledge, and records whether the brand is named, its rank in the list, whether the site is cited, and which competitors were named. It runs weekly for every tracked question, or on demand.
 
 ## Sync
 

@@ -7,7 +7,10 @@
 import { db } from "@/lib/db";
 import { lastNDays, ymd } from "@/lib/dates";
 import { enqueueInitialSync, enqueueSync } from "@/lib/jobs";
+import { runGeoAudit, runVisibility } from "./geo";
+import { runCrawl } from "./seo";
 import { syncAccount } from "./sync";
+import { claudeEnabled } from "@/lib/claude";
 
 const POLL_MS = 3_000;
 const SCHEDULE_EVERY_MS = 10 * 60_000;
@@ -51,6 +54,32 @@ async function runOne(job: Claimed) {
   }
 }
 
+/**
+ * Website jobs (SEO crawls, GEO audits, AI-visibility checks) share the loop.
+ * Each is claimed by flipping its status in one UPDATE, so two workers never
+ * run the same one.
+ */
+async function websiteJob(): Promise<boolean> {
+  const crawl = await db.$queryRaw<{ id: string }[]>`UPDATE "SeoCrawl" SET status = 'running' WHERE id = (SELECT id FROM "SeoCrawl" WHERE status = 'queued' ORDER BY "createdAt" FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING id`;
+  if (crawl[0]) {
+    await runCrawl(crawl[0].id).catch((e) => db.seoCrawl.update({ where: { id: crawl[0].id }, data: { status: "failed", error: String(e.message ?? e).slice(0, 1000), finishedAt: new Date() } }));
+    return true;
+  }
+  const audit = await db.$queryRaw<{ id: string }[]>`UPDATE "GeoAudit" SET status = 'running' WHERE id = (SELECT id FROM "GeoAudit" WHERE status = 'queued' ORDER BY "createdAt" FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING id`;
+  if (audit[0]) {
+    await runGeoAudit(audit[0].id).catch((e) => db.geoAudit.update({ where: { id: audit[0].id }, data: { status: "failed", error: String(e.message ?? e).slice(0, 1000), finishedAt: new Date() } }));
+    return true;
+  }
+  return false;
+}
+
+/** Re-checks every tracked AI question once a week. */
+async function scheduleVisibility() {
+  if (!claudeEnabled()) return;
+  const due = await db.aiPrompt.findMany({ where: { results: { none: { checkedAt: { gt: new Date(Date.now() - 7 * 86_400_000) } } } }, take: 20 });
+  for (const p of due) await runVisibility(p.id).catch((e) => console.error("[visibility]", e.message));
+}
+
 /** Queues refreshes for accounts that are due, and backfills for new ones. */
 async function schedule() {
   // Jobs orphaned by a crashed worker go back in the queue.
@@ -80,11 +109,12 @@ async function main() {
   while (!stop) {
     if (Date.now() - lastSchedule > SCHEDULE_EVERY_MS) {
       await schedule().catch((e) => console.error("[schedule]", e));
+      await scheduleVisibility().catch((e) => console.error("[visibility]", e));
       lastSchedule = Date.now();
     }
     const job = await claim().catch((e) => (console.error("[claim]", e), null));
     if (job) await runOne(job);
-    else await new Promise((r) => setTimeout(r, POLL_MS));
+    else if (!(await websiteJob().catch((e) => (console.error("[website]", e), false)))) await new Promise((r) => setTimeout(r, POLL_MS));
   }
   await db.$disconnect();
 }
@@ -94,6 +124,7 @@ if (process.argv.includes("--once")) {
   (async () => {
     await schedule();
     for (let j = await claim(); j; j = await claim()) await runOne(j);
+    while (await websiteJob()) { /* drain */ }
     await db.$disconnect();
   })();
 } else {

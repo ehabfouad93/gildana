@@ -465,6 +465,9 @@ model Site {
   replay      Boolean  @default(false) // record sessions for replay
   replayRate  Int      @default(20)    // percent of sessions recorded
   isDemo      Boolean  @default(false)
+  // Google Search Console: the property (e.g. "sc-domain:example.com") and an offline refresh token.
+  gscProperty   String   @default("")
+  gscRefreshEnc String?
   createdAt   DateTime @default(now())
 
   sessions  TrackSession[]

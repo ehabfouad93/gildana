@@ -73,3 +73,51 @@ export async function demoTrafficAction(form: FormData) {
   await generateDemoTraffic(s.id, 30);
   revalidatePath(`/sites/${s.id}`);
 }
+
+export async function startCrawlAction(form: FormData) {
+  const v = await editor();
+  const s = await ownSite(v.clientId, String(form.get("id")));
+  if (!(await db.seoCrawl.count({ where: { siteId: s.id, status: { in: ["queued", "running"] } } }))) {
+    await db.seoCrawl.create({ data: { siteId: s.id, maxPages: Math.min(2000, Math.max(10, Number(form.get("maxPages")) || 200)) } });
+  }
+  revalidatePath(`/sites/${s.id}/seo`);
+}
+
+export async function startGeoAction(form: FormData) {
+  const v = await editor();
+  const s = await ownSite(v.clientId, String(form.get("id")));
+  if (!(await db.geoAudit.count({ where: { siteId: s.id, status: { in: ["queued", "running"] } } }))) await db.geoAudit.create({ data: { siteId: s.id } });
+  revalidatePath(`/sites/${s.id}/geo`);
+}
+
+export async function addPromptAction(form: FormData) {
+  const v = await editor();
+  const s = await ownSite(v.clientId, String(form.get("siteId")));
+  const d = z.object({ prompt: z.string().trim().min(5).max(500), brand: z.string().trim().min(1).max(100) }).parse({ prompt: form.get("prompt"), brand: form.get("brand") });
+  await db.aiPrompt.create({ data: { siteId: s.id, ...d } });
+  revalidatePath(`/sites/${s.id}/geo`);
+}
+
+export async function deletePromptAction(form: FormData) {
+  const v = await editor();
+  const s = await ownSite(v.clientId, String(form.get("siteId")));
+  await db.aiPrompt.deleteMany({ where: { id: String(form.get("id")), siteId: s.id } });
+  revalidatePath(`/sites/${s.id}/geo`);
+}
+
+export async function checkPromptsAction(form: FormData) {
+  const v = await editor();
+  const s = await ownSite(v.clientId, String(form.get("siteId")));
+  const { claudeEnabled } = await import("@/lib/claude");
+  if (!claudeEnabled()) throw new Error("Set ANTHROPIC_API_KEY to run AI visibility checks");
+  const { runVisibility } = await import("@/worker/geo");
+  for (const p of await db.aiPrompt.findMany({ where: { siteId: s.id } })) await runVisibility(p.id);
+  revalidatePath(`/sites/${s.id}/geo`);
+}
+
+export async function disconnectGscAction(form: FormData) {
+  const v = await editor();
+  const s = await ownSite(v.clientId, String(form.get("id")));
+  await db.site.update({ where: { id: s.id }, data: { gscProperty: "", gscRefreshEnc: null } });
+  revalidatePath(`/sites/${s.id}/seo`);
+}
