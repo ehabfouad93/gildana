@@ -55,7 +55,16 @@ export const meta: Connector & { preview(token: string, adId: string, format?: s
     u.searchParams.set("client_id", setting("META_APP_ID"));
     u.searchParams.set("redirect_uri", redirectUri);
     u.searchParams.set("state", state);
-    u.searchParams.set("scope", [...SCOPES, ...(opts?.write ? [WRITE_SCOPE] : [])].join(","));
+    // Business-type apps use Facebook Login for Business: permissions come from a saved
+    // configuration (config_id) rather than a scope list. Split tests can use their own configuration.
+    const config = (opts?.write && setting("META_LOGIN_CONFIG_ID_WRITE")) || setting("META_LOGIN_CONFIG_ID");
+    if (config) {
+      u.searchParams.set("config_id", config);
+      u.searchParams.set("response_type", "code");
+      u.searchParams.set("override_default_response_type", "true");
+    } else {
+      u.searchParams.set("scope", [...SCOPES, ...(opts?.write ? [WRITE_SCOPE] : [])].join(","));
+    }
     return u.toString();
   },
 

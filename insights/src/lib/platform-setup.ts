@@ -24,13 +24,16 @@ export const PLATFORM_SETUP: Record<Platform, PlatformSetup> = {
     fields: [
       { key: "META_APP_ID", label: "App ID" },
       { key: "META_APP_SECRET", label: "App secret", secret: true },
+      { key: "META_LOGIN_CONFIG_ID", label: "Login configuration ID", help: "Facebook Login for Business → Configurations. Required for Business-type apps." },
+      { key: "META_LOGIN_CONFIG_ID_WRITE", label: "Split-test configuration ID (optional)", help: "A second configuration that also includes ads_management." },
       { key: "AGENCY_META_BUSINESS_ID", label: "Gildana Business Manager ID", help: "Clients share ad accounts with this Business ID." },
     ],
     required: ["META_APP_ID", "META_APP_SECRET"],
     steps: [
       "Create an app: My Apps → Create app → use case “Other” → type “Business” → link Gildana’s Business Manager.",
-      "Add the products “Facebook Login for Business” (or “Facebook Login”) and “Marketing API”.",
-      "Facebook Login → Settings: turn on Client OAuth login and Web OAuth login; add the redirect URI below to “Valid OAuth Redirect URIs”.",
+      "Add the products “Facebook Login for Business” and “Marketing API”.",
+      "Facebook Login for Business → Settings: turn on Client OAuth login, Web OAuth login and Enforce HTTPS; paste the redirect URI below into “Valid OAuth Redirect URIs”; Save.",
+      "Facebook Login for Business → Configurations → Create: login variation “General”, token “User access token”, assets Ad accounts + Pages + Business, permissions ads_read, business_management, leads_retrieval, pages_show_list, pages_read_engagement. Copy its Configuration ID here.",
       "App settings → Basic: App domain = your Insights domain, add a privacy policy URL, then copy the App ID and App secret here.",
       "Business Settings → Security Center: start Business Verification.",
       "App Review → request Advanced Access for ads_read, business_management, leads_retrieval, pages_show_list, pages_read_engagement (ads_management only if you use split tests). Then switch the app to Live — after that any client can connect.",
