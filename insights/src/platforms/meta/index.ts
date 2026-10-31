@@ -30,6 +30,11 @@ function q(path: string, token: string, params: Record<string, string | number> 
   return u.toString();
 }
 
+/** Runs one step of the login and names it in the error, so a failure says where it happened. */
+async function step<T>(what: string, fn: () => Promise<T>): Promise<T> {
+  try { return await fn(); } catch (e) { throw new PlatformError(`Meta, while ${what}: ${(e as Error).message}`, (e as PlatformError).status ?? 0); }
+}
+
 /** The permissions the person actually granted (they can untick some in the dialog). */
 async function grantedScopes(token: string): Promise<string> {
   try {
@@ -70,20 +75,45 @@ export const meta: Connector & { preview(token: string, adId: string, format?: s
 
   async exchange(code, redirectUri) {
     const id = setting("META_APP_ID"), secret = setting("META_APP_SECRET");
-    const short: any = await fetchJson(`${G()}/oauth/access_token?` + new URLSearchParams({ client_id: id, client_secret: secret, redirect_uri: redirectUri, code }));
-    // Swap for a ~60-day token so syncs keep working without the user present.
-    const long: any = await fetchJson(`${G()}/oauth/access_token?` + new URLSearchParams({ grant_type: "fb_exchange_token", client_id: id, client_secret: secret, fb_exchange_token: short.access_token }));
-    const me: any = await fetchJson(q("me", long.access_token, { fields: "id,name" }));
+    const short: any = await step("exchanging the login code", () => fetchJson(`${G()}/oauth/access_token?` + new URLSearchParams({ client_id: id, client_secret: secret, redirect_uri: redirectUri, code })));
+    // Swap for a ~60-day token so syncs keep working without the user present. Facebook Login for
+    // Business tokens can't always be swapped — they are long-lived already — so keep the original then.
+    let token: string = short.access_token, expiresIn: number | undefined = short.expires_in;
+    try {
+      const long: any = await fetchJson(`${G()}/oauth/access_token?` + new URLSearchParams({ grant_type: "fb_exchange_token", client_id: id, client_secret: secret, fb_exchange_token: token }));
+      if (long.access_token) { token = long.access_token; expiresIn = long.expires_in; }
+    } catch { /* keep the short-lived token */ }
+    let me: { id?: string; name?: string } = {};
+    try { me = await fetchJson(q("me", token, { fields: "id,name" })); } catch { /* business tokens may not read /me fields */ }
     return {
-      accessToken: long.access_token,
-      expiresAt: long.expires_in ? new Date(Date.now() + long.expires_in * 1000) : undefined,
-      scopes: await grantedScopes(long.access_token), externalUser: me.id, label: me.name,
+      accessToken: token,
+      expiresAt: expiresIn ? new Date(Date.now() + expiresIn * 1000) : undefined,
+      scopes: await grantedScopes(token), externalUser: me.id ?? "", label: me.name ?? "Meta login",
     };
   },
 
+  /**
+   * Every ad account the login can reach: the person's own list plus, for
+   * each Business Manager they can see, its owned and client (partner-shared)
+   * ad accounts — Facebook Login for Business tokens often only see the latter.
+   */
   async listAccounts(token) {
-    const rows = await all(q("me/adaccounts", token, { fields: "account_id,name,currency,timezone_name,account_status", limit: 200 }));
-    return rows.map((r: any) => ({ externalId: r.account_id, name: r.name, currency: r.currency, timezone: r.timezone_name, status: String(r.account_status) }));
+    const fields = "account_id,name,currency,timezone_name,account_status";
+    const found = new Map<string, any>();
+    const errors: string[] = [];
+    const take = async (label: string, path: string) => {
+      try { for (const r of await all(q(path, token, { fields, limit: 200 }))) found.set(String(r.account_id), r); }
+      catch (e) { errors.push(`${label}: ${(e as Error).message}`); }
+    };
+    await take("your ad accounts", "me/adaccounts");
+    let businesses: { id: string }[] = [];
+    try { businesses = await all(q("me/businesses", token, { fields: "id,name", limit: 100 })); } catch (e) { errors.push(`businesses: ${(e as Error).message}`); }
+    for (const biz of businesses) {
+      await take("business ad accounts", `${biz.id}/owned_ad_accounts`);
+      await take("partner ad accounts", `${biz.id}/client_ad_accounts`);
+    }
+    if (!found.size && errors.length) throw new PlatformError(`Meta didn't return any ad accounts (${errors[0]}). Check that the login configuration includes Ad accounts and the ads_read and business_management permissions.`, 400);
+    return [...found.values()].map((r: any) => ({ externalId: String(r.account_id), name: r.name, currency: r.currency, timezone: r.timezone_name, status: String(r.account_status) }));
   },
 
   async fetchStructure(ctx: SyncContext) {
