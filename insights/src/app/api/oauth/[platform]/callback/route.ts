@@ -6,11 +6,12 @@ import { redirectUri, verifyState } from "@/lib/oauth";
 import { platformFromSlug } from "@/lib/platforms";
 import { getViewer } from "@/lib/tenancy";
 import { connectorFor } from "@/platforms";
+import { publicUrl } from "@/lib/app-url";
 
 export async function GET(req: Request, { params }: { params: Promise<{ platform: string }> }) {
   const { platform: slug } = await params;
   const url = new URL(req.url);
-  const back = (q: string) => NextResponse.redirect(new URL(`/connections?${q}`, req.url));
+  const back = (q: string) => NextResponse.redirect(publicUrl(`/connections?${q}`, req));
 
   const platform = platformFromSlug(slug);
   const st = verifyState(url.searchParams.get("state") ?? "");
