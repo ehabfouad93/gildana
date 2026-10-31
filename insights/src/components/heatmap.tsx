@@ -73,7 +73,7 @@ export function Heatmap({ points, pageW, pageH, reach, mode, background, radius 
           <div style={{ width: pageW, height: pageH, transform: `scale(${scale})`, transformOrigin: "0 0", position: "absolute", inset: 0 }}>
             {background?.kind === "image" && <img src={background.src} alt="" style={{ width: pageW, display: "block" }} />}
             {background?.kind === "iframe" && <iframe src={background.src} title="Page" scrolling="no" style={{ width: pageW, height: pageH, border: 0, pointerEvents: "none" }} sandbox="allow-same-origin allow-scripts" />}
-            {!background && <div className="flex h-full items-start justify-center bg-slate-50 pt-20 text-slate-400">No page preview — capture a snapshot</div>}
+            {!background && <div className="flex h-full items-start justify-center bg-slate-50 pt-20 text-slate-400">Taking a screenshot of the page…</div>}
             {mode === "click" && <canvas ref={canvas} style={{ position: "absolute", inset: 0, width: pageW, height: pageH, opacity }} />}
             {mode === "scroll" && (
               <div style={{ position: "absolute", inset: 0, opacity }}>

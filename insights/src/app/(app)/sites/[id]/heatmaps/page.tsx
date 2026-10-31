@@ -38,8 +38,10 @@ export default async function Heatmaps({ params, searchParams }: { params: Promi
   // Clicks are recorded against the visitor's own document height; normalise to the snapshot's.
   const pageH = snap?.height || scroll.docH || Math.max(1200, ...points.map((p) => p.yPx ?? 0)) + 200;
   const pts = points.map((p) => ({ x: p.xPct ?? 0, y: p.docH && snap?.height ? ((p.yPx ?? 0) / p.docH) * snap.height : p.yPx ?? 0 }));
-  const origin = site.isDemo ? "" : `https://${site.domain}`;
-  const background = snap ? { kind: "image" as const, src: `/api/sites/${id}/snapshot?path=${encodeURIComponent(path)}&device=${device}&v=${snap.createdAt.getTime()}` } : { kind: "iframe" as const, src: origin + path };
+  // Real sites usually refuse to be framed, so the background is a screenshot (captured automatically);
+  // only the bundled demo page is shown live in a frame.
+  const background = snap ? { kind: "image" as const, src: `/api/sites/${id}/snapshot?path=${encodeURIComponent(path)}&device=${device}&v=${snap.createdAt.getTime()}` }
+    : site.isDemo ? { kind: "iframe" as const, src: path } : null;
 
   return (
     <>
@@ -58,7 +60,7 @@ export default async function Heatmaps({ params, searchParams }: { params: Promi
           {Object.entries(MODES).map(([k, l]) => <Link key={k} href={qs(c.sp, { mode: k })} className={`pill !px-3 !py-1.5 ${k === mode ? "bg-accent text-white" : "bg-panel text-muted"}`}>{l}</Link>)}
         </div>
         <div className="ms-auto flex items-end gap-2">
-          <SnapshotButton siteId={id} path={path} device={device} />
+          <SnapshotButton siteId={id} path={path} device={device} auto={!snap && !site.isDemo} label={snap ? `Refresh snapshot (${snap.createdAt.toISOString().slice(0, 10)})` : "Capture page snapshot"} />
           <Filters t={t} companies={[]} range={range} days={c.one("days")} showPlatform={false} extra={{ path, device, mode }} />
         </div>
       </div>
@@ -66,7 +68,11 @@ export default async function Heatmaps({ params, searchParams }: { params: Promi
       <div className="grid gap-4 xl:grid-cols-[1fr_380px]">
         <div className="card">
           <Heatmap points={pts} pageW={pageW} pageH={pageH} reach={scroll.reach} mode={mode === "scroll" ? "scroll" : "click"} background={background} />
-          {!snap && !site.isDemo && <p className="mt-2 text-xs text-muted">Showing the live page in a frame. If it stays blank, the site blocks framing — capture a snapshot instead.</p>}
+          {!paths.length && (
+            <p className="mt-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
+              No visits recorded on {site.domain} yet. Add the tracking code from <a className="underline" href={`/sites/${id}`}>Setup</a> to every page of the site; clicks and scrolling appear here within minutes of the first visits.
+            </p>
+          )}
         </div>
         <div className="space-y-4">
           <div className="card">

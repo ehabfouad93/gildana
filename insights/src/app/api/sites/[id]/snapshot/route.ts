@@ -38,7 +38,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     // CHROMIUM_PATH points at any Chrome/Chromium binary; without it, Playwright's own download is used.
     browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined, args: ["--no-sandbox"] });
   } catch (e) {
-    return Response.json({ error: `No headless browser available on this server — set CHROMIUM_PATH or run \`npx playwright-core install chromium\`. (${(e as Error).message.split("\n")[0]})` }, { status: 501 });
+    return Response.json({ error: `No headless browser available on this server — run \`npx playwright-core install --with-deps chromium\` in the app folder (or set CHROMIUM_PATH). (${(e as Error).message.split("\n")[0]})` }, { status: 501 });
   }
   try {
     const page = await browser.newPage({ viewport: { width: WIDTH[device], height: 900 }, deviceScaleFactor: 1, isMobile: device === "mobile", userAgent: device === "mobile" ? "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 GildanaInsightsSnapshot" : "Mozilla/5.0 GildanaInsightsSnapshot" });
