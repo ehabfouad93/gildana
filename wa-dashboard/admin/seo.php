@@ -41,6 +41,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         if (!$err) { flash('SEO settings saved.'); redirect('seo.php'); }
     }
+    if ($act === 'save_code') {
+        // Tracking IDs: checked against each service's format, so a typo cannot break the page.
+        foreach (seo_tracking_ids() as $k => [$label, , $re]) {
+            $v = trim((string) ($_POST[$k] ?? ''));
+            if ($k === 'seo_gtm' || $k === 'seo_tiktok_pixel') $v = strtoupper($v);
+            if ($k === 'seo_clarity') $v = strtolower($v);
+            if ($v !== '' && !preg_match($re, $v)) { $err = $label . ': that does not look like an ID (' . seo_tracking_ids()[$k][1] . ').'; continue; }
+            setting_set($k, $v);
+        }
+        // Custom code goes on the page exactly as pasted — only the platform admin can reach this page.
+        foreach (seo_code_slots() as $k => $_) {
+            $v = str_replace("\r\n", "\n", (string) ($_POST[$k] ?? ''));
+            if (strlen($v) > 20000) { $err = 'Each code box takes up to 20,000 characters.'; continue; }
+            setting_set($k, trim($v));
+        }
+        setting_set('code_in_app', !empty($_POST['code_in_app']) ? '1' : '0');
+        if (!$err) { flash('Tracking and custom code saved. Open the site and check it in your browser\'s page source.'); redirect('seo.php#code'); }
+    }
     if ($act === 'defaults') {
         foreach (['seo_title', 'seo_description', 'seo_keywords', 'seo_llms_summary', 'seo_og_image'] as $k) setting_set($k, $F[$k][0]);
         flash('Recommended wording restored.');
@@ -186,6 +204,30 @@ page_head('SEO', '<a class="btn btn-ghost" href="../help-center.php" target="_bl
 <form method="post" onsubmit="return confirm('Put back the recommended title, description, keywords, AI summary and share image?')" style="margin-bottom:22px">
   <?= csrf_field() ?><input type="hidden" name="action" value="defaults">
   <button class="btn btn-link btn-sm">Restore the recommended wording</button>
+</form>
+
+<form method="post" class="card" id="code">
+  <?= csrf_field() ?><input type="hidden" name="action" value="save_code">
+  <h2>Tracking &amp; custom code</h2>
+  <p class="text-muted" style="font-size:13px;margin-top:-4px">Add your tracking IDs, or paste any code a service gives you. It goes on the public pages — the home page, the Help Center and the request form.
+    Never on the sign-in page, where it could read the password being typed.</p>
+  <div class="grid2">
+    <?php foreach (seo_tracking_ids() as $k => [$label, $ph, , $hint]): $cur = $err && isset($_POST[$k]) ? (string) $_POST[$k] : help_setting($k, ''); ?>
+      <div class="field"><span class="lbl"><?= e($label) ?> <?= $cur !== '' ? '<span class="pill green" style="margin-inline-start:6px">On</span>' : '' ?></span>
+        <input type="text" name="<?= $k ?>" value="<?= e($cur) ?>" class="ltr" placeholder="<?= e($ph) ?>" autocomplete="off" spellcheck="false">
+        <div class="hint"><?= e($hint) ?></div></div>
+    <?php endforeach; ?>
+  </div>
+  <p class="text-muted" style="font-size:12.5px">Google Analytics 4 is set above, under Verification and analytics. If you use Tag Manager, add GA4 inside Tag Manager instead, so it is not counted twice.</p>
+  <?php foreach (seo_code_slots() as $k => [$label, $hint]): $cur = $err && isset($_POST[$k]) ? (string) $_POST[$k] : help_setting($k, ''); ?>
+    <div class="field"><span class="lbl"><?= e($label) ?> <?= trim($cur) !== '' ? '<span class="pill green" style="margin-inline-start:6px">' . number_format(strlen($cur)) . ' characters</span>' : '' ?></span>
+      <textarea name="<?= $k ?>" rows="5" class="ltr" spellcheck="false" style="font-family:var(--mono, ui-monospace, Menlo, monospace);font-size:12.5px" placeholder="<!-- paste the code here -->"><?= e($cur) ?></textarea>
+      <div class="hint"><?= e($hint) ?></div></div>
+  <?php endforeach; ?>
+  <label class="mod-all"><input type="checkbox" name="code_in_app" value="1" <?= help_setting('code_in_app', '0') === '1' ? 'checked' : '' ?>> Also put it on the signed-in pages (the dashboard of admins and clients)</label>
+  <div class="alert info" style="font-size:12.5px;margin:8px 0 12px">Code here runs in every visitor's browser. Paste only code from a service you trust (Google, Meta, TikTok…).
+    On signed-in pages it can see what clients see — their leads and conversations — so leave that box off unless a tool really needs it there.</div>
+  <button class="btn btn-primary">Save tracking &amp; code</button>
 </form>
 
 <script>

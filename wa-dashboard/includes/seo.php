@@ -187,7 +187,59 @@ function seo_head(array $o = []): string
         $h .= '<script async src="https://www.googletagmanager.com/gtag/js?id=' . $ga . '"></script>'
             . "<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','" . $ga . "');</script>\n";
     }
-    return $h;
+    return $h . seo_tracking('head');
+}
+
+/* ── Tracking & custom code ──────────────────────────────────────────────── */
+
+/**
+ * Tracking IDs and free code for the page <head> and <body>, set in Admin → SEO. Shown on the
+ * public pages (landing, Help Center, request form); inside the signed-in app only when the admin
+ * ticks it. Never on the sign-in and first-run pages, where a third-party script could read the
+ * password being typed.
+ */
+function seo_tracking_ids(): array
+{
+    return [
+        'seo_gtm'          => ['Google Tag Manager', 'GTM-XXXXXXX', '~^GTM-[A-Z0-9]{4,12}$~', 'Tag Manager → the ID at the top of the workspace.'],
+        'seo_meta_pixel'   => ['Meta (Facebook) Pixel', '123456789012345', '~^\d{10,20}$~', 'Events Manager → your dataset (pixel) → its ID.'],
+        'seo_tiktok_pixel' => ['TikTok Pixel', 'CXXXXXXXXXXXXXXXXXXX', '~^[A-Z0-9]{10,30}$~', 'TikTok Ads Manager → Events → Web events → the pixel ID.'],
+        'seo_clarity'      => ['Microsoft Clarity', 'abcd1234ef', '~^[a-z0-9]{6,20}$~', 'Clarity → Settings → Overview → Project ID.'],
+        'seo_linkedin'     => ['LinkedIn Insight Tag', '1234567', '~^\d{4,12}$~', 'Campaign Manager → Analyze → Insight Tag → partner ID.'],
+    ];
+}
+
+/** The custom code boxes: where each goes on the page. */
+function seo_code_slots(): array
+{
+    return [
+        'code_head'       => ['Inside <head>', 'Verification tags, tracking scripts, fonts, structured data — anything a service says to put in the head.'],
+        'code_body_open'  => ['Right after <body> opens', 'The <noscript> part some services give (Tag Manager, pixels), chat widgets that ask to load first.'],
+        'code_body_close' => ['Just before </body>', 'Chat widgets, heat-maps and scripts that should load after the page.'],
+    ];
+}
+
+/** What goes in one place on a page: 'head', 'body_open' or 'body_close'. $app: a signed-in page. */
+function seo_tracking(string $slot, bool $app = false): string
+{
+    if ($app && help_setting('code_in_app', '0') !== '1') return '';
+    $id = function (string $k) { $v = trim(help_setting($k, '')); return preg_match(seo_tracking_ids()[$k][2], $v) ? $v : ''; };
+    $h = '';
+    if ($slot === 'head') {
+        if ($g = $id('seo_gtm')) $h .= "<!-- Google Tag Manager --><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer','$g');</script>\n";
+        if ($p = $id('seo_meta_pixel')) $h .= "<!-- Meta Pixel --><script>!function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,document,'script','https://connect.facebook.net/en_US/fbevents.js');fbq('init','$p');fbq('track','PageView');</script>\n";
+        if ($t = $id('seo_tiktok_pixel')) $h .= "<!-- TikTok Pixel --><script>!function(w,d,t){w.TiktokAnalyticsObject=t;var ttq=w[t]=w[t]||[];ttq.methods=['page','track','identify','instances','debug','on','off','once','ready','alias','group','enableCookie','disableCookie'];ttq.setAndDefer=function(t,e){t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}};for(var i=0;i<ttq.methods.length;i++)ttq.setAndDefer(ttq,ttq.methods[i]);ttq.instance=function(t){for(var e=ttq._i[t]||[],n=0;n<ttq.methods.length;n++)ttq.setAndDefer(e,ttq.methods[n]);return e};ttq.load=function(e,n){var i='https://analytics.tiktok.com/i18n/pixel/events.js';ttq._i=ttq._i||{};ttq._i[e]=[];ttq._i[e]._u=i;ttq._t=ttq._t||{};ttq._t[e]=+new Date;ttq._o=ttq._o||{};ttq._o[e]=n||{};var o=d.createElement('script');o.type='text/javascript';o.async=!0;o.src=i+'?sdkid='+e+'&lib='+t;var a=d.getElementsByTagName('script')[0];a.parentNode.insertBefore(o,a)};ttq.load('$t');ttq.page();}(window,document,'ttq');</script>\n";
+        if ($c = $id('seo_clarity')) $h .= "<!-- Microsoft Clarity --><script>(function(c,l,a,r,i,t,y){c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};t=l.createElement(r);t.async=1;t.src='https://www.clarity.ms/tag/'+i;y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);})(window,document,'clarity','script','$c');</script>\n";
+        if ($l = $id('seo_linkedin')) $h .= "<!-- LinkedIn Insight --><script>window._linkedin_partner_id='$l';window._linkedin_data_partner_ids=window._linkedin_data_partner_ids||[];window._linkedin_data_partner_ids.push(window._linkedin_partner_id);(function(l){if(!l){window.lintrk=function(a,b){window.lintrk.q.push([a,b])};window.lintrk.q=[]}var s=document.getElementsByTagName('script')[0];var b=document.createElement('script');b.type='text/javascript';b.async=true;b.src='https://snap.licdn.com/li.lms-analytics/insight.min.js';s.parentNode.insertBefore(b,s);})(window.lintrk);</script>\n";
+        $h .= help_setting('code_head', '');
+    } elseif ($slot === 'body_open') {
+        if ($g = $id('seo_gtm')) $h .= '<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=' . $g . '" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>' . "\n";
+        if ($p = $id('seo_meta_pixel')) $h .= '<noscript><img height="1" width="1" style="display:none" alt="" src="https://www.facebook.com/tr?id=' . $p . '&amp;ev=PageView&amp;noscript=1"></noscript>' . "\n";
+        $h .= help_setting('code_body_open', '');
+    } elseif ($slot === 'body_close') {
+        $h .= help_setting('code_body_close', '');
+    }
+    return $h !== '' ? "\n" . $h . "\n" : '';
 }
 
 /* ── Crawlers ─────────────────────────────────────────────────────────────── */

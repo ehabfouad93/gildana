@@ -103,7 +103,7 @@ $steps = [
      scripting is available. Without this class nothing is ever hidden. -->
 <script>document.documentElement.className += ' js';</script>
 </head>
-<body style="--logo-h:<?= $logoH ?>px;--foot-logo-h:<?= $footH ?>px">
+<body style="--logo-h:<?= $logoH ?>px;--foot-logo-h:<?= $footH ?>px"><?= seo_tracking('body_open') ?>
 
 <!-- ── nav ───────────────────────────────────────────────────────────────── -->
 <header class="nav">
@@ -564,5 +564,6 @@ $steps = [
   });
 })();
 </script>
+<?= seo_tracking('body_close') ?>
 </body>
 </html>

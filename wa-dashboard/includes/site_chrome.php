@@ -24,7 +24,7 @@ function site_page_open(array $seo): void
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="assets/site.css?v=<?= @filemtime(dirname(__DIR__) . '/assets/site.css') ?: '1' ?>">
 </head>
-<body style="--logo-h:<?= $logoH ?>px;--foot-logo-h:<?= $footH ?>px">
+<body style="--logo-h:<?= $logoH ?>px;--foot-logo-h:<?= $footH ?>px"><?= seo_tracking('body_open') ?>
 <header class="nav">
   <div class="wrap nav-in">
     <a class="nav-logo" href="./" aria-label="<?= e(brand_name()) ?> home"><?= brand_logo('full', $logoH, './', false) ?></a>
@@ -63,6 +63,7 @@ function site_page_close(): void
     </div>
   </div>
 </footer>
+<?= seo_tracking('body_close') ?>
 </body>
 </html>
 <?php

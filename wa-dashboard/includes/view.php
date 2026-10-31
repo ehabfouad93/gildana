@@ -315,8 +315,9 @@ $barH   = max(58, $logoH + 22);
 ?>
 <style>:root{ --topbar-h: <?= (int) $barH ?>px; }</style>
 <?= pwa_head($root) ?>
+<?= app_tracking('head') ?>
 </head>
-<body>
+<body><?= app_tracking('body_open') ?>
 <?php $me = current_user_full() ?: []; $unread = topbar_unread($me); ?>
 <header class="topbar">
   <div class="topbar-brand">
@@ -488,6 +489,13 @@ $barH   = max(58, $logoH + 22);
  * back to the page). This adds an eye button to each, so an admin can still check what they typed
  * or read a password to hand to a client — shown only while they ask, then hidden again.
  */
+/** Admin → SEO's tracking and custom code on signed-in pages — only when the admin switched that on. */
+function app_tracking(string $slot): string
+{
+    try { require_once __DIR__ . '/seo.php'; return seo_tracking($slot, true); }
+    catch (Throwable $e) { return ''; }
+}
+
 function pw_reveal_script(): string
 {
     return <<<'HTML'
@@ -736,6 +744,7 @@ function showToast(msg, err){
   });
 })();
 </script>
+<?= app_tracking('body_close') ?>
 </body>
 </html>
     <?php
