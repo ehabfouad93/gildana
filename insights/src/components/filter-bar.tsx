@@ -38,7 +38,8 @@ export function FilterBar({ labels, companies, accounts = [], showPlatform = tru
   // null = all accounts; otherwise exactly the ticked ones
   const [picked, setPicked] = useState<string[] | null>(() => { const a = (sp.get("acc") ?? "").split(",").filter(Boolean); return a.length ? a : null; });
 
-  const visible = useMemo(() => accounts.filter((a) => (!platform || SLUG[a.platform] === platform) && (!company || a.company === companies.find((c) => c.id === company)?.name)), [accounts, platform, company, companies]);
+  const companyName = company === "none" ? "Unassigned" : companies.find((c) => c.id === company)?.name;
+  const visible = useMemo(() => accounts.filter((a) => (!platform || SLUG[a.platform] === platform) && (!company || a.company === companyName)), [accounts, platform, company, companyName]);
 
   const apply = () => {
     const q = new URLSearchParams(sp.toString());
@@ -55,10 +56,11 @@ export function FilterBar({ labels, companies, accounts = [], showPlatform = tru
 
   return (
     <div className="no-print flex flex-wrap items-end gap-2">
-      {companies.length > 1 && (
+      {(companies.length > 1 || accounts.some((a) => a.company === "Unassigned")) && (
         <select value={company} onChange={(e) => setCompany(e.target.value)} className="input w-auto" aria-label="Company">
           <option value="">{labels.allCompanies}</option>
           {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          {accounts.some((a) => a.company === "Unassigned") && <option value="none">Unassigned accounts</option>}
         </select>
       )}
       {showPlatform && (

@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { publicUrl } from "@/lib/app-url";
 import { refreshClaimVisibility } from "@/lib/claims";
 import { db } from "@/lib/db";
+import { autoAssign, enqueueInitialSync } from "@/lib/jobs";
 import { encrypt } from "@/lib/crypto";
 import { AGENCY, redirectUri, safeNext, verifyState } from "@/lib/oauth";
 import { platformFromSlug } from "@/lib/platforms";
@@ -45,6 +46,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ platform
       data: accounts.map((a) => ({ connectionId: conn.id, platform, externalId: a.externalId, parentId: a.parentId ?? "", name: a.name, currency: a.currency, timezone: a.timezone })),
     });
     if (agency) await refreshClaimVisibility(platform);
+    else {
+      // Everything starts syncing straight away; obvious company matches are filled in.
+      const created = await db.adAccount.findMany({ where: { connectionId: conn.id }, select: { id: true } });
+      await autoAssign(st.clientId, created.map((a) => a.id));
+      for (const a of created) await enqueueInitialSync(a.id);
+    }
     return back(`connected=${conn.id}`);
   } catch (e) {
     return back(`error=${encodeURIComponent((e as Error).message.slice(0, 200))}`);

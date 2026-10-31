@@ -14,10 +14,41 @@ export async function enqueueSync(accountId: string, from: string, to: string, k
 }
 
 /** First sync for a newly assigned account: a backfill of BACKFILL_DAYS (default 90). */
+/**
+ * First sync for a new account: the latest 31 days first (priority 6, so every
+ * new account shows recent numbers within minutes), then older history at
+ * priority 1, back to BACKFILL_DAYS (default 90).
+ */
 export async function enqueueInitialSync(accountId: string) {
   const days = Math.min(1100, Number(process.env.BACKFILL_DAYS) || 90);
+  const today = ymd(new Date());
+  const recentFrom = addDays(today, -30);
+  await enqueueSync(accountId, recentFrom, today, "backfill", 31, 6);
   const r = lastNDays(days);
-  return enqueueSync(accountId, r.from, ymd(new Date()), "backfill");
+  if (r.from < recentFrom) await enqueueSync(accountId, r.from, addDays(recentFrom, -1), "backfill", 31, 1);
+  return 1;
+}
+
+/** Puts new accounts in a company when it's obvious: the client has one company, or the account name contains a company's name. */
+export async function autoAssign(clientId: string, accountIds: string[]) {
+  const companies = await db.company.findMany({ where: { clientId }, select: { id: true, name: true } });
+  if (!companies.length) return;
+  const accounts = await db.adAccount.findMany({ where: { id: { in: accountIds }, companyId: null }, select: { id: true, name: true } });
+  const norm = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  for (const a of accounts) {
+    const hit = companies.length === 1 ? companies[0] : companies.find((c) => norm(c.name).length >= 3 && norm(a.name).includes(norm(c.name)));
+    if (hit) await db.adAccount.update({ where: { id: a.id }, data: { companyId: hit.id } });
+  }
+}
+
+/** "Sync all": every enabled account of a client, to the front of the queue. */
+export async function syncAll(clientId: string): Promise<number> {
+  const accounts = await db.adAccount.findMany({ where: { enabled: true, connection: { clientId, status: "active" } }, select: { id: true, lastSyncAt: true } });
+  for (const a of accounts) {
+    if (!a.lastSyncAt && !(await db.syncRun.count({ where: { accountId: a.id, status: { in: ["QUEUED", "RUNNING"] } } }))) await enqueueInitialSync(a.id);
+    else await syncNow(a.id);
+  }
+  return accounts.length;
 }
 
 /**

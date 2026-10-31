@@ -20,6 +20,19 @@ export async function syncAccount(accountId: string, from: string, to: string, l
     splitTests: conn.isDemo ? await demoSplitTests(accountId) : undefined,
   };
   const platform = account.platform;
+  const range = { gte: toDate(from), lte: toDate(to) };
+
+  // An account with no delivery in the window (paused, dormant, new) needs no structure or breakdown calls.
+  if (connector.hasActivity) {
+    let active = true;
+    try { active = await connector.hasActivity(ctx, from, to); } catch { /* unsure: do the full sync */ }
+    if (!active) {
+      for (const t of ["statDaily", "statBreakdown", "keyword", "searchTerm", "placement"] as Table[]) await replace(t, accountId, range, []);
+      await db.adAccount.update({ where: { id: accountId }, data: { lastSyncAt: new Date(), syncError: "", ...(kind === "live" ? {} : { lastFullSyncAt: new Date() }) } });
+      log("no delivery in this window — skipped");
+      return;
+    }
+  }
 
   // ── structure ──
   const s = await connector.fetchStructure(ctx);
@@ -87,7 +100,6 @@ export async function syncAccount(accountId: string, from: string, to: string, l
   const setCampaign = new Map(s.adSets.map((x) => [setId.get(x.externalId), campId.get(x.campaignExternalId)]));
   const adParents = new Map(s.ads.map((x) => [adId.get(x.externalId), { c: campId.get(x.campaignExternalId), s: setId.get(x.adSetExternalId) }]));
 
-  const range = { gte: toDate(from), lte: toDate(to) };
   const m = (x: Metrics) => ({
     spend: x.spend ?? 0, impressions: Math.round(x.impressions ?? 0), reach: Math.round(x.reach ?? 0), clicks: Math.round(x.clicks ?? 0),
     linkClicks: Math.round(x.linkClicks ?? 0), conversions: x.conversions ?? 0, leads: Math.round(x.leads ?? 0),

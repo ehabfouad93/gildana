@@ -19,7 +19,7 @@ export async function pageContext(spP: Promise<SP>) {
   const client = await db.client.findUniqueOrThrow({ where: { id: viewer.clientId } });
   const companies = await db.company.findMany({ where: { clientId: client.id }, orderBy: { name: "asc" }, select: { id: true, name: true } });
 
-  const companyId = companies.some((c) => c.id === one(sp.company)) ? one(sp.company) : undefined;
+  const companyId = one(sp.company) === "none" || companies.some((c) => c.id === one(sp.company)) ? one(sp.company) : undefined;
   const platform: Platform | undefined = platformFromSlug(one(sp.platform)) ?? undefined;
   const range = rangeFromParams({ from: one(sp.from), to: one(sp.to), days: one(sp.days), period: one(sp.period) });
   // ?acc=id1,id2 — any subset of the client's ad accounts; ids that aren't theirs are dropped by the scope.
@@ -29,14 +29,14 @@ export async function pageContext(spP: Promise<SP>) {
   await refreshIfStale(accountIds);
   const fresh = await freshness(accountIds);
   const accounts = await db.adAccount.findMany({
-    where: { connection: { clientId: client.id }, enabled: true, companyId: { not: null } },
+    where: { connection: { clientId: client.id }, enabled: true },
     select: { id: true, name: true, platform: true, externalId: true, company: { select: { name: true } } }, orderBy: [{ platform: "asc" }, { name: "asc" }],
   });
   const scope: Scope = { accountIds, currency: client.reportingCurrency };
 
   return {
     sp, one: (k: string) => one(sp[k]), viewer, client, companies, companyId, platform, range, acc, freshness: fresh,
-    accounts: accounts.map((a) => ({ id: a.id, name: a.name, platform: a.platform, externalId: a.externalId, company: a.company?.name ?? "" })),
+    accounts: accounts.map((a) => ({ id: a.id, name: a.name, platform: a.platform, externalId: a.externalId, company: a.company?.name ?? "Unassigned" })),
     prev: previousRange(range), scope, t: await getDict(),
   };
 }

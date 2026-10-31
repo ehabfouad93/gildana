@@ -92,7 +92,7 @@ export async function splits(scope: Scope, r: Range) {
   }
   return {
     byPlatform: [...byPlatform.entries()].map(([platform, t]) => ({ platform: platform as Platform, m: derive(t) })).sort((a, b) => b.m.spend - a.m.spend),
-    byCompany: [...byCompany.entries()].map(([id, t]) => ({ id, name: cname.get(id) ?? "—", m: derive(t) })).sort((a, b) => b.m.spend - a.m.spend),
+    byCompany: [...byCompany.entries()].map(([id, t]) => ({ id, name: id ? cname.get(id) ?? "—" : "Unassigned", m: derive(t) })).sort((a, b) => b.m.spend - a.m.spend),
     byAccount: byAccount.sort((a, b) => b.m.spend - a.m.spend),
   };
 }

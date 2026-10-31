@@ -152,26 +152,37 @@ export const meta: Connector & { preview(token: string, adId: string, format?: s
     const a = act(ctx.account.externalId), t = ctx.accessToken;
     const range = JSON.stringify({ since: from, until: to });
     const stats: RemoteStat[] = [];
-    for (const level of ["ACCOUNT", "CAMPAIGN", "ADSET", "AD"] as StatLevel[]) {
-      const rows = await all(q(`${a}/insights`, t, { level: LEVEL_PARAM[level], time_increment: 1, time_range: range, fields: INSIGHT_FIELDS, limit: 500 }), 200);
-      for (const r of rows) stats.push({ level, externalId: String(r[LEVEL_ID[level]]), date: r.date_start, ...insightMetrics(r) });
-    }
+    const levels = ["ACCOUNT", "CAMPAIGN", "ADSET", "AD"] as StatLevel[];
+    const byLevel = await Promise.all(levels.map((level) => all(q(`${a}/insights`, t, { level: LEVEL_PARAM[level], time_increment: 1, time_range: range, fields: INSIGHT_FIELDS, limit: 500 }), 200)));
+    levels.forEach((level, i) => { for (const r of byLevel[i]) stats.push({ level, externalId: String(r[LEVEL_ID[level]]), date: r.date_start, ...insightMetrics(r) }); });
     const breakdowns: RemoteBreakdown[] = [];
-    for (const [dimension, param] of Object.entries(META_BREAKDOWNS)) {
-      let rows: any[];
-      try {
-        rows = await all(q(`${a}/insights`, t, { level: "campaign", time_increment: 1, time_range: range, breakdowns: param, fields: "campaign_id,spend,impressions,reach,clicks,actions,action_values", limit: 500 }), 200);
-      } catch (e) {
-        // A breakdown this account or its campaigns don't support (e.g. asset splits without dynamic creative) is skipped, not fatal.
-        if (e instanceof PlatformError && e.status >= 400 && e.status < 500) continue;
-        throw e;
-      }
+    // Three breakdown requests at a time: much faster, still well inside Meta's per-account limits.
+    const entries = Object.entries(META_BREAKDOWNS);
+    const results: [string, any[] | null][] = [];
+    for (let i = 0; i < entries.length; i += 3) {
+      results.push(...(await Promise.all(entries.slice(i, i + 3).map(async ([dimension, param]): Promise<[string, any[] | null]> => {
+        try {
+          return [dimension, await all(q(`${a}/insights`, t, { level: "campaign", time_increment: 1, time_range: range, breakdowns: param, fields: "campaign_id,spend,impressions,reach,clicks,actions,action_values", limit: 500 }), 200)];
+        } catch (e) {
+          // A breakdown this account or its campaigns don't support (e.g. asset splits without dynamic creative) is skipped, not fatal.
+          if (e instanceof PlatformError && e.status >= 400 && e.status < 500) return [dimension, null];
+          throw e;
+        }
+      }))));
+    }
+    for (const [dimension, rows] of results) {
+      if (!rows) continue;
       for (const r of rows) {
         const m = insightMetrics(r);
         breakdowns.push({ level: "CAMPAIGN", externalId: r.campaign_id, date: r.date_start, dimension, bucket: breakdownValue(dimension, r), ...m });
       }
     }
     return { stats, breakdowns };
+  },
+
+  async hasActivity(ctx, from, to) {
+    const r: any = await fetchJson(q(`${act(ctx.account.externalId)}/insights`, ctx.accessToken, { level: "account", time_range: JSON.stringify({ since: from, until: to }), fields: "spend,impressions" }));
+    return (r.data ?? []).some((x: any) => Number(x.impressions) > 0 || Number(x.spend) > 0);
   },
 
   async fetchLeads(ctx, from) {

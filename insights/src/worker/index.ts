@@ -91,7 +91,8 @@ async function schedule() {
   await db.syncRun.updateMany({ where: { status: "RUNNING", startedAt: { lt: new Date(Date.now() - 30 * 60_000) } }, data: { status: "QUEUED" } });
 
   const accounts = await db.adAccount.findMany({
-    where: { enabled: true, companyId: { not: null }, connection: { status: "active" } },
+    // Every connected account syncs, assigned to a company or not; Gildana's agency pools only serve shared accounts.
+    where: { enabled: true, connection: { status: "active", isAgency: false } },
     select: { id: true, lastSyncAt: true, lastFullSyncAt: true, syncRuns: { where: { status: { in: ["QUEUED", "RUNNING"] } }, select: { id: true }, take: 1 } },
   });
   const window = lastNDays(28);
@@ -108,7 +109,7 @@ async function schedule() {
 }
 
 /** Parallel job slots; each account's jobs still run one at a time. */
-const SLOTS = Math.max(1, Math.min(8, Number(process.env.WORKER_CONCURRENCY) || 3));
+const SLOTS = Math.max(1, Math.min(10, Number(process.env.WORKER_CONCURRENCY) || 5));
 
 async function main() {
   console.log(`[worker] started with ${SLOTS} parallel jobs`);

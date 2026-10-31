@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { enqueueInitialSync, syncNow } from "@/lib/jobs";
+import { enqueueInitialSync, syncAll, syncNow } from "@/lib/jobs";
 import { canEdit, requireWorkspace } from "@/lib/tenancy";
 
 /** The signed-in editor's client — every mutation below is checked against it. */
@@ -32,6 +32,12 @@ export async function assignAccountAction(form: FormData) {
   }
   revalidatePath("/connections");
   revalidatePath("/welcome");
+}
+
+export async function syncAllAction() {
+  const v = await editor();
+  await syncAll(v.clientId);
+  revalidatePath("/connections");
 }
 
 export async function toggleAccountAction(form: FormData) {
@@ -111,7 +117,7 @@ export async function bulkAccountsAction(form: FormData) {
     await db.adAccount.updateMany({ where: { id: { in: accounts.map((a) => a.id) } }, data: { companyId: companyId || null } });
     if (companyId) for (const a of accounts) if (!a.lastSyncAt && !(await db.syncRun.count({ where: { accountId: a.id, status: { in: ["QUEUED", "RUNNING"] } } }))) await enqueueInitialSync(a.id);
   } else if (op === "sync") {
-    for (const a of accounts) if (a.companyId && a.enabled) await syncNow(a.id);
+    for (const a of accounts) if (a.enabled) await syncNow(a.id);
   } else if (op === "enable" || op === "disable") {
     await db.adAccount.updateMany({ where: { id: { in: accounts.map((a) => a.id) } }, data: { enabled: op === "enable" } });
   }

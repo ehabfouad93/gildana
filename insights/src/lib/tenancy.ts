@@ -68,7 +68,8 @@ export function accountWhere(clientId: string, f: Filters = {}): Prisma.AdAccoun
   return {
     connection: { clientId },
     enabled: true,
-    companyId: f.companyId ? f.companyId : { not: null },
+    // Every connected account is reported; "none" picks the ones not yet put in a company.
+    ...(f.companyId === "none" ? { companyId: null } : f.companyId ? { companyId: f.companyId } : {}),
     ...(f.platform ? { platform: f.platform } : {}),
     ...(f.accountId ? { id: f.accountId } : f.accountIds?.length ? { id: { in: f.accountIds } } : {}),
   };

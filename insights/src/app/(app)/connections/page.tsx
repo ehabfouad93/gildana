@@ -1,5 +1,5 @@
 import { AutoRefresh, SelectAll } from "@/components/auto-refresh";
-import { assignAccountAction, bulkAccountsAction, removeConnectionAction, syncNowAction, toggleAccountAction } from "@/app/actions/accounts";
+import { assignAccountAction, bulkAccountsAction, syncAllAction, removeConnectionAction, syncNowAction, toggleAccountAction } from "@/app/actions/accounts";
 import { PageHeader } from "@/components/shell";
 import { ShareAccess } from "@/components/share-access";
 import { shareInfo } from "@/lib/share-info";
@@ -37,9 +37,11 @@ export default async function Connections({ searchParams }: { searchParams: Prom
   return (
     <>
       <AutoRefresh active={parts.size > 0 && conns.some((c) => c.accounts.some((a) => parts.has(a.id)))} />
-      <PageHeader title="Ad accounts" sub="Connect any number of logins per platform, then put each ad account in a company." />
+      <PageHeader title="Ad accounts" sub="Every connected ad account syncs automatically and stays live (refreshed every 15 minutes). Put accounts in companies to organise reports.">
+        {edit && conns.some((c) => c.accounts.length) && <form action={syncAllAction}><button className="btn">↻ Sync all accounts</button></form>}
+      </PageHeader>
       {typeof sp.error === "string" && <div className="card mb-4 border-red-200 bg-red-50 text-sm text-bad">Connection failed: {sp.error}</div>}
-      {typeof sp.connected === "string" && <div className="card mb-4 border-green-200 bg-green-50 text-sm text-good">Connected. Assign the new accounts to a company below to start syncing.</div>}
+      {typeof sp.connected === "string" && <div className="card mb-4 border-green-200 bg-green-50 text-sm text-good">Connected. All ad accounts are syncing now — the latest 30 days first, then older history. You can put them in companies any time.</div>}
       {!companies.length && <div className="card mb-4 text-sm">Create a company first on the <a className="text-accent underline" href="/companies">Companies</a> page.</div>}
 
       {share.length > 0 && companies.length > 0 && edit && (
@@ -100,7 +102,7 @@ export default async function Connections({ searchParams }: { searchParams: Prom
                     <form id={`bulk-${c.id}`} action={bulkAccountsAction} className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2 text-sm">
                       <span className="text-muted">With ticked accounts:</span>
                       <select name="companyId" className="input !w-48 !py-1" defaultValue="">
-                        <option value="">— not assigned —</option>
+                        <option value="">Unassigned</option>
                         {companies.map((co) => <option key={co.id} value={co.id}>{co.name}</option>)}
                       </select>
                       <button name="op" value="assign" className="btn-ghost !py-1">Assign to company</button>
@@ -122,7 +124,7 @@ export default async function Connections({ searchParams }: { searchParams: Prom
                               <form key={`${a.id}:${a.companyId ?? ""}`} action={assignAccountAction} className="flex gap-1">
                                 <input type="hidden" name="accountId" value={a.id} />
                                 <select name="companyId" defaultValue={a.companyId ?? ""} className="input !w-48 !py-1" disabled={!edit}>
-                                  <option value="">— not assigned —</option>
+                                  <option value="">Unassigned</option>
                                   {companies.map((co) => <option key={co.id} value={co.id}>{co.name}</option>)}
                                 </select>
                                 {edit && <button className="btn-ghost !py-1">Save</button>}
@@ -133,12 +135,13 @@ export default async function Connections({ searchParams }: { searchParams: Prom
                               {running.has(a.id) ? <span className="text-blue-700">● syncing now{(parts.get(a.id) ?? 0) > 1 ? ` · ${(parts.get(a.id) ?? 1) - 1} more part${(parts.get(a.id) ?? 1) > 2 ? "s" : ""} after` : ""}</span>
                                 : place.has(a.id) ? <span className="text-amber-700">queued #{place.get(a.id)} · {parts.get(a.id)} part{(parts.get(a.id) ?? 0) > 1 ? "s" : ""}</span>
                                 : a.syncError ? <span className="text-bad" title={a.syncError}>error</span>
-                                : a.companyId ? <span className="text-good">ok</span> : <span className="text-muted">idle</span>}
+                                : !a.enabled ? <span className="text-muted">disabled</span>
+                                : a.lastSyncAt ? <span className="text-good">● live</span> : <span className="text-muted">waiting</span>}
                             </td>
                             <td>
                               {edit && (
                                 <div className="flex gap-2 text-xs">
-                                  {a.companyId && a.enabled && (
+                                  {a.enabled && (
                                     <form action={syncNowAction}><input type="hidden" name="accountId" value={a.id} /><button className="text-accent hover:underline">Sync now</button></form>
                                   )}
                                   <form action={toggleAccountAction}><input type="hidden" name="accountId" value={a.id} /><button className="text-muted hover:underline">{a.enabled ? "Disable" : "Enable"}</button></form>

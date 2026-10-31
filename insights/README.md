@@ -120,12 +120,12 @@ Clients never handle API keys. Gildana sets each platform up **once**, then ever
 
 ## Sync
 
-`npm run worker` runs the queue (the `SyncRun` table) with `WORKER_CONCURRENCY` jobs in parallel (default 3; one account never runs two jobs at once).
+`npm run worker` runs the queue (the `SyncRun` table) with `WORKER_CONCURRENCY` jobs in parallel (default 5; one account never runs two jobs at once).
 
 - **Live refresh:** every account re-pulls today and yesterday every `LIVE_SYNC_MINUTES` (default 15). Ad platforms update their reporting every 15–30 minutes, so this is as current as the data gets.
 - **Refresh on open:** when someone opens a report whose accounts are more than 5 minutes old, a live refresh starts at once; the page shows *Live · updated N min ago* and reloads itself when the new numbers land.
 - **Full re-sync:** the last 28 days every 6 hours, which picks up late conversions and attribution changes.
-- **New accounts:** backfill `BACKFILL_DAYS` (default 90), newest first, in 31-day parts.
+- **New accounts:** every connected account syncs at once, with or without a company (unassigned ones report as “Unassigned”); the latest 30 days of every account come first, then history back to `BACKFILL_DAYS` (default 90). Accounts with no delivery in a window are skipped in one cheap call.
 - **Sync now** (per account, or for ticked accounts) moves the account to the front of the queue. Failures retry with backoff up to 5 times and show on Admin → Sync health.
 
 ## Deploy

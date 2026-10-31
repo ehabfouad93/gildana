@@ -93,6 +93,8 @@ export interface Connector {
   fetchStructure(ctx: SyncContext): Promise<{ campaigns: RemoteCampaign[]; adSets: RemoteAdSet[]; ads: RemoteAd[] }>;
   fetchStats(ctx: SyncContext, from: string, to: string): Promise<StatsBundle>;
   fetchLeads?(ctx: SyncContext, from: string, to: string): Promise<RemoteLead[]>;
+  /** Cheap check whether the account delivered anything in the window; false lets a sync skip the heavy calls. */
+  hasActivity?(ctx: SyncContext, from: string, to: string): Promise<boolean>;
 }
 
 export class PlatformError extends Error {

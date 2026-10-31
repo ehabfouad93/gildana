@@ -73,7 +73,7 @@ export default async function Welcome({ searchParams }: { searchParams: Promise<
         {claims.length > 0 && <p className="mt-3 text-sm text-amber-700">{claims.length} shared account{claims.length > 1 ? "s" : ""} waiting for Gildana — they&apos;ll appear automatically.</p>}
       </Step>
 
-      <Step n={3} title="Put each ad account in a company" done={accounts.length > 0 && !unassigned.length} active={step === 3}>
+      <Step n={3} title="Put ad accounts in companies (optional)" done={accounts.length > 0 && !unassigned.length} active={step === 3}>
         {unassigned.length ? (
           <table className="tbl">
             <tbody>
@@ -95,12 +95,12 @@ export default async function Welcome({ searchParams }: { searchParams: Promise<
             </tbody>
           </table>
         ) : <p className="text-sm text-muted">{assigned.length ? `${assigned.length} ad accounts are loading their last 90 days.` : "Connect an account first."}</p>}
-        <p className="mt-2 text-xs text-muted">Accounts you don&apos;t add stay out of reports — you can change this any time under Ad accounts.</p>
+        <p className="mt-2 text-xs text-muted">Every connected account is already syncing; accounts without a company show as “Unassigned” in reports. You can change this any time under Ad accounts.</p>
       </Step>
 
       <div className="flex items-center justify-between">
         <Link href="/connections" className="text-sm text-muted hover:text-ink">Manage ad accounts →</Link>
-        <form action={finishOnboardingAction}><button className="btn" disabled={!assigned.length}>{assigned.length ? "Go to my dashboard" : "Add an account to continue"}</button></form>
+        <form action={finishOnboardingAction}><button className="btn" disabled={!accounts.length && !claims.length}>{accounts.length || claims.length ? "Go to my dashboard" : "Connect an account to continue"}</button></form>
       </div>
     </div>
   );
