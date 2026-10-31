@@ -10,7 +10,7 @@ import type { Connector, Metrics, RemoteTargetingItem, SyncContext } from "@/pla
  * Structure is upserted; metrics for the window are replaced wholesale, which
  * is what makes a re-sync pick up the platforms' attribution restatements.
  */
-export async function syncAccount(accountId: string, from: string, to: string, log: (s: string) => void = () => {}) {
+export async function syncAccount(accountId: string, from: string, to: string, log: (s: string) => void = () => {}, kind = "stats") {
   const account = await db.adAccount.findUniqueOrThrow({ where: { id: accountId }, include: { connection: true } });
   const conn = account.connection;
   const connector = connectorFor(account.platform, conn.isDemo);
@@ -160,7 +160,7 @@ export async function syncAccount(accountId: string, from: string, to: string, l
     log(`leads: ${leads.length}`);
   }
 
-  await db.adAccount.update({ where: { id: accountId }, data: { lastSyncAt: new Date(), syncError: "" } });
+  await db.adAccount.update({ where: { id: accountId }, data: { lastSyncAt: new Date(), syncError: "", ...(kind === "live" ? {} : { lastFullSyncAt: new Date() }) } });
 }
 
 /** Split tests created in demo mode, so the demo connector can generate their ad sets and results. */

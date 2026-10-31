@@ -35,8 +35,24 @@ export function eachDay(r: Range): string[] {
 const RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Reads ?from=&to= or ?days= from search params, defaulting to last 30 days. */
-export function rangeFromParams(p: { from?: string; to?: string; days?: string }): Range {
+/** Named periods for the date picker. Months are whole calendar months (this month runs to yesterday). */
+export function periodRange(period: string, today = ymd(new Date())): Range | null {
+  const [y, m] = today.split("-").map(Number);
+  const first = (yy: number, mm: number) => ymd(new Date(Date.UTC(yy, mm - 1, 1)));
+  const yesterday = addDays(today, -1);
+  switch (period) {
+    case "this_month": { const f = first(y, m); return { from: f <= yesterday ? f : yesterday, to: yesterday }; }
+    case "last_month": { const f = first(m === 1 ? y - 1 : y, m === 1 ? 12 : m - 1); return { from: f, to: addDays(first(y, m), -1) }; }
+    case "this_year": return { from: `${y}-01-01` <= yesterday ? `${y}-01-01` : yesterday, to: yesterday };
+    case "last_year": return { from: `${y - 1}-01-01`, to: `${y - 1}-12-31` };
+    default: return null;
+  }
+}
+
+export function rangeFromParams(p: { from?: string; to?: string; days?: string; period?: string }): Range {
   if (p.from && p.to && RE.test(p.from) && RE.test(p.to) && p.from <= p.to) return { from: p.from, to: p.to };
+  const named = p.period ? periodRange(p.period) : null;
+  if (named) return named;
   const n = Math.min(1100, Math.max(1, Number(p.days) || 30));
   return lastNDays(n);
 }

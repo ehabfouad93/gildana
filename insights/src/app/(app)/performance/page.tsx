@@ -32,7 +32,7 @@ export default async function Performance({ searchParams }: { searchParams: Prom
   return (
     <>
       <PageHeader title={t.performance} sub={`${range.from} → ${range.to}`}>
-        <Filters t={t} companies={c.companies} companyId={c.companyId} platform={c.platform} range={range} days={c.one("days")} extra={{ metric, dim }} />
+        <Filters t={t} freshness={c.freshness} accounts={c.accounts} companies={c.companies} companyId={c.companyId} platform={c.platform} range={range} days={c.one("days")} extra={{ metric, dim }} />
       </PageHeader>
       <div className="space-y-4">
         <KpiGrid cur={cur} prev={before} currency={scope.currency} t={t} keys={["spend", "impressions", "reach", "frequency", "clicks", "ctr", "cpc", "cpm", "conversions", "convRate", "cpa", "roas"]} />

@@ -30,7 +30,7 @@ export default async function Audiences({ searchParams }: { searchParams: Promis
   return (
     <>
       <PageHeader title={t.audiences} sub="Which targeting choices deliver the cheapest results, across every campaign">
-        <Filters t={t} companies={c.companies} companyId={c.companyId} platform={c.platform} range={range} days={c.one("days")} extra={{ g }} />
+        <Filters t={t} freshness={c.freshness} accounts={c.accounts} companies={c.companies} companyId={c.companyId} platform={c.platform} range={range} days={c.one("days")} extra={{ g }} />
       </PageHeader>
       <div className="mb-4 flex flex-wrap gap-1">
         {Object.entries(GROUPS).map(([k, v]) => (

@@ -147,7 +147,10 @@ model AdAccount {
   currency     String       @default("USD")
   timezone     String       @default("UTC")
   enabled      Boolean      @default(true)
+  /// Last successful sync of any kind (the 15-minute live refresh included).
   lastSyncAt   DateTime?
+  /// Last 28-day / backfill sync, which picks up late conversions.
+  lastFullSyncAt DateTime?
   syncError    String       @default("")
   createdAt    DateTime     @default(now())
 
@@ -426,6 +429,8 @@ model SyncRun {
   fromDate   DateTime   @db.Date
   toDate     DateTime   @db.Date
   status     SyncStatus @default(QUEUED)
+  /// Higher runs first: "Sync now" jumps ahead of background backfills.
+  priority   Int        @default(0)
   attempts   Int        @default(0)
   runAfter   DateTime   @default(now())
   error      String     @default("")

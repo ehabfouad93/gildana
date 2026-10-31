@@ -15,7 +15,7 @@ const TABS = { keywords: "Keywords", terms: "Search terms", placements: "Display
 export default async function Google({ searchParams }: { searchParams: Promise<SP> }) {
   const c = await pageContext(searchParams);
   const { range, t } = c;
-  const accountIds = await scopedAccountIds(c.client.id, { companyId: c.companyId, platform: "GOOGLE" });
+  const accountIds = await scopedAccountIds(c.client.id, { companyId: c.companyId, platform: "GOOGLE", accountIds: c.acc.length ? c.acc : undefined });
   const scope = { ...c.scope, accountIds };
   const tab = (c.one("tab") in TABS ? c.one("tab") : "keywords") as keyof typeof TABS;
   const camps = new Map((await db.campaign.findMany({ where: { accountId: { in: accountIds } }, select: { id: true, name: true } })).map((x) => [x.id, x.name]));
@@ -23,7 +23,7 @@ export default async function Google({ searchParams }: { searchParams: Promise<S
   return (
     <>
       <PageHeader title={t.google} sub="Keyword, search-term and placement performance across every Google Ads account">
-        <Filters t={t} companies={c.companies} companyId={c.companyId} range={range} days={c.one("days")} showPlatform={false} extra={{ tab }} />
+        <Filters t={t} freshness={c.freshness} accounts={c.accounts.filter((a) => a.platform === "GOOGLE")} companies={c.companies} companyId={c.companyId} range={range} days={c.one("days")} showPlatform={false} extra={{ tab }} />
       </PageHeader>
       <nav className="mb-4 flex gap-1 border-b border-line">
         {Object.entries(TABS).map(([k, label]) => (

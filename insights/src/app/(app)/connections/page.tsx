@@ -1,4 +1,5 @@
-import { assignAccountAction, removeConnectionAction, syncNowAction, toggleAccountAction } from "@/app/actions/accounts";
+import { AutoRefresh, SelectAll } from "@/components/auto-refresh";
+import { assignAccountAction, bulkAccountsAction, removeConnectionAction, syncNowAction, toggleAccountAction } from "@/app/actions/accounts";
 import { PageHeader } from "@/components/shell";
 import { ShareAccess } from "@/components/share-access";
 import { shareInfo } from "@/lib/share-info";
@@ -23,11 +24,19 @@ export default async function Connections({ searchParams }: { searchParams: Prom
   ]);
   const share = shareInfo();
   const claims = await db.accountClaim.findMany({ where: { clientId: v.clientId, status: { not: "approved" } }, orderBy: { createdAt: "desc" }, take: 20 });
-  const queued = await db.syncRun.groupBy({ by: ["accountId"], where: { status: { in: ["QUEUED", "RUNNING"] }, account: { connection: { clientId: v.clientId } } }, _count: true });
-  const pending = new Map(queued.map((q) => [q.accountId, q._count]));
+  // Sync status per account: running now, or its place in the (global) queue.
+  const jobs = await db.syncRun.findMany({ where: { status: { in: ["QUEUED", "RUNNING"] } }, orderBy: [{ priority: "desc" }, { createdAt: "asc" }], select: { accountId: true, status: true }, take: 2000 });
+  const running = new Set(jobs.filter((j) => j.status === "RUNNING").map((j) => j.accountId));
+  const parts = new Map<string, number>();
+  const place = new Map<string, number>();
+  for (const j of jobs) {
+    parts.set(j.accountId, (parts.get(j.accountId) ?? 0) + 1);
+    if (j.status === "QUEUED" && !running.has(j.accountId) && !place.has(j.accountId)) place.set(j.accountId, place.size + 1);
+  }
 
   return (
     <>
+      <AutoRefresh active={parts.size > 0 && conns.some((c) => c.accounts.some((a) => parts.has(a.id)))} />
       <PageHeader title="Ad accounts" sub="Connect any number of logins per platform, then put each ad account in a company." />
       {typeof sp.error === "string" && <div className="card mb-4 border-red-200 bg-red-50 text-sm text-bad">Connection failed: {sp.error}</div>}
       {typeof sp.connected === "string" && <div className="card mb-4 border-green-200 bg-green-50 text-sm text-good">Connected. Assign the new accounts to a company below to start syncing.</div>}
@@ -87,12 +96,26 @@ export default async function Connections({ searchParams }: { searchParams: Prom
                       </form>
                     )}
                   </div>
+                  {edit && c.accounts.length > 1 && (
+                    <form id={`bulk-${c.id}`} action={bulkAccountsAction} className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2 text-sm">
+                      <span className="text-muted">With ticked accounts:</span>
+                      <select name="companyId" className="input !w-48 !py-1" defaultValue="">
+                        <option value="">— not assigned —</option>
+                        {companies.map((co) => <option key={co.id} value={co.id}>{co.name}</option>)}
+                      </select>
+                      <button name="op" value="assign" className="btn-ghost !py-1">Assign to company</button>
+                      <button name="op" value="sync" className="btn-ghost !py-1">Sync now</button>
+                      <button name="op" value="disable" className="btn-ghost !py-1">Disable</button>
+                      <button name="op" value="enable" className="btn-ghost !py-1">Enable</button>
+                    </form>
+                  )}
                   <div className="overflow-x-auto">
                     <table className="tbl">
-                      <thead><tr><th>Ad account</th><th>Currency</th><th>Company</th><th>Last sync</th><th>Status</th><th /></tr></thead>
+                      <thead><tr>{edit && c.accounts.length > 1 && <th className="!w-8"><SelectAll form={`bulk-${c.id}`} /></th>}<th>Ad account</th><th>Currency</th><th>Company</th><th>Last sync</th><th>Status</th><th /></tr></thead>
                       <tbody>
                         {c.accounts.map((a) => (
                           <tr key={a.id} className={a.enabled ? "" : "opacity-50"}>
+                            {edit && c.accounts.length > 1 && <td><input type="checkbox" name="ids" value={a.id} form={`bulk-${c.id}`} aria-label={`Select ${a.name}`} /></td>}
                             <td><div className="font-medium">{a.name}</div><div className="text-xs text-muted">{a.externalId}</div></td>
                             <td>{a.currency}</td>
                             <td>
@@ -107,7 +130,8 @@ export default async function Connections({ searchParams }: { searchParams: Prom
                             </td>
                             <td className="text-xs">{a.lastSyncAt ? a.lastSyncAt.toISOString().replace("T", " ").slice(0, 16) : "never"}</td>
                             <td className="text-xs">
-                              {pending.get(a.id) ? <span className="text-amber-700">syncing ({pending.get(a.id)} jobs)</span>
+                              {running.has(a.id) ? <span className="text-blue-700">● syncing now{(parts.get(a.id) ?? 0) > 1 ? ` · ${(parts.get(a.id) ?? 1) - 1} more part${(parts.get(a.id) ?? 1) > 2 ? "s" : ""} after` : ""}</span>
+                                : place.has(a.id) ? <span className="text-amber-700">queued #{place.get(a.id)} · {parts.get(a.id)} part{(parts.get(a.id) ?? 0) > 1 ? "s" : ""}</span>
                                 : a.syncError ? <span className="text-bad" title={a.syncError}>error</span>
                                 : a.companyId ? <span className="text-good">ok</span> : <span className="text-muted">idle</span>}
                             </td>

@@ -58,7 +58,7 @@ export function canEdit(v: Viewer): boolean {
   return v.role !== "VIEWER";
 }
 
-export type Filters = { companyId?: string; platform?: Platform; accountId?: string; campaignId?: string };
+export type Filters = { companyId?: string; platform?: Platform; accountId?: string; accountIds?: string[]; campaignId?: string };
 
 /**
  * The ad accounts a query may touch. Every warehouse read goes through this,
@@ -70,7 +70,7 @@ export function accountWhere(clientId: string, f: Filters = {}): Prisma.AdAccoun
     enabled: true,
     companyId: f.companyId ? f.companyId : { not: null },
     ...(f.platform ? { platform: f.platform } : {}),
-    ...(f.accountId ? { id: f.accountId } : {}),
+    ...(f.accountId ? { id: f.accountId } : f.accountIds?.length ? { id: { in: f.accountIds } } : {}),
   };
 }
 

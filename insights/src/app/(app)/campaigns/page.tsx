@@ -18,7 +18,7 @@ export default async function Campaigns({ searchParams }: { searchParams: Promis
   return (
     <>
       <PageHeader title={t.campaigns} sub={`${rows.length} campaigns · ${range.from} → ${range.to}`}>
-        <Filters t={t} companies={c.companies} companyId={c.companyId} platform={c.platform} range={range} days={c.one("days")} />
+        <Filters t={t} freshness={c.freshness} accounts={c.accounts} companies={c.companies} companyId={c.companyId} platform={c.platform} range={range} days={c.one("days")} />
       </PageHeader>
       <div className="card">
         <DataTable currency={scope.currency} initialSort="spend" csvName="campaigns"

@@ -6,7 +6,7 @@
  */
 import { db } from "@/lib/db";
 import { lastNDays, ymd } from "@/lib/dates";
-import { enqueueInitialSync, enqueueSync } from "@/lib/jobs";
+import { enqueueInitialSync, enqueueLive, enqueueSync, liveMinutes } from "@/lib/jobs";
 import { runGeoAudit, runVisibility } from "./geo";
 import { runCrawl } from "./seo";
 import { syncAccount } from "./sync";
@@ -14,11 +14,12 @@ import { claudeEnabled } from "@/lib/claude";
 import { loadSettings } from "@/lib/settings";
 
 const POLL_MS = 3_000;
-const SCHEDULE_EVERY_MS = 10 * 60_000;
-const RESYNC_AFTER_MS = 3 * 60 * 60_000; // refresh each account every 3 hours
+const SCHEDULE_EVERY_MS = 60_000;
+/** Full 28-day re-sync (late conversions, attribution changes); the live refresh covers today in between. */
+const FULL_RESYNC_MS = 6 * 60 * 60_000;
 const MAX_ATTEMPTS = 5;
 
-type Claimed = { id: string; accountId: string; fromDate: Date; toDate: Date; attempts: number };
+type Claimed = { id: string; accountId: string; kind: string; fromDate: Date; toDate: Date; attempts: number };
 
 async function claim(): Promise<Claimed | null> {
   const rows = await db.$queryRaw<Claimed[]>`
@@ -26,10 +27,13 @@ async function claim(): Promise<Claimed | null> {
     WHERE id = (
       SELECT id FROM "SyncRun"
       WHERE status = 'QUEUED' AND "runAfter" <= now()
-      ORDER BY "createdAt" ASC, "toDate" DESC
+        AND NOT EXISTS (SELECT 1 FROM "SyncRun" r WHERE r."accountId" = "SyncRun"."accountId" AND r.status = 'RUNNING')
+        -- two slots claiming at the same instant can't both pick the same account
+        AND pg_try_advisory_xact_lock(hashtext("SyncRun"."accountId"))
+      ORDER BY priority DESC, "createdAt" ASC, "toDate" DESC
       FOR UPDATE SKIP LOCKED LIMIT 1
     )
-    RETURNING id, "accountId", "fromDate", "toDate", attempts`;
+    RETURNING id, "accountId", kind, "fromDate", "toDate", attempts`;
   return rows[0] ?? null;
 }
 
@@ -37,7 +41,7 @@ async function runOne(job: Claimed) {
   const lines: string[] = [];
   const from = ymd(job.fromDate), to = ymd(job.toDate);
   try {
-    await syncAccount(job.accountId, from, to, (s) => lines.push(s));
+    await syncAccount(job.accountId, from, to, (s) => lines.push(s), job.kind);
     await db.syncRun.update({ where: { id: job.id }, data: { status: "DONE", finishedAt: new Date(), log: lines.join("\n"), error: "" } });
     console.log(`[sync] ${job.accountId} ${from}..${to} ok — ${lines.join("; ")}`);
   } catch (e) {
@@ -88,36 +92,45 @@ async function schedule() {
 
   const accounts = await db.adAccount.findMany({
     where: { enabled: true, companyId: { not: null }, connection: { status: "active" } },
-    select: { id: true, lastSyncAt: true, syncRuns: { where: { status: { in: ["QUEUED", "RUNNING"] } }, select: { id: true }, take: 1 } },
+    select: { id: true, lastSyncAt: true, lastFullSyncAt: true, syncRuns: { where: { status: { in: ["QUEUED", "RUNNING"] } }, select: { id: true }, take: 1 } },
   });
   const window = lastNDays(28);
+  const liveMs = liveMinutes() * 60_000;
   for (const a of accounts) {
     if (a.syncRuns.length) continue;
     if (!a.lastSyncAt) await enqueueInitialSync(a.id);
-    else if (Date.now() - a.lastSyncAt.getTime() > RESYNC_AFTER_MS) await enqueueSync(a.id, window.from, ymd(new Date()));
+    else if (!a.lastFullSyncAt || Date.now() - a.lastFullSyncAt.getTime() > FULL_RESYNC_MS) await enqueueSync(a.id, window.from, ymd(new Date()));
+    else if (Date.now() - a.lastSyncAt.getTime() > liveMs) await enqueueLive(a.id);
   }
 
   // Tokens past their expiry stop syncing until someone reconnects.
   await db.adConnection.updateMany({ where: { isDemo: false, status: "active", refreshEnc: null, expiresAt: { lt: new Date() } }, data: { status: "expired", lastError: "Access token expired — reconnect this login." } });
 }
 
+/** Parallel job slots; each account's jobs still run one at a time. */
+const SLOTS = Math.max(1, Math.min(8, Number(process.env.WORKER_CONCURRENCY) || 3));
+
 async function main() {
-  console.log("[worker] started");
+  console.log(`[worker] started with ${SLOTS} parallel jobs`);
   let lastSchedule = 0;
   let stop = false;
   process.on("SIGTERM", () => (stop = true));
   process.on("SIGINT", () => (stop = true));
-  while (!stop) {
-    await loadSettings();
-    if (Date.now() - lastSchedule > SCHEDULE_EVERY_MS) {
-      await schedule().catch((e) => console.error("[schedule]", e));
-      await scheduleVisibility().catch((e) => console.error("[visibility]", e));
-      lastSchedule = Date.now();
+
+  const slot = async (n: number) => {
+    while (!stop) {
+      await loadSettings();
+      if (n === 0 && Date.now() - lastSchedule > SCHEDULE_EVERY_MS) {
+        lastSchedule = Date.now();
+        await schedule().catch((e) => console.error("[schedule]", e));
+        await scheduleVisibility().catch((e) => console.error("[visibility]", e));
+      }
+      const job = await claim().catch((e) => (console.error("[claim]", e), null));
+      if (job) await runOne(job);
+      else if (n !== 0 || !(await websiteJob().catch((e) => (console.error("[website]", e), false)))) await new Promise((r) => setTimeout(r, POLL_MS));
     }
-    const job = await claim().catch((e) => (console.error("[claim]", e), null));
-    if (job) await runOne(job);
-    else if (!(await websiteJob().catch((e) => (console.error("[website]", e), false)))) await new Promise((r) => setTimeout(r, POLL_MS));
-  }
+  };
+  await Promise.all(Array.from({ length: SLOTS }, (_, n) => slot(n)));
   await db.$disconnect();
 }
 

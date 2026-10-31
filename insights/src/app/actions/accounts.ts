@@ -3,8 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { lastNDays, ymd } from "@/lib/dates";
-import { enqueueInitialSync, enqueueSync } from "@/lib/jobs";
+import { enqueueInitialSync, syncNow } from "@/lib/jobs";
 import { canEdit, requireWorkspace } from "@/lib/tenancy";
 
 /** The signed-in editor's client — every mutation below is checked against it. */
@@ -46,8 +45,7 @@ export async function toggleAccountAction(form: FormData) {
 export async function syncNowAction(form: FormData) {
   const v = await editor();
   const acc = await ownAccount(v.clientId, String(form.get("accountId")));
-  const r = lastNDays(28);
-  await enqueueSync(acc.id, r.from, ymd(new Date()));
+  await syncNow(acc.id);
   revalidatePath("/connections");
   revalidatePath("/welcome");
 }
@@ -97,5 +95,26 @@ export async function setBudgetAction(form: FormData) {
   } else if (existing) await db.budget.update({ where: { id: existing.id }, data: { amount } });
   else await db.budget.create({ data: { companyId, month, amount, currency: (await db.client.findUniqueOrThrow({ where: { id: v.clientId } })).reportingCurrency } });
   revalidatePath("/companies");
+  revalidatePath("/welcome");
+}
+
+/** Ticked accounts on the Ad accounts page: assign to a company, sync now, enable or disable. */
+export async function bulkAccountsAction(form: FormData) {
+  const v = await editor();
+  const ids = form.getAll("ids").map(String);
+  if (!ids.length) return;
+  const accounts = await db.adAccount.findMany({ where: { id: { in: ids }, connection: { clientId: v.clientId } } });
+  const op = String(form.get("op"));
+  if (op === "assign") {
+    const companyId = String(form.get("companyId") || "");
+    if (companyId && !(await db.company.findFirst({ where: { id: companyId, clientId: v.clientId } }))) throw new Error("Company not found");
+    await db.adAccount.updateMany({ where: { id: { in: accounts.map((a) => a.id) } }, data: { companyId: companyId || null } });
+    if (companyId) for (const a of accounts) if (!a.lastSyncAt && !(await db.syncRun.count({ where: { accountId: a.id, status: { in: ["QUEUED", "RUNNING"] } } }))) await enqueueInitialSync(a.id);
+  } else if (op === "sync") {
+    for (const a of accounts) if (a.companyId && a.enabled) await syncNow(a.id);
+  } else if (op === "enable" || op === "disable") {
+    await db.adAccount.updateMany({ where: { id: { in: accounts.map((a) => a.id) } }, data: { enabled: op === "enable" } });
+  }
+  revalidatePath("/connections");
   revalidatePath("/welcome");
 }
