@@ -1,18 +1,19 @@
 import { fetchJson } from "@/lib/http";
 import type { Connector, RemoteAd, RemoteAdSet, RemoteBreakdown, RemoteCampaign, RemoteKeyword, RemotePlacement, RemoteSearchTerm, RemoteStat, RemoteTargetingItem, SyncContext, TokenSet } from "../types";
 import { adCopy, ageLabel, criterionItem, genderLabel, gMetrics, micros } from "./normalize";
+import { setting } from "@/lib/settings";
 
-const V = () => process.env.GOOGLE_ADS_API_VERSION || "v17";
+const V = () => setting("GOOGLE_ADS_API_VERSION") || "v17";
 const API = () => `https://googleads.googleapis.com/${V()}`;
 const SCOPE = "https://www.googleapis.com/auth/adwords";
 
 function headers(token: string, loginCustomerId?: string): Record<string, string> {
   const h: Record<string, string> = {
     Authorization: `Bearer ${token}`,
-    "developer-token": process.env.GOOGLE_ADS_DEVELOPER_TOKEN ?? "",
+    "developer-token": setting("GOOGLE_ADS_DEVELOPER_TOKEN") ?? "",
     "content-type": "application/json",
   };
-  const login = loginCustomerId || process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID;
+  const login = loginCustomerId || setting("GOOGLE_ADS_LOGIN_CUSTOMER_ID");
   if (login) h["login-customer-id"] = login.replace(/-/g, "");
   return h;
 }
@@ -28,7 +29,7 @@ async function gaql(ctx: { token: string; customerId: string; login?: string }, 
 async function token(params: Record<string, string>): Promise<TokenSet> {
   const r: any = await fetchJson("https://oauth2.googleapis.com/token", {
     method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ client_id: process.env.GOOGLE_ADS_CLIENT_ID!, client_secret: process.env.GOOGLE_ADS_CLIENT_SECRET!, ...params }),
+    body: new URLSearchParams({ client_id: setting("GOOGLE_ADS_CLIENT_ID"), client_secret: setting("GOOGLE_ADS_CLIENT_SECRET"), ...params }),
   });
   return { accessToken: r.access_token, refreshToken: r.refresh_token, expiresAt: new Date(Date.now() + (r.expires_in ?? 3600) * 1000), scopes: r.scope };
 }
@@ -38,12 +39,12 @@ const M = "metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.con
 
 export const google: Connector = {
   platform: "GOOGLE",
-  configured: () => !!(process.env.GOOGLE_ADS_CLIENT_ID && process.env.GOOGLE_ADS_CLIENT_SECRET && process.env.GOOGLE_ADS_DEVELOPER_TOKEN),
+  configured: () => !!(setting("GOOGLE_ADS_CLIENT_ID") && setting("GOOGLE_ADS_CLIENT_SECRET") && setting("GOOGLE_ADS_DEVELOPER_TOKEN")),
 
   authUrl(state, redirectUri) {
     const u = new URL("https://accounts.google.com/o/oauth2/v2/auth");
     u.search = new URLSearchParams({
-      client_id: process.env.GOOGLE_ADS_CLIENT_ID!, redirect_uri: redirectUri, response_type: "code", scope: SCOPE,
+      client_id: setting("GOOGLE_ADS_CLIENT_ID"), redirect_uri: redirectUri, response_type: "code", scope: SCOPE,
       access_type: "offline", prompt: "consent", include_granted_scopes: "true", state,
     }).toString();
     return u.toString();

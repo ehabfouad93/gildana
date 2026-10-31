@@ -78,12 +78,14 @@ model Client {
   timezone          String   @default("Africa/Cairo")
   logoUrl           String   @default("")
   active            Boolean  @default(true)
+  onboardedAt       DateTime?
   createdAt         DateTime @default(now())
 
   users       User[]
   companies   Company[]
   connections AdConnection[]
   shareLinks  ShareLink[]
+  claims      AccountClaim[]
 }
 
 model Company {
@@ -106,8 +108,12 @@ model Company {
 /// accounts, which are then assigned to companies individually.
 model AdConnection {
   id          String    @id @default(cuid())
-  clientId    String
-  client      Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  /// null for Gildana's own (agency) logins, which serve accounts clients share with Gildana.
+  clientId    String?
+  client      Client?   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  isAgency    Boolean   @default(false)
+  /// Set on a client's "shared with Gildana" connection: the agency login whose token it uses.
+  agencySourceId String?
   userId      String?
   user        User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
   platform    Platform
@@ -736,7 +742,37 @@ model PasswordReset {
   expiresAt DateTime
   usedAt    DateTime?
   ip        String    @default("")
+  purpose   String    @default("reset") // reset | invite
   createdAt DateTime  @default(now())
 
   @@index([userId])
+}
+
+/// App-wide settings editable from Admin → Platforms (platform app keys, sign-up, email…).
+/// Values are encrypted; an unset key falls back to the environment variable of the same name.
+model AppSetting {
+  key       String   @id
+  valueEnc  String
+  updatedAt DateTime @updatedAt
+}
+
+/// A client asking for an ad account they shared with Gildana's Business Manager / MCC.
+/// An admin approves it, so one client can never pull in another client's account.
+model AccountClaim {
+  id         String    @id @default(cuid())
+  clientId   String
+  client     Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  companyId  String?
+  platform   Platform
+  externalId String
+  name       String    @default("")
+  visible    Boolean   @default(false) // seen through Gildana's agency login when last checked
+  status     String    @default("pending") // pending | approved | rejected
+  note       String    @default("")
+  accountId  String?
+  createdAt  DateTime  @default(now())
+  decidedAt  DateTime?
+
+  @@unique([clientId, platform, externalId])
+  @@index([status])
 }

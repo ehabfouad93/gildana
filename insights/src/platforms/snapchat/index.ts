@@ -1,6 +1,7 @@
 import { addDays } from "@/lib/dates";
 import { fetchJson } from "@/lib/http";
 import type { Connector, Metrics, RemoteAd, RemoteAdSet, RemoteBreakdown, RemoteCampaign, RemoteStat, RemoteTargetingItem, StatLevel, SyncContext, TokenSet } from "../types";
+import { setting } from "@/lib/settings";
 
 /** Snapchat Marketing API v1. campaign → Campaign, ad squad → AdSet, ad → Ad. */
 const API = "https://adsapi.snapchat.com/v1";
@@ -10,7 +11,7 @@ const micro = (v: unknown) => Number(v ?? 0) / 1_000_000;
 async function token(params: Record<string, string>): Promise<TokenSet> {
   const r: any = await fetchJson("https://accounts.snapchat.com/login/oauth2/access_token", {
     method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ client_id: process.env.SNAPCHAT_CLIENT_ID!, client_secret: process.env.SNAPCHAT_CLIENT_SECRET!, ...params }),
+    body: new URLSearchParams({ client_id: setting("SNAPCHAT_CLIENT_ID"), client_secret: setting("SNAPCHAT_CLIENT_SECRET"), ...params }),
   });
   return { accessToken: r.access_token, refreshToken: r.refresh_token, expiresAt: new Date(Date.now() + (r.expires_in ?? 1800) * 1000), scopes: r.scope };
 }
@@ -55,10 +56,10 @@ const FIELDS = "impressions,swipes,spend,uniques,video_views,conversion_purchase
 
 export const snapchat: Connector = {
   platform: "SNAPCHAT",
-  configured: () => !!(process.env.SNAPCHAT_CLIENT_ID && process.env.SNAPCHAT_CLIENT_SECRET),
+  configured: () => !!(setting("SNAPCHAT_CLIENT_ID") && setting("SNAPCHAT_CLIENT_SECRET")),
 
   authUrl(state, redirectUri) {
-    return "https://accounts.snapchat.com/login/oauth2/authorize?" + new URLSearchParams({ client_id: process.env.SNAPCHAT_CLIENT_ID!, redirect_uri: redirectUri, response_type: "code", scope: "snapchat-marketing-api", state });
+    return "https://accounts.snapchat.com/login/oauth2/authorize?" + new URLSearchParams({ client_id: setting("SNAPCHAT_CLIENT_ID"), redirect_uri: redirectUri, response_type: "code", scope: "snapchat-marketing-api", state });
   },
   async exchange(code, redirectUri) {
     return { ...(await token({ grant_type: "authorization_code", code, redirect_uri: redirectUri })), label: "Snapchat login" };

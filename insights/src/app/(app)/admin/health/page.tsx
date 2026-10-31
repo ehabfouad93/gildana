@@ -28,13 +28,13 @@ export default async function Health() {
       {workerAge != null && workerAge > 60 && n("QUEUED") > 0 && <div className="card mb-4 border-red-200 bg-red-50 text-sm text-bad">Jobs are queued but none finished in the last hour — is the worker process running? (<code>npm run worker</code>)</div>}
 
       <Section title="Logins needing attention" empty="All logins are active.">
-        {expired.map((c) => <tr key={c.id}><td>{c.client.name}</td><td>{PLATFORM_META[c.platform].label}</td><td>{c.label}</td><td className="text-bad">{c.status}: {c.lastError}</td></tr>)}
+        {expired.map((c) => <tr key={c.id}><td>{c.client?.name ?? "Gildana (agency)"}</td><td>{PLATFORM_META[c.platform].label}</td><td>{c.label}</td><td className="text-bad">{c.status}: {c.lastError}</td></tr>)}
       </Section>
       <Section title="Accounts not synced in 12 hours" empty="Every assigned account is fresh.">
-        {stale.map((a) => <tr key={a.id}><td>{a.connection.client.name}</td><td>{PLATFORM_META[a.platform].label}</td><td>{a.name}</td><td className="text-xs">{a.lastSyncAt?.toISOString().slice(0, 16) ?? "never"} {a.syncError && <span className="text-bad">— {a.syncError}</span>}</td></tr>)}
+        {stale.map((a) => <tr key={a.id}><td>{a.connection.client?.name ?? "Gildana (agency)"}</td><td>{PLATFORM_META[a.platform].label}</td><td>{a.name}</td><td className="text-xs">{a.lastSyncAt?.toISOString().slice(0, 16) ?? "never"} {a.syncError && <span className="text-bad">— {a.syncError}</span>}</td></tr>)}
       </Section>
       <Section title="Failed jobs" empty="No failed jobs.">
-        {failed.map((j) => <tr key={j.id}><td>{j.account.connection.client.name}</td><td>{PLATFORM_META[j.account.platform].label}</td><td>{j.account.name}</td><td className="text-xs text-bad">{j.error}</td></tr>)}
+        {failed.map((j) => <tr key={j.id}><td>{j.account.connection.client?.name ?? "Gildana (agency)"}</td><td>{PLATFORM_META[j.account.platform].label}</td><td>{j.account.name}</td><td className="text-xs text-bad">{j.error}</td></tr>)}
       </Section>
     </>
   );

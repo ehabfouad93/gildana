@@ -1,11 +1,12 @@
 import { fetchJson } from "@/lib/http";
 import type { Connector, Metrics, RemoteAd, RemoteAdSet, RemoteBreakdown, RemoteCampaign, RemoteStat, RemoteTargetingItem, StatLevel, SyncContext, TokenSet } from "../types";
+import { setting } from "@/lib/settings";
 
 /**
  * LinkedIn Marketing API (versioned REST). Mapping onto our levels:
  * campaign group → Campaign, campaign → AdSet, creative → Ad.
  */
-const VERSION = () => process.env.LINKEDIN_API_VERSION || "202409";
+const VERSION = () => setting("LINKEDIN_API_VERSION") || "202409";
 const API = "https://api.linkedin.com/rest";
 const SCOPES = ["r_ads", "r_ads_reporting", "r_organization_social", "r_basicprofile"];
 
@@ -16,7 +17,7 @@ const enc = (s: string) => encodeURIComponent(s);
 async function token(params: Record<string, string>): Promise<TokenSet> {
   const r: any = await fetchJson("https://www.linkedin.com/oauth/v2/accessToken", {
     method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ client_id: process.env.LINKEDIN_CLIENT_ID!, client_secret: process.env.LINKEDIN_CLIENT_SECRET!, ...params }),
+    body: new URLSearchParams({ client_id: setting("LINKEDIN_CLIENT_ID"), client_secret: setting("LINKEDIN_CLIENT_SECRET"), ...params }),
   });
   return { accessToken: r.access_token, refreshToken: r.refresh_token, expiresAt: new Date(Date.now() + (r.expires_in ?? 5_184_000) * 1000), scopes: r.scope };
 }
@@ -102,10 +103,10 @@ const FIELDS = "dateRange,pivotValues,costInLocalCurrency,impressions,clicks,lan
 
 export const linkedin: Connector = {
   platform: "LINKEDIN",
-  configured: () => !!(process.env.LINKEDIN_CLIENT_ID && process.env.LINKEDIN_CLIENT_SECRET),
+  configured: () => !!(setting("LINKEDIN_CLIENT_ID") && setting("LINKEDIN_CLIENT_SECRET")),
 
   authUrl(state, redirectUri) {
-    return `https://www.linkedin.com/oauth/v2/authorization?` + new URLSearchParams({ response_type: "code", client_id: process.env.LINKEDIN_CLIENT_ID!, redirect_uri: redirectUri, state, scope: SCOPES.join(" ") });
+    return `https://www.linkedin.com/oauth/v2/authorization?` + new URLSearchParams({ response_type: "code", client_id: setting("LINKEDIN_CLIENT_ID"), redirect_uri: redirectUri, state, scope: SCOPES.join(" ") });
   },
   async exchange(code, redirectUri) {
     return { ...(await token({ grant_type: "authorization_code", code, redirect_uri: redirectUri })), label: "LinkedIn login" };

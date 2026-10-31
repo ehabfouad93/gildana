@@ -10,7 +10,7 @@ export default async function ResetPassword({ searchParams }: { searchParams: Pr
   const { token = "" } = await searchParams;
   const valid = token ? await peekResetToken(token) : null;
   return (
-    <AuthCard title="Choose a new password" sub={valid ? `For ${valid.user.email}` : undefined}>
+    <AuthCard title={valid?.purpose === "invite" ? "Welcome to Gildana Insights" : "Choose a new password"} sub={valid ? (valid.purpose === "invite" ? `Set a password for ${valid.user.email} to get started.` : `For ${valid.user.email}`) : undefined}>
       {valid ? <ResetForm token={token} /> : (
         <p className="text-sm text-muted">This link has expired or was already used. <Link href="/forgot-password" className="text-accent hover:underline">Ask for a new one</Link>.</p>
       )}

@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { fetchPage, fetchText } from "@/lib/fetch-page";
 import { analyzeHtml, pageIssues, robotsAllows, seoScore, siteIssues, type Issue, type PageData } from "@/lib/seo";
 import { siteStart } from "@/lib/site-origin";
+import { setting } from "@/lib/settings";
 
 const SKIP = /\.(jpg|jpeg|png|gif|webp|svg|pdf|zip|mp4|mp3|css|js|ico|woff2?|xml|json)(\?|$)/i;
 
@@ -79,7 +80,7 @@ async function pageSpeed(url: string) {
     u.searchParams.set("url", url);
     u.searchParams.set("strategy", "mobile");
     for (const c of ["performance", "seo", "accessibility", "best-practices"]) u.searchParams.append("category", c);
-    if (process.env.PAGESPEED_API_KEY) u.searchParams.set("key", process.env.PAGESPEED_API_KEY);
+    if (setting("PAGESPEED_API_KEY")) u.searchParams.set("key", setting("PAGESPEED_API_KEY"));
     const r = await fetch(u, { signal: AbortSignal.timeout(90_000) });
     if (!r.ok) return null;
     const j: any = await r.json();

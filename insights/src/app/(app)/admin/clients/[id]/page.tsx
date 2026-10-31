@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { createUserAction, deleteClientAction, openWorkspaceAction, resetPasswordAction, toggleUserAction, updateClientAction } from "@/app/actions/admin";
 import { PageHeader } from "@/components/shell";
+import { InviteForm } from "./invite-form";
 import { sendResetLinkAction } from "@/app/actions/password";
 import { db } from "@/lib/db";
 import { mailEnabled } from "@/lib/mail";
@@ -74,6 +75,10 @@ export default async function ClientAdmin({ params }: { params: Promise<{ id: st
               ))}
             </tbody>
           </table>
+          <h3 className="mb-2 mt-2 text-sm font-semibold">Invite someone</h3>
+          <p className="mb-2 text-xs text-muted">They get an email (or you send them the link) to set their own password, then a short wizard to connect their ad accounts.</p>
+          <InviteForm clientId={c.id} />
+          <h3 className="mb-2 mt-5 text-sm font-semibold">Or create a user with a password</h3>
           <form action={createUserAction} className="grid items-end gap-2 md:grid-cols-5">
             <input type="hidden" name="clientId" value={c.id} />
             <div><label className="label">Email</label><input className="input" name="email" type="email" required /></div>

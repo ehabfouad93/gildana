@@ -102,6 +102,15 @@ Crawls and audits are queued from the site pages and run in the worker. The craw
 
 AI visibility asks each tracked question with web search and from model knowledge, and records whether the brand is named, its rank in the list, whether the site is cited, and which competitors were named. It runs weekly for every tracked question, or on demand.
 
+## Running it as a SaaS
+
+Clients never handle API keys. Gildana sets each platform up **once**, then every client connects with a click.
+
+- **Admin → Platforms**: a checklist per platform (Meta, Google Ads, LinkedIn, Snapchat, TikTok) with the redirect URI to copy, fields for the app keys (stored encrypted in the database; `.env` still works as a fallback), plus email, Claude and PageSpeed keys. Switches for public sign-up, demo logins and auto-approving shared accounts.
+- **Sign-up** (`/signup`, when enabled): a client creates a workspace (brand or agency), then lands in **Get started** (`/welcome`): add companies → connect platforms → put each ad account in a company → dashboard.
+- **Invitations**: Admin → Clients → client → *Send invitation*. The person gets an email (or you copy the link) to set a password, valid 7 days, then the same wizard.
+- **Share access instead of logging in**: clients give Gildana's Business Manager (Meta), manager account (Google), Business Center (TikTok) or member (LinkedIn/Snapchat) access, then request the account ID. Gildana's own login (connect it on Admin → Platforms; for Meta a Business Manager **system user** token is best, as it never expires) can see it, and an admin approves it in **Access requests**. Approval stops one client pulling in another's account; turn on auto-approve if you prefer.
+
 ## Passwords
 
 - **Forgot password** on the sign-in page emails a one-time link (valid 1 hour). It needs `SMTP_URL` in `.env`, e.g. `smtp://you%40gildana.net:PASSWORD@smtp.hostinger.com:587` (URL-encode `@` in the username as `%40`), and `MAIL_FROM`. Without it, the page tells people to ask an admin. `SMTP_URL=log://` prints the emails to the log, for testing.

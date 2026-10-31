@@ -1,10 +1,11 @@
 import { decrypt } from "@/lib/crypto";
 import { fetchJson } from "@/lib/http";
 import type { Range } from "@/lib/dates";
+import { setting } from "@/lib/settings";
 
 /** Google Search Console (Search Analytics API) for a site's connected property. */
-const clientId = () => process.env.GSC_CLIENT_ID || process.env.GOOGLE_ADS_CLIENT_ID || "";
-const clientSecret = () => process.env.GSC_CLIENT_SECRET || process.env.GOOGLE_ADS_CLIENT_SECRET || "";
+const clientId = () => setting("GSC_CLIENT_ID") || setting("GOOGLE_ADS_CLIENT_ID") || "";
+const clientSecret = () => setting("GSC_CLIENT_SECRET") || setting("GOOGLE_ADS_CLIENT_SECRET") || "";
 export const gscConfigured = () => !!(clientId() && clientSecret());
 export const GSC_SCOPE = "https://www.googleapis.com/auth/webmasters.readonly";
 

@@ -20,11 +20,14 @@ export function passwordProblem(pw: string, confirm?: string): string | null {
   return null;
 }
 
-export async function createResetToken(userId: string, ip = ""): Promise<string> {
+/** Invitations stay valid for a week; reset links for an hour. */
+export const INVITE_TTL_MS = 7 * 24 * 60 * 60_000;
+
+export async function createResetToken(userId: string, ip = "", purpose: "reset" | "invite" = "reset"): Promise<string> {
   const token = randomToken(32);
   await db.$transaction([
     db.passwordReset.deleteMany({ where: { userId, usedAt: null } }),
-    db.passwordReset.create({ data: { userId, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + RESET_TTL_MS), ip: ip.slice(0, 64) } }),
+    db.passwordReset.create({ data: { userId, purpose, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + (purpose === "invite" ? INVITE_TTL_MS : RESET_TTL_MS)), ip: ip.slice(0, 64) } }),
   ]);
   return token;
 }

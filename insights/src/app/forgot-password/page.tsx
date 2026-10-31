@@ -1,12 +1,14 @@
 import Link from "next/link";
 import { AuthCard } from "@/components/auth-card";
 import { mailEnabled } from "@/lib/mail";
+import { loadSettings } from "@/lib/settings";
 import { ForgotForm } from "./form";
 
 export const metadata = { title: "Forgot password" };
 export const dynamic = "force-dynamic";
 
-export default function ForgotPassword() {
+export default async function ForgotPassword() {
+  await loadSettings();
   return (
     <AuthCard title="Forgot password" sub="We'll email you a link to choose a new one.">
       {mailEnabled() ? <ForgotForm /> : (

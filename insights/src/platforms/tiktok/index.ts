@@ -2,6 +2,7 @@ import { addDays } from "@/lib/dates";
 import { fetchJson } from "@/lib/http";
 import type { Connector, Metrics, RemoteAd, RemoteAdSet, RemoteBreakdown, RemoteCampaign, RemoteStat, RemoteTargetingItem, StatLevel, SyncContext } from "../types";
 import { PlatformError } from "../types";
+import { setting } from "@/lib/settings";
 
 /** TikTok Business API v1.3. campaign → Campaign, ad group → AdSet, ad → Ad. */
 const API = "https://business-api.tiktok.com/open_api/v1.3";
@@ -62,23 +63,23 @@ const AUDIENCE: [string, string][] = [["age", "age"], ["gender", "gender"], ["co
 
 export const tiktok: Connector = {
   platform: "TIKTOK",
-  configured: () => !!(process.env.TIKTOK_APP_ID && process.env.TIKTOK_APP_SECRET),
+  configured: () => !!(setting("TIKTOK_APP_ID") && setting("TIKTOK_APP_SECRET")),
 
   authUrl(state, redirectUri) {
-    return "https://business-api.tiktok.com/portal/auth?" + new URLSearchParams({ app_id: process.env.TIKTOK_APP_ID!, state, redirect_uri: redirectUri });
+    return "https://business-api.tiktok.com/portal/auth?" + new URLSearchParams({ app_id: setting("TIKTOK_APP_ID"), state, redirect_uri: redirectUri });
   },
   async exchange(code) {
     // TikTok sends ?auth_code=; the callback passes it through as `code`. Tokens do not expire.
     const r: any = await fetchJson(`${API}/oauth2/access_token/`, {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ app_id: process.env.TIKTOK_APP_ID, secret: process.env.TIKTOK_APP_SECRET, auth_code: code }),
+      body: JSON.stringify({ app_id: setting("TIKTOK_APP_ID"), secret: setting("TIKTOK_APP_SECRET"), auth_code: code }),
     });
     if (r.code !== 0) throw new PlatformError(`TikTok: ${r.message}`, 400);
     return { accessToken: r.data.access_token, scopes: (r.data.scope ?? []).join(","), label: "TikTok login" };
   },
 
   async listAccounts(t) {
-    const d = await call(t, "/oauth2/advertiser/get/", { app_id: process.env.TIKTOK_APP_ID, secret: process.env.TIKTOK_APP_SECRET });
+    const d = await call(t, "/oauth2/advertiser/get/", { app_id: setting("TIKTOK_APP_ID"), secret: setting("TIKTOK_APP_SECRET") });
     const ids = (d.list ?? []).map((x: any) => String(x.advertiser_id));
     if (!ids.length) return [];
     const info = await call(t, "/advertiser/info/", { advertiser_ids: ids, fields: ["advertiser_id", "name", "currency", "timezone", "status"] });

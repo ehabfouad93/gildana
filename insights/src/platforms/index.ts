@@ -6,6 +6,7 @@ import { meta } from "./meta";
 import { snapchat } from "./snapchat";
 import { tiktok } from "./tiktok";
 import type { Connector } from "./types";
+import { setting } from "@/lib/settings";
 
 const REAL: Partial<Record<Platform, Connector>> = { META: meta, GOOGLE: google, LINKEDIN: linkedin, SNAPCHAT: snapchat, TIKTOK: tiktok };
 
@@ -27,4 +28,4 @@ export function liveConnector(platform: Platform): Connector | null {
   return c && c.configured() ? c : null;
 }
 
-export const demoEnabled = () => process.env.DEMO_MODE !== "false";
+export const demoEnabled = () => setting("DEMO_MODE") !== "false";

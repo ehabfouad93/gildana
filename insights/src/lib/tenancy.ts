@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import type { Platform, Prisma } from "@prisma/client";
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
+import { loadSettings } from "@/lib/settings";
 
 export type Viewer = {
   id: string;
@@ -19,6 +20,7 @@ export type Viewer = {
 export const WORKSPACE_COOKIE = "gi_ws";
 
 export async function getViewer(): Promise<Viewer | null> {
+  await loadSettings();
   const s = await auth();
   if (!s?.user?.id) return null;
   const isAdmin = s.user.role === "ADMIN";

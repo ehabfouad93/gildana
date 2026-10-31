@@ -10,7 +10,7 @@ export async function Shell({ children }: { children: React.ReactNode }) {
   const v = await getViewer();
   const t = await getDict();
   const lang = await getLang();
-  const client = v?.clientId ? await db.client.findUnique({ where: { id: v.clientId }, select: { name: true } }) : null;
+  const client = v?.clientId ? await db.client.findUnique({ where: { id: v.clientId }, select: { name: true, onboardedAt: true } }) : null;
 
   return (
     <div className="flex min-h-screen">
@@ -22,6 +22,7 @@ export async function Shell({ children }: { children: React.ReactNode }) {
         {client && (
           <nav className="space-y-0.5">
             <div className="px-3 pb-1 text-[11px] uppercase tracking-wider text-slate-500">{client.name}</div>
+            {!client.onboardedAt && <NavLink href="/welcome">★ Get started</NavLink>}
             <NavLink href="/overview">{t.overview}</NavLink>
             <NavLink href="/spend">{t.spend}</NavLink>
             <NavLink href="/performance">{t.performance}</NavLink>
@@ -38,6 +39,8 @@ export async function Shell({ children }: { children: React.ReactNode }) {
           <nav className="mt-6 space-y-0.5">
             <div className="px-3 pb-1 text-[11px] uppercase tracking-wider text-slate-500">{t.admin}</div>
             <NavLink href="/admin/clients">{t.clients}</NavLink>
+            <NavLink href="/admin/platforms">Platforms</NavLink>
+            <NavLink href="/admin/access">Access requests</NavLink>
             <NavLink href="/admin/health">{t.health}</NavLink>
             {client && <form action={exitWorkspaceAction}><button className="block w-full rounded-lg px-3 py-2 text-start text-sm text-side-ink hover:bg-white/5 hover:text-white">← Leave {client.name}</button></form>}
           </nav>

@@ -2,8 +2,9 @@ import { fetchJson } from "@/lib/http";
 import type { Connector, RemoteAd, RemoteAdSet, RemoteBreakdown, RemoteCampaign, RemoteLead, RemoteStat, StatLevel, SyncContext } from "../types";
 import { PlatformError } from "../types";
 import { META_BREAKDOWNS, breakdownValue, flattenTargeting, insightMetrics, minor } from "./normalize";
+import { setting } from "@/lib/settings";
 
-const V = () => process.env.META_GRAPH_VERSION || "v21.0";
+const V = () => setting("META_GRAPH_VERSION") || "v21.0";
 const G = () => `https://graph.facebook.com/${V()}`;
 
 const SCOPES = ["ads_read", "leads_retrieval", "business_management", "pages_show_list", "pages_read_engagement", "pages_manage_ads"];
@@ -47,11 +48,11 @@ const INSIGHT_FIELDS = "account_id,campaign_id,adset_id,ad_id,spend,impressions,
 
 export const meta: Connector & { preview(token: string, adId: string, format?: string): Promise<string> } = {
   platform: "META",
-  configured: () => !!(process.env.META_APP_ID && process.env.META_APP_SECRET),
+  configured: () => !!(setting("META_APP_ID") && setting("META_APP_SECRET")),
 
   authUrl(state, redirectUri, opts) {
     const u = new URL(`https://www.facebook.com/${V()}/dialog/oauth`);
-    u.searchParams.set("client_id", process.env.META_APP_ID!);
+    u.searchParams.set("client_id", setting("META_APP_ID"));
     u.searchParams.set("redirect_uri", redirectUri);
     u.searchParams.set("state", state);
     u.searchParams.set("scope", [...SCOPES, ...(opts?.write ? [WRITE_SCOPE] : [])].join(","));
@@ -59,7 +60,7 @@ export const meta: Connector & { preview(token: string, adId: string, format?: s
   },
 
   async exchange(code, redirectUri) {
-    const id = process.env.META_APP_ID!, secret = process.env.META_APP_SECRET!;
+    const id = setting("META_APP_ID"), secret = setting("META_APP_SECRET");
     const short: any = await fetchJson(`${G()}/oauth/access_token?` + new URLSearchParams({ client_id: id, client_secret: secret, redirect_uri: redirectUri, code }));
     // Swap for a ~60-day token so syncs keep working without the user present.
     const long: any = await fetchJson(`${G()}/oauth/access_token?` + new URLSearchParams({ grant_type: "fb_exchange_token", client_id: id, client_secret: secret, fb_exchange_token: short.access_token }));

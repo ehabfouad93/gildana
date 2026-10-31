@@ -1,5 +1,6 @@
 import { fetchJson } from "@/lib/http";
 import type { RemoteTargetingItem } from "../types";
+import { setting } from "@/lib/settings";
 
 /**
  * Interest split test on Meta: copies one ad set into one ad set per
@@ -8,7 +9,7 @@ import type { RemoteTargetingItem } from "../types";
  * copy is created PAUSED; nothing spends until someone switches it on.
  */
 
-const V = () => process.env.META_GRAPH_VERSION || "v21.0";
+const V = () => setting("META_GRAPH_VERSION") || "v21.0";
 const G = () => `https://graph.facebook.com/${V()}`;
 
 const FACET: Record<string, string> = { interest: "interests", behavior: "behaviors" };

@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { mailEnabled, sendMail } from "@/lib/mail";
+import { loadSettings } from "@/lib/settings";
 import { consumeResetToken, createResetToken, passwordProblem } from "@/lib/password-reset";
 import { requireAdmin, requireViewer } from "@/lib/tenancy";
 
@@ -37,6 +38,7 @@ async function mailResetLink(user: { id: string; email: string; name: string }, 
 /** Always answers the same way, so the form can't be used to find out which emails have accounts. */
 export async function forgotPasswordAction(_: string | null, form: FormData): Promise<string> {
   const done = "If that email has an account, we've sent a link to reset the password. Check your inbox (and spam).";
+  await loadSettings();
   if (!mailEnabled()) return done;
   const email = String(form.get("email") ?? "").toLowerCase().trim().slice(0, 190);
   const ip = await clientIp();

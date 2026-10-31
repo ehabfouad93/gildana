@@ -8,13 +8,16 @@ import { createHmac, timingSafeEqual } from "node:crypto";
  */
 const secret = () => process.env.AUTH_SECRET ?? "";
 
-export function signState(payload: { clientId: string; platform: string; nonce: string }): string {
+/** clientId "AGENCY" marks Gildana's own login (admin only); `next` is where to land afterwards. */
+export type OAuthState = { clientId: string; platform: string; nonce: string; next?: string };
+
+export function signState(payload: OAuthState): string {
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
   const mac = createHmac("sha256", secret()).update(body).digest("base64url");
   return `${body}.${mac}`;
 }
 
-export function verifyState(state: string): { clientId: string; platform: string; nonce: string } | null {
+export function verifyState(state: string): OAuthState | null {
   const [body, mac] = state.split(".");
   if (!body || !mac) return null;
   const expect = createHmac("sha256", secret()).update(body).digest("base64url");
@@ -23,3 +26,10 @@ export function verifyState(state: string): { clientId: string; platform: string
 }
 
 export const redirectUri = (slug: string) => `${process.env.APP_URL ?? "http://localhost:3000"}/api/oauth/${slug}/callback`;
+
+/** Only same-site paths may be used as a post-login destination. */
+export function safeNext(next: string | null | undefined, fallback: string): string {
+  return next && next.startsWith("/") && !next.startsWith("//") && !next.includes("\\") ? next.slice(0, 200) : fallback;
+}
+
+export const AGENCY = "AGENCY";

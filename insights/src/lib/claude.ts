@@ -1,22 +1,28 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { setting } from "@/lib/settings";
 
 /**
  * Claude for the GEO module: content reviews and AI-visibility checks.
  * Off unless ANTHROPIC_API_KEY (or another SDK credential) is configured.
  */
-export const MODEL = process.env.CLAUDE_MODEL || "claude-opus-5-5";
+export const model = () => setting("CLAUDE_MODEL") || "claude-opus-5-5";
 
-export const claudeEnabled = () => !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
+export const claudeEnabled = () => !!(setting("ANTHROPIC_API_KEY") || process.env.ANTHROPIC_AUTH_TOKEN);
 
-let client: Anthropic | null = null;
-const anthropic = () => (client ??= new Anthropic());
+let client: { key: string; c: Anthropic } | null = null;
+/** One client per API key, so a key changed in Admin → Platforms takes effect without a restart. */
+const anthropic = () => {
+  const key = setting("ANTHROPIC_API_KEY");
+  if (!client || client.key !== key) client = { key, c: key ? new Anthropic({ apiKey: key }) : new Anthropic() };
+  return client.c;
+};
 
 type Ask = { system: string; prompt: string; webSearch?: boolean; effort?: "low" | "medium" | "high"; maxTokens?: number };
 
 /** One request; returns the answer text and any URLs the web search cited. */
 export async function askClaude({ system, prompt, webSearch = false, effort = "medium", maxTokens = 16000 }: Ask): Promise<{ text: string; sources: string[]; refused: boolean }> {
   const params = {
-    model: MODEL,
+    model: model(),
     max_tokens: maxTokens,
     system,
     thinking: { type: "adaptive" },

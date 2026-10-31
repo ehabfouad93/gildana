@@ -32,6 +32,7 @@ export async function assignAccountAction(form: FormData) {
     await enqueueInitialSync(accountId);
   }
   revalidatePath("/connections");
+  revalidatePath("/welcome");
 }
 
 export async function toggleAccountAction(form: FormData) {
@@ -39,6 +40,7 @@ export async function toggleAccountAction(form: FormData) {
   const acc = await ownAccount(v.clientId, String(form.get("accountId")));
   await db.adAccount.update({ where: { id: acc.id }, data: { enabled: !acc.enabled } });
   revalidatePath("/connections");
+  revalidatePath("/welcome");
 }
 
 export async function syncNowAction(form: FormData) {
@@ -47,12 +49,14 @@ export async function syncNowAction(form: FormData) {
   const r = lastNDays(28);
   await enqueueSync(acc.id, r.from, ymd(new Date()));
   revalidatePath("/connections");
+  revalidatePath("/welcome");
 }
 
 export async function removeConnectionAction(form: FormData) {
   const v = await editor();
   await db.adConnection.deleteMany({ where: { id: String(form.get("connectionId")), clientId: v.clientId } });
   revalidatePath("/connections");
+  revalidatePath("/welcome");
 }
 
 const companySchema = z.object({ name: z.string().trim().min(1).max(160), website: z.string().trim().max(255).optional().default(""), industry: z.string().trim().max(120).optional().default("") });
@@ -62,6 +66,7 @@ export async function createCompanyAction(form: FormData) {
   const d = companySchema.parse({ name: form.get("name"), website: form.get("website") ?? "", industry: form.get("industry") ?? "" });
   await db.company.create({ data: { clientId: v.clientId, ...d } });
   revalidatePath("/companies");
+  revalidatePath("/welcome");
 }
 
 export async function updateCompanyAction(form: FormData) {
@@ -69,12 +74,14 @@ export async function updateCompanyAction(form: FormData) {
   const d = companySchema.parse({ name: form.get("name"), website: form.get("website") ?? "", industry: form.get("industry") ?? "" });
   await db.company.updateMany({ where: { id: String(form.get("id")), clientId: v.clientId }, data: d });
   revalidatePath("/companies");
+  revalidatePath("/welcome");
 }
 
 export async function deleteCompanyAction(form: FormData) {
   const v = await editor();
   await db.company.deleteMany({ where: { id: String(form.get("id")), clientId: v.clientId } });
   revalidatePath("/companies");
+  revalidatePath("/welcome");
 }
 
 export async function setBudgetAction(form: FormData) {
@@ -90,4 +97,5 @@ export async function setBudgetAction(form: FormData) {
   } else if (existing) await db.budget.update({ where: { id: existing.id }, data: { amount } });
   else await db.budget.create({ data: { companyId, month, amount, currency: (await db.client.findUniqueOrThrow({ where: { id: v.clientId } })).reportingCurrency } });
   revalidatePath("/companies");
+  revalidatePath("/welcome");
 }

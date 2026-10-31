@@ -180,6 +180,12 @@ async function demoSplitTests(accountId: string): Promise<SyncContext["splitTest
  * minutes of expiry (Google, LinkedIn, Snapchat and TikTok tokens are short-lived).
  */
 async function freshToken(conn: AdConnection, connector: Connector): Promise<string> {
+  // An account a client shared with Gildana syncs through Gildana's own login.
+  if (conn.agencySourceId) {
+    const source = await db.adConnection.findUnique({ where: { id: conn.agencySourceId } });
+    if (!source || source.status !== "active") throw new Error("Gildana's login for shared accounts is disconnected — reconnect it in Admin → Platforms.");
+    return source.isDemo ? "demo" : freshToken(source, connector);
+  }
   const soon = conn.expiresAt && conn.expiresAt.getTime() < Date.now() + 10 * 60_000;
   if (!soon || !conn.refreshEnc || !connector.refresh) return decrypt(conn.tokenEnc);
   try {

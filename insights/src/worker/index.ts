@@ -11,6 +11,7 @@ import { runGeoAudit, runVisibility } from "./geo";
 import { runCrawl } from "./seo";
 import { syncAccount } from "./sync";
 import { claudeEnabled } from "@/lib/claude";
+import { loadSettings } from "@/lib/settings";
 
 const POLL_MS = 3_000;
 const SCHEDULE_EVERY_MS = 10 * 60_000;
@@ -107,6 +108,7 @@ async function main() {
   process.on("SIGTERM", () => (stop = true));
   process.on("SIGINT", () => (stop = true));
   while (!stop) {
+    await loadSettings();
     if (Date.now() - lastSchedule > SCHEDULE_EVERY_MS) {
       await schedule().catch((e) => console.error("[schedule]", e));
       await scheduleVisibility().catch((e) => console.error("[visibility]", e));
@@ -122,6 +124,7 @@ async function main() {
 if (process.argv.includes("--once")) {
   // Drain the queue and exit — used by tests and the seed script.
   (async () => {
+    await loadSettings(true);
     await schedule();
     for (let j = await claim(); j; j = await claim()) await runOne(j);
     while (await websiteJob()) { /* drain */ }

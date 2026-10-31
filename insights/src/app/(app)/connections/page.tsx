@@ -1,5 +1,7 @@
 import { assignAccountAction, removeConnectionAction, syncNowAction, toggleAccountAction } from "@/app/actions/accounts";
 import { PageHeader } from "@/components/shell";
+import { ShareAccess } from "@/components/share-access";
+import { shareInfo } from "@/lib/share-info";
 import { db } from "@/lib/db";
 import type { SP } from "@/lib/page";
 import { PLATFORMS, PLATFORM_META } from "@/lib/platforms";
@@ -19,6 +21,8 @@ export default async function Connections({ searchParams }: { searchParams: Prom
       include: { accounts: { orderBy: { name: "asc" }, include: { syncRuns: { orderBy: { createdAt: "desc" }, take: 1 } } } },
     }),
   ]);
+  const share = shareInfo();
+  const claims = await db.accountClaim.findMany({ where: { clientId: v.clientId, status: { not: "approved" } }, orderBy: { createdAt: "desc" }, take: 20 });
   const queued = await db.syncRun.groupBy({ by: ["accountId"], where: { status: { in: ["QUEUED", "RUNNING"] }, account: { connection: { clientId: v.clientId } } }, _count: true });
   const pending = new Map(queued.map((q) => [q.accountId, q._count]));
 
@@ -28,6 +32,22 @@ export default async function Connections({ searchParams }: { searchParams: Prom
       {typeof sp.error === "string" && <div className="card mb-4 border-red-200 bg-red-50 text-sm text-bad">Connection failed: {sp.error}</div>}
       {typeof sp.connected === "string" && <div className="card mb-4 border-green-200 bg-green-50 text-sm text-good">Connected. Assign the new accounts to a company below to start syncing.</div>}
       {!companies.length && <div className="card mb-4 text-sm">Create a company first on the <a className="text-accent underline" href="/companies">Companies</a> page.</div>}
+
+      {share.length > 0 && companies.length > 0 && edit && (
+        <details className="card mb-4" open={claims.length > 0}>
+          <summary className="cursor-pointer font-semibold">Share access with Gildana instead of logging in</summary>
+          <div className="mt-3"><ShareAccess platforms={share} companies={companies.map((c) => ({ id: c.id, name: c.name }))} /></div>
+          {claims.length > 0 && (
+            <ul className="mt-3 space-y-1 text-sm">
+              {claims.map((c) => (
+                <li key={c.id}>
+                  {PLATFORM_META[c.platform].label} · {c.name || c.externalId} — {c.status === "pending" ? (c.visible ? "Gildana can see it; waiting for approval" : "waiting for you to share it with Gildana") : c.status === "rejected" ? `declined${c.note ? `: ${c.note}` : ""}` : "added"}
+                </li>
+              ))}
+            </ul>
+          )}
+        </details>
+      )}
 
       <div className="space-y-4">
         {PLATFORMS.map((p) => {
@@ -44,16 +64,17 @@ export default async function Connections({ searchParams }: { searchParams: Prom
                   <div className="ms-auto flex gap-2">
                     {live && <a className="btn" href={`/api/oauth/${meta.slug}/start`}>Connect {meta.label}</a>}
                     {live && p === "META" && <a className="btn-ghost" href={`/api/oauth/${meta.slug}/start?write=1`} title="Also grants ads_management so the dashboard can create paused interest split-test ad sets">Connect with split tests</a>}
-                    {(!live || demoEnabled()) && <a className={live ? "btn-ghost" : "btn"} href={`/api/oauth/${meta.slug}/start?demo=1`}>{live ? "Add demo login" : `Connect ${meta.label} (demo)`}</a>}
+                    {demoEnabled() && <a className={live ? "btn-ghost" : "btn"} href={`/api/oauth/${meta.slug}/start?demo=1`}>{live ? "Add demo login" : `Connect ${meta.label} (demo)`}</a>}
                   </div>
                 )}
               </div>
-              {!live && <p className="mb-3 text-xs text-muted">{meta.label} API credentials are not configured yet, so only demo logins are available. Add them in the server environment to connect real accounts.</p>}
+              {!live && <p className="mb-3 text-xs text-muted">{v.isAdmin ? <>Not set up yet — add {meta.label}&apos;s app keys in <a className="text-accent underline" href="/admin/platforms">Admin → Platforms</a>.</> : `${meta.label} connections are coming soon.`}</p>}
 
               {list.map((c) => (
                 <div key={c.id} className="mb-3 rounded-lg border border-line">
                   <div className="flex flex-wrap items-center gap-2 border-b border-line bg-bg px-3 py-2 text-sm">
                     <b>{c.label || c.externalUser || "Login"}</b>
+                    {c.agencySourceId && <span className="pill bg-blue-100 text-blue-800">via Gildana</span>}
                     {c.isDemo && <span className="pill bg-amber-100 text-amber-800">demo</span>}
                     <span className={`pill ${c.status === "active" ? "bg-green-100 text-good" : "bg-red-100 text-bad"}`}>{c.status}</span>
                     {c.expiresAt && <span className="text-xs text-muted">token expires {c.expiresAt.toISOString().slice(0, 10)}</span>}
