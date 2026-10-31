@@ -102,6 +102,13 @@ Crawls and audits are queued from the site pages and run in the worker. The craw
 
 AI visibility asks each tracked question with web search and from model knowledge, and records whether the brand is named, its rank in the list, whether the site is cited, and which competitors were named. It runs weekly for every tracked question, or on demand.
 
+## Passwords
+
+- **Forgot password** on the sign-in page emails a one-time link (valid 1 hour). It needs `SMTP_URL` in `.env`, e.g. `smtp://you%40gildana.net:PASSWORD@smtp.hostinger.com:587` (URL-encode `@` in the username as `%40`), and `MAIL_FROM`. Without it, the page tells people to ask an admin. `SMTP_URL=log://` prints the emails to the log, for testing.
+- **My account** (click your email in the sidebar): change your password, name and language.
+- **Admin → Clients → client**: set a user's password, or *Email reset link*.
+- **Locked out from the server:** `npm run user:password -- admin@gildana.net 'NewPassword'` (add `--admin` to create an admin), then `pm2 restart insights-web` to clear the sign-in lock.
+
 ## Sync
 
 `npm run worker` claims jobs from the `SyncRun` table (`FOR UPDATE SKIP LOCKED`, so several workers can run). New accounts backfill `BACKFILL_DAYS` (default 90) newest-first in 31-day chunks; every account then re-syncs the last 28 days every 3 hours, which picks up the platforms' attribution restatements. Failures retry with backoff up to 5 times and show on `/admin/health`.

@@ -43,7 +43,7 @@ export async function Shell({ children }: { children: React.ReactNode }) {
           </nav>
         )}
         <div className="mt-auto space-y-2 px-3 text-xs text-side-ink">
-          <div className="truncate">{v?.email}</div>
+          <Link href="/account" className="block truncate hover:text-white" title="My account">{v?.email}</Link>
           <div className="flex gap-3">
             <form action={setLangAction}>
               <input type="hidden" name="lang" value={lang === "ar" ? "en" : "ar"} />

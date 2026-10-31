@@ -1,18 +1,16 @@
+import Link from "next/link";
+import { AuthCard } from "@/components/auth-card";
 import { LoginForm } from "./form";
 
 export const metadata = { title: "Sign in" };
 
-export default function LoginPage() {
+export default async function LoginPage({ searchParams }: { searchParams: Promise<{ reset?: string }> }) {
+  const { reset } = await searchParams;
   return (
-    <main className="flex min-h-screen items-center justify-center bg-side px-4">
-      <div className="w-full max-w-sm rounded-2xl bg-panel p-8 shadow-xl">
-        <div className="mb-6">
-          <div className="text-xs font-semibold uppercase tracking-[0.2em] text-accent">Gildana</div>
-          <h1 className="text-2xl font-semibold">Insights</h1>
-          <p className="mt-1 text-sm text-muted">Ads, analytics, SEO and GEO for every client.</p>
-        </div>
-        <LoginForm />
-      </div>
-    </main>
+    <AuthCard title="Insights" sub="Ads, analytics, SEO and GEO for every client.">
+      {reset && <p className="mb-4 rounded-lg bg-green-50 p-3 text-sm text-good">Password changed — sign in with your new password.</p>}
+      <LoginForm />
+      <p className="mt-4 text-center text-sm"><Link href="/forgot-password" className="text-accent hover:underline">Forgot password?</Link></p>
+    </AuthCard>
   );
 }

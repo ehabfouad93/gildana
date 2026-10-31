@@ -1,7 +1,9 @@
 import { notFound } from "next/navigation";
 import { createUserAction, deleteClientAction, openWorkspaceAction, resetPasswordAction, toggleUserAction, updateClientAction } from "@/app/actions/admin";
 import { PageHeader } from "@/components/shell";
+import { sendResetLinkAction } from "@/app/actions/password";
 import { db } from "@/lib/db";
+import { mailEnabled } from "@/lib/mail";
 import { PLATFORM_META } from "@/lib/platforms";
 import { requireAdmin } from "@/lib/tenancy";
 
@@ -65,6 +67,7 @@ export default async function ClientAdmin({ params }: { params: Promise<{ id: st
                       <input className="input !w-36 !py-1" name="password" type="password" placeholder="New password" minLength={8} />
                       <button className="btn-ghost !py-1">Reset</button>
                     </form>
+                    {mailEnabled() && <form action={sendResetLinkAction}><input type="hidden" name="userId" value={u.id} /><button className="btn-ghost !py-1" title="Email this user a one-time link to choose a new password">Email reset link</button></form>}
                     <form action={toggleUserAction}><input type="hidden" name="userId" value={u.id} /><button className="btn-ghost !py-1">{u.active ? "Disable" : "Enable"}</button></form>
                   </td>
                 </tr>

@@ -65,6 +65,7 @@ model User {
   createdAt    DateTime  @default(now())
 
   connections AdConnection[]
+  resets      PasswordReset[]
 
   @@index([clientId])
 }
@@ -724,4 +725,18 @@ model InterestTest {
 
   @@index([clientId])
   @@index([campaignId])
+}
+
+/// One-time password reset link. Only a hash of the token is stored.
+model PasswordReset {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  ip        String    @default("")
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
 }
