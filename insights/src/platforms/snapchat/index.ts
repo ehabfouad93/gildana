@@ -133,6 +133,16 @@ export const snapchat: Connector = {
         }
       }
     }
+    // Per ad squad: results by interest segment, where Snapchat reports it for the account.
+    const squads = [...new Set(stats.filter((s) => s.level === "ADSET" && (s.impressions ?? 0) > 0).map((s) => s.externalId))];
+    for (const sq of squads) {
+      let rows: any[] = [];
+      try { rows = await series(`${API}/adsquads/${sq}/stats?granularity=DAY&report_dimension=interest&fields=${FIELDS}&${tzRange}`); } catch { break; } // unsupported: stop trying
+      for (const s of rows) for (const p of s.timeseries ?? []) for (const d of p.dimension_stats ?? []) {
+        const bucket = String(d.interest ?? d.interest_category ?? d.dimension ?? "");
+        if (bucket) breakdowns.push({ level: "ADSET", externalId: sq, date: p.start_time.slice(0, 10), dimension: "seg_interest", bucket, ...snapMetrics(d) });
+      }
+    }
     return { stats, breakdowns };
   },
 };

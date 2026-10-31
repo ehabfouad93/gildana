@@ -1,6 +1,7 @@
 import type { Platform } from "@prisma/client";
 import { eachDay } from "@/lib/dates";
 import { FALLBACK } from "@/lib/fx-rates";
+import { SEGMENT_TYPES } from "@/lib/segments";
 import type {
   Connector, Metrics, RemoteAd, RemoteAdSet, RemoteBreakdown, RemoteCampaign, RemoteKeyword, RemoteLead,
   RemotePlacement, RemoteSearchTerm, RemoteStat, RemoteTargetingItem, StatsBundle, SyncContext,
@@ -81,15 +82,17 @@ const FLAVOURS: Record<Platform, Flavour> = {
     adSetNames: ["Interests – Investors", "Lookalike 1% – Buyers", "Broad 25-45", "Retargeting – Site visitors", "Interests – Lifestyle"],
     targeting: (r) => {
       const items: RemoteTargetingItem[] = [];
-      const n = 2 + Math.floor(r() * 3);
+      // About a third of ad sets target one interest only — the way to measure an interest on Meta.
+      const single = r() < 0.35;
+      const n = single ? 1 : 2 + Math.floor(r() * 3);
       const seen = new Set<string>();
       for (let i = 0; i < n; i++) {
         const v = pick(r, INTERESTS);
         if (!seen.has(v)) { seen.add(v); items.push({ type: "interest", value: v, externalId: String(6000000000000 + hash(v) % 1e9) }); }
       }
-      if (r() > 0.5) items.push({ type: "behavior", value: pick(r, BEHAVIOURS) });
-      if (r() > 0.6) items.push({ type: "audience", value: "Website visitors 30d" });
-      if (r() > 0.7) items.push({ type: "lookalike", value: "Lookalike (EG, 1%) – Leads" });
+      if (!single && r() > 0.5) items.push({ type: "behavior", value: pick(r, BEHAVIOURS) });
+      if (!single && r() > 0.6) items.push({ type: "audience", value: "Website visitors 30d" });
+      if (!single && r() > 0.7) items.push({ type: "lookalike", value: "Lookalike (EG, 1%) – Leads" });
       if (r() > 0.8) items.push({ type: "audience", value: "Existing customers", exclude: true });
       const minAge = pick(r, [18, 21, 25]);
       items.push({ type: "age", value: `${minAge}-${pick(r, [45, 55, 65])}` });
@@ -104,6 +107,8 @@ const FLAVOURS: Record<Platform, Flavour> = {
       country: COUNTRIES,
       region: REGIONS,
       device: ["mobile_app", "mobile_web", "desktop"],
+      customer_segment: ["New audience", "Engaged audience", "Existing customers"],
+      frequency: ["1", "2", "3", "4-5", "6-10", "11+"],
       placement: ["facebook_feed", "instagram_feed", "instagram_stories", "instagram_reels", "facebook_reels", "audience_network", "messenger_inbox"],
       hour: Array.from({ length: 24 }, (_, h) => String(h).padStart(2, "0")),
     },
@@ -230,8 +235,20 @@ const CTAS = ["LEARN_MORE", "SIGN_UP", "GET_QUOTE", "CONTACT_US", "SHOP_NOW", "B
 // ───────── structure ─────────
 
 type Built = { campaigns: RemoteCampaign[]; adSets: RemoteAdSet[]; ads: RemoteAd[] };
+type SplitTests = NonNullable<SyncContext["splitTests"]>;
 
-export function buildStructure(platform: Platform, accountExternalId: string): Built {
+
+/** Hidden "true" strength of a segment in demo data, so reported, measured and estimated results agree with each other. */
+export function segmentQuality(value: string): number {
+  return 0.45 + (hash(`quality:${value}`) % 1000) / 1000 * 1.35;
+}
+
+function setQuality(s: RemoteAdSet): number {
+  const seg = s.targeting.filter((t) => SEGMENT_TYPES.has(t.type) && !t.exclude);
+  return seg.length ? seg.reduce((a, t) => a + segmentQuality(t.value), 0) / seg.length : 1;
+}
+
+export function buildStructure(platform: Platform, accountExternalId: string, splitTests: SplitTests = []): Built {
   const f = FLAVOURS[platform];
   const r = rng(`${platform}:${accountExternalId}:structure`);
   const campaigns: RemoteCampaign[] = [];
@@ -273,6 +290,20 @@ export function buildStructure(platform: Platform, accountExternalId: string): B
       }
     }
   }
+
+  // Split tests made from the dashboard: one active ad set per interest, same ads; the source is paused.
+  for (const t of splitTests) {
+    const src = adSets.find((x) => x.externalId === t.sourceAdSet);
+    if (!src) continue;
+    src.status = "PAUSED";
+    const srcAds = ads.filter((a) => a.adSetExternalId === src.externalId);
+    srcAds.forEach((a) => (a.status = "PAUSED"));
+    for (const arm of t.arms) {
+      const targeting = [...src.targeting.filter((x) => !SEGMENT_TYPES.has(x.type)), arm.interest];
+      adSets.push({ ...src, externalId: arm.externalId, name: `${src.name} – ${arm.interest.value}`, status: "ACTIVE", targeting, targetingRaw: { demo: true, items: targeting, splitOf: src.externalId } });
+      srcAds.forEach((a, k) => ads.push({ ...a, externalId: `${arm.externalId}-a${k + 1}`, adSetExternalId: arm.externalId, status: "ACTIVE" }));
+    }
+  }
   return { campaigns, adSets, ads };
 }
 
@@ -280,13 +311,13 @@ export function buildStructure(platform: Platform, accountExternalId: string): B
 
 type AdDay = Required<Pick<Metrics, "spend" | "impressions" | "reach" | "clicks" | "linkClicks" | "conversions" | "leads" | "purchases" | "value" | "videoViews" | "engagements">>;
 
-function adDay(platform: Platform, ad: RemoteAd, day: string, currency = "USD"): AdDay {
+function adDay(platform: Platform, ad: RemoteAd, day: string, currency = "USD", quality = 1): AdDay {
   const f = FLAVOURS[platform];
   const base = rng(`${ad.externalId}:base`);
   const budget = between(base, 4, 40);
   const cpm = between(base, f.cpm[0], f.cpm[1]);
   const ctr = between(base, f.ctr[0], f.ctr[1]) / 100;
-  const cvr = between(base, f.cvr[0], f.cvr[1]) / 100;
+  const cvr = (between(base, f.cvr[0], f.cvr[1]) / 100) * quality;
   const aov = between(base, 40, 400);
 
   const r = rng(`${ad.externalId}:${day}`);
@@ -341,8 +372,17 @@ function splitMetrics(m: AdDay, w: number[]): AdDay[] {
   return parts;
 }
 
-export function buildStats(platform: Platform, accountExternalId: string, from: string, to: string, currency = "USD"): StatsBundle {
-  const { campaigns, adSets, ads } = buildStructure(platform, accountExternalId);
+/** Which ad-set targeting types each platform reports results for, and under which dimension. */
+const REPORTED_SEGMENTS: Partial<Record<Platform, Record<string, string>>> = {
+  GOOGLE: { audience: "seg_audience", interest: "seg_interest" },
+  TIKTOK: { interest: "seg_interest" },
+  SNAPCHAT: { interest: "seg_interest" },
+  LINKEDIN: { job_title: "seg_job_title", seniority: "seg_seniority", industry: "seg_industry", company_size: "seg_company_size" },
+};
+
+export function buildStats(platform: Platform, accountExternalId: string, from: string, to: string, currency = "USD", splitTests: SplitTests = []): StatsBundle {
+  const { campaigns, adSets, ads } = buildStructure(platform, accountExternalId, splitTests);
+  const quality = new Map(adSets.map((x) => [x.externalId, setQuality(x)]));
   const f = FLAVOURS[platform];
   const stats: RemoteStat[] = [];
   const breakdowns: RemoteBreakdown[] = [];
@@ -355,7 +395,7 @@ export function buildStats(platform: Platform, accountExternalId: string, from: 
     const byCamp = new Map<string, AdDay>();
     const bySet = new Map<string, AdDay>();
     for (const ad of ads) {
-      const m = adDay(platform, ad, day, currency);
+      const m = adDay(platform, ad, day, currency, quality.get(ad.adSetExternalId) ?? 1);
       stats.push({ level: "AD", externalId: ad.externalId, date: day, ...m });
       sum(acc, m);
       if (!byCamp.has(ad.campaignExternalId)) byCamp.set(ad.campaignExternalId, zero());
@@ -366,9 +406,32 @@ export function buildStats(platform: Platform, accountExternalId: string, from: 
     stats.push({ level: "ACCOUNT", externalId: accountExternalId, date: day, ...acc });
     for (const [id, m] of bySet) stats.push({ level: "ADSET", externalId: id, date: day, ...m });
 
+    // Platforms that report per segment: split each ad set's day across its targeted segments,
+    // delivery evenly-ish, results by each segment's strength.
+    const reported = REPORTED_SEGMENTS[platform];
+    if (reported) {
+      for (const set of adSets) {
+        const m = bySet.get(set.externalId);
+        if (!m || !m.impressions) continue;
+        for (const [type, dimension] of Object.entries(reported)) {
+          const segs = set.targeting.filter((t) => t.type === type && !t.exclude);
+          if (!segs.length) continue;
+          const parts = splitMetrics(m, weights(dimension, segs.map((x) => x.value), set.externalId, day));
+          const q = segs.map((x, i) => segmentQuality(x.value) * (parts[i].clicks + 1));
+          const conv = splitInt(m.conversions, q), leads = splitInt(m.leads, q);
+          segs.forEach((x, i) => breakdowns.push({ level: "ADSET", externalId: set.externalId, date: day, dimension, bucket: x.value, ...parts[i], conversions: conv[i], leads: leads[i] }));
+        }
+      }
+    }
+
     for (const [cid, m] of byCamp) {
       stats.push({ level: "CAMPAIGN", externalId: cid, date: day, ...m });
-      const dims = { ...f.dims };
+      const dims: Record<string, string[]> = { ...f.dims };
+      if (platform === "META") {
+        const campAds = ads.filter((a) => a.campaignExternalId === cid);
+        dims.asset_title = [...new Set(campAds.map((a) => a.headline ?? ""))].filter(Boolean);
+        dims.asset_body = [...new Set(campAds.map((a) => a.body ?? ""))].filter(Boolean);
+      }
       if (dims.age && dims.gender) {
         // age × gender as one combined dimension for the heat grid
         dims.age_gender = dims.age.flatMap((a) => dims.gender.filter((g) => g !== "unknown" && g !== "undetermined").map((g) => `${a}|${g}`));
@@ -420,15 +483,16 @@ export function buildStats(platform: Platform, accountExternalId: string, from: 
   return { stats, breakdowns, keywords, searchTerms, placements };
 }
 
-export function buildLeads(platform: Platform, accountExternalId: string, from: string, to: string): RemoteLead[] {
+export function buildLeads(platform: Platform, accountExternalId: string, from: string, to: string, currency = "USD", splitTests: SplitTests = []): RemoteLead[] {
   if (!FLAVOURS[platform].leadGen) return [];
-  const { ads } = buildStructure(platform, accountExternalId);
+  const { ads, adSets } = buildStructure(platform, accountExternalId, splitTests);
+  const quality = new Map(adSets.map((x) => [x.externalId, setQuality(x)]));
   const out: RemoteLead[] = [];
   const first = ["Ahmed", "Mona", "Omar", "Sara", "Youssef", "Nour", "Karim", "Laila", "Mostafa", "Hana"];
   const last = ["Hassan", "Ali", "Mahmoud", "Ibrahim", "Fathy", "Saeed", "Adel", "Kamal"];
   for (const day of eachDay({ from, to })) {
     for (const ad of ads) {
-      const n = Math.min(adDay(platform, ad, day).leads, 6); // a sample, not every lead
+      const n = Math.min(adDay(platform, ad, day, currency, quality.get(ad.adSetExternalId) ?? 1).leads, 6); // a sample, not every lead
       for (let i = 0; i < n; i++) {
         const r = rng(`${ad.externalId}:${day}:lead${i}`);
         const fn = pick(r, first), ln = pick(r, last);
@@ -466,8 +530,8 @@ export function demoConnector(platform: Platform): Connector {
     authUrl: (state) => `/api/oauth/${platform.toLowerCase()}/callback?demo=1&state=${encodeURIComponent(state)}&code=demo`,
     exchange: async (code) => ({ accessToken: `demo-token-${platform}`, externalUser: `demo-${code}`, label: `${platform} demo login` }),
     listAccounts: async (token) => demoAccounts(platform, token),
-    fetchStructure: async (ctx: SyncContext) => buildStructure(platform, ctx.account.externalId),
-    fetchStats: async (ctx, from, to) => buildStats(platform, ctx.account.externalId, from, to, ctx.account.currency),
-    fetchLeads: async (ctx, from, to) => buildLeads(platform, ctx.account.externalId, from, to),
+    fetchStructure: async (ctx: SyncContext) => buildStructure(platform, ctx.account.externalId, ctx.splitTests),
+    fetchStats: async (ctx, from, to) => buildStats(platform, ctx.account.externalId, from, to, ctx.account.currency, ctx.splitTests),
+    fetchLeads: async (ctx, from, to) => buildLeads(platform, ctx.account.externalId, from, to, ctx.account.currency, ctx.splitTests),
   };
 }

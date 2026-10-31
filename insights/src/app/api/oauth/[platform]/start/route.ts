@@ -13,13 +13,14 @@ export async function GET(req: Request, { params }: { params: Promise<{ platform
   if (!platform || !v?.clientId || !canEdit(v)) return NextResponse.redirect(new URL("/connections", req.url));
 
   const demo = new URL(req.url).searchParams.get("demo") === "1";
+  const write = new URL(req.url).searchParams.get("write") === "1"; // Meta: also ask for ads_management (interest split tests)
   const live = liveConnector(platform);
   if (!live && !(demo || demoEnabled())) return NextResponse.redirect(new URL(`/connections?error=${slug}-not-configured`, req.url));
 
   const nonce = randomToken(16);
   const state = signState({ clientId: v.clientId, platform, nonce });
   const target = live && !demo
-    ? live.authUrl(state, redirectUri(slug))
+    ? live.authUrl(state, redirectUri(slug), { write })
     : new URL(`/api/oauth/${slug}/callback?demo=1&code=demo-${nonce.slice(0, 8)}&state=${encodeURIComponent(state)}`, req.url).toString();
 
   const res = NextResponse.redirect(target);

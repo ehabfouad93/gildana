@@ -189,6 +189,24 @@ export const google: Connector = {
       campaignExternalId: String(r.campaign.id), kind: String(r.detailPlacementView.placementType ?? "").toLowerCase(),
       target: r.detailPlacementView.targetUrl ?? "", display: r.detailPlacementView.displayName ?? "", date: r.segments.date, ...gMetrics(r.metrics),
     }));
-    return { stats, breakdowns: [...acc2.values()], keywords, searchTerms, placements };
+    // Per ad group: how each targeted audience segment and topic performed — reported by Google, not estimated.
+    const optional = async (query: string) => { try { return await gaql(q, query); } catch { return []; } };
+    const [audiences, topics] = await Promise.all([
+      optional(`SELECT ad_group.id, ad_group_criterion.type, ad_group_criterion.display_name, segments.date, ${M} FROM ad_group_audience_view WHERE ${w}`),
+      optional(`SELECT ad_group.id, ad_group_criterion.display_name, segments.date, ${M} FROM topic_view WHERE ${w}`),
+    ]);
+    const segs = new Map<string, RemoteBreakdown>();
+    const pushSeg = (dimension: string, r: any) => {
+      const b: RemoteBreakdown = { level: "ADSET", externalId: String(r.adGroup.id), date: r.segments.date, dimension, bucket: r.adGroupCriterion.displayName ?? "", ...gMetrics(r.metrics) };
+      if (!b.bucket) return;
+      const k = `${b.externalId}|${b.date}|${dimension}|${b.bucket}`;
+      const prev = segs.get(k);
+      if (!prev) { segs.set(k, b); return; }
+      for (const f of ["spend", "impressions", "clicks", "linkClicks", "conversions", "leads", "value", "videoViews", "engagements"] as const) prev[f] = (prev[f] ?? 0) + (b[f] ?? 0);
+    };
+    for (const r of audiences) pushSeg(r.adGroupCriterion.type === "USER_INTEREST" ? "seg_interest" : "seg_audience", r);
+    for (const r of topics) pushSeg("seg_topic", r);
+
+    return { stats, breakdowns: [...acc2.values(), ...segs.values()], keywords, searchTerms, placements };
   },
 };

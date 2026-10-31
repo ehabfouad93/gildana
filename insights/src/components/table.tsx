@@ -8,6 +8,11 @@ import type { Col, Fmt, Row } from "./table-types";
 export type { Col, Fmt, Row };
 
 
+const BADGE: Record<string, string> = {
+  Reported: "bg-green-100 text-good", Tested: "bg-blue-100 text-blue-800", Measured: "bg-emerald-100 text-emerald-800",
+  Estimated: "bg-amber-100 text-amber-800", "Ad-set ranking": "bg-slate-100 text-slate-600", Setting: "bg-slate-100 text-slate-600",
+};
+
 function f(v: Row[string], fmt: Fmt = "text", currency: string): string {
   if (v == null || v === "") return "—";
   if (typeof v === "string") return v;
@@ -77,7 +82,7 @@ export function DataTable({ cols, rows, currency = "USD", initialSort, search = 
           <thead>
             <tr>
               {cols.map((c) => (
-                <th key={c.key} className={c.fmt && c.fmt !== "text" ? "num" : ""}>
+                <th key={c.key} className={c.fmt && c.fmt !== "text" && c.fmt !== "badge" ? "num" : ""}>
                   <button type="button" className="uppercase" onClick={() => setSort((s) => ({ k: c.key, dir: s.k === c.key ? (s.dir === 1 ? -1 : 1) : -1 }))}>
                     {c.label}{sort.k === c.key ? (sort.dir === 1 ? " ↑" : " ↓") : ""}
                   </button>
@@ -89,11 +94,12 @@ export function DataTable({ cols, rows, currency = "USD", initialSort, search = 
             {shown.map((r, i) => (
               <tr key={i}>
                 {cols.map((c) => {
-                  const val = f(r[c.key], c.fmt, currency);
+                  const val = f(r[c.key], c.fmt === "badge" ? "text" : c.fmt, currency);
                   const href = c.href ? (r[c.href] as string | undefined) : undefined;
                   return (
-                    <td key={c.key} className={`${c.fmt && c.fmt !== "text" ? "num" : ""} ${c.wrap ? "!whitespace-normal min-w-56" : ""}`}>
-                      {href ? <Link href={href} className="font-medium text-accent hover:underline">{val}</Link> : val}
+                    <td key={c.key} className={`${c.fmt && c.fmt !== "text" && c.fmt !== "badge" ? "num" : ""} ${c.wrap ? "!whitespace-normal min-w-56" : ""}`}>
+                      {c.fmt === "badge" ? <span className={`pill ${BADGE[val] ?? "bg-bg text-muted"}`}>{val}</span>
+                        : href ? <Link href={href} className="font-medium text-accent hover:underline">{val}</Link> : val}
                       {c.sub && r[c.sub] ? <div className="text-xs text-muted">{String(r[c.sub])}</div> : null}
                     </td>
                   );

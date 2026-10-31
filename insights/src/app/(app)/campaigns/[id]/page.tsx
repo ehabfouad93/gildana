@@ -7,12 +7,14 @@ import { Filters } from "@/components/filters";
 import { KpiGrid, fmtMetric } from "@/components/kpi";
 import { PageHeader } from "@/components/shell";
 import { DataTable } from "@/components/table";
-import { METRIC_COLS } from "@/components/table-types";
+import { METRIC_COLS, SOURCE_LABEL } from "@/components/table-types";
 import { db } from "@/lib/db";
 import { money } from "@/lib/format";
 import { pageContext, qs, type SP } from "@/lib/page";
 import { PLATFORM_META } from "@/lib/platforms";
-import { adSetTable, adTable, breakdown, daily, keywordTable, placementTable, searchTermTable, targetingPerformance, totals } from "@/lib/queries";
+import { adSetTable, adTable, audienceInsights, breakdown, daily, keywordTable, leadSegmentShares, placementTable, searchTermTable, totals } from "@/lib/queries";
+import { canEdit } from "@/lib/tenancy";
+import { SplitTestButton } from "@/components/split-test-button";
 import { mrow } from "@/lib/rows";
 import { toDate } from "@/lib/dates";
 import { DIM_LABEL } from "@/lib/labels";
@@ -136,9 +138,9 @@ export default async function CampaignPage({ params, searchParams }: { params: P
   }
 
   async function BreakdownsTab() {
-    const dims = (await db.statBreakdown.findMany({ where: { campaignId: id }, distinct: ["dimension"], select: { dimension: true } })).map((d) => d.dimension);
+    const dims = (await db.statBreakdown.findMany({ where: { campaignId: id, level: "CAMPAIGN" }, distinct: ["dimension"], select: { dimension: true } })).map((d) => d.dimension);
     const data = await Promise.all(dims.map(async (d) => ({ d, rows: await breakdown(scope, range, d, { campaignId: id }) })));
-    const order = ["age", "gender", "age_gender", "country", "region", "device", "placement", "network", "hour"];
+    const order = ["age", "gender", "age_gender", "customer_segment", "country", "region", "device", "placement", "network", "hour", "frequency", "asset_title", "asset_body", "asset_image", "asset_video", "asset_cta"];
     data.sort((a, b) => (order.indexOf(a.d) + 99) % 99 - (order.indexOf(b.d) + 99) % 99);
     return (
       <div className="grid gap-4 lg:grid-cols-2">
@@ -174,42 +176,91 @@ export default async function CampaignPage({ params, searchParams }: { params: P
   }
 
   async function TargetingTab() {
-    const [perf, sets] = await Promise.all([targetingPerformance(scope, range, { campaignId: id }), adSetTable(scope, range, id)]);
+    const [rows, sets, tests] = await Promise.all([
+      audienceInsights(scope, range, { campaignId: id }), adSetTable(scope, range, id),
+      db.interestTest.findMany({ where: { campaignId: id }, orderBy: { createdAt: "desc" } }),
+    ]);
     const ORDER = ["interest", "behavior", "audience", "lookalike", "keyword", "job_title", "seniority", "industry", "company_size", "demographic", "age", "gender", "geo", "language", "placement", "device"];
-    const types = [...new Set(perf.map((p) => p.type))].sort((a, b) => (ORDER.indexOf(a) + 99) % 99 - (ORDER.indexOf(b) + 99) % 99);
+    const segRows = rows.filter((r) => r.source !== "setting");
+    const types = [...new Set(segRows.map((p) => p.type))].sort((a, b) => (ORDER.indexOf(a) + 99) % 99 - (ORDER.indexOf(b) + 99) % 99);
+    const settings = rows.filter((r) => r.source === "setting");
+    const unit = meta.adSetLabel.toLowerCase().replace(/s$/, "");
+    const testedSource = new Set(tests.filter((t) => t.status !== "failed").map((t) => t.sourceAdSetId));
     return (
       <div className="space-y-4">
-        <div className="card border-amber-200 bg-amber-50 text-sm text-amber-900">
-          Platforms report results per {meta.adSetLabel.toLowerCase().replace(/s$/, "")}, not per interest. Each option below is credited with the full results of every {meta.adSetLabel.toLowerCase().replace(/s$/, "")} that uses it, so use it to <b>rank</b> options. For a true per-interest cost, run one interest per {meta.adSetLabel.toLowerCase().replace(/s$/, "")}.
+        <div className="card text-sm">
+          <b>Where each number comes from</b>
+          {campaign!.platform === "META" && <p className="mt-1 text-muted">Meta does not report results per interest, so interests are measured from single-interest ad sets, tested with a split, or estimated.</p>}
+          <ul className="mt-1 grid gap-x-6 gap-y-1 text-muted md:grid-cols-2">
+            {campaign!.platform !== "META" && <li><span className="pill bg-green-100 text-good">Reported</span> {meta.label} reports this segment&apos;s results itself.</li>}
+            <li><span className="pill bg-blue-100 text-blue-800">Tested</span> from an interest split test created here.</li>
+            <li><span className="pill bg-emerald-100 text-emerald-800">Measured</span> the {unit} targets this one segment only.</li>
+            <li><span className="pill bg-amber-100 text-amber-800">Estimated</span> several interests in one {unit}; split by a model fitted across all your {meta.adSetLabel.toLowerCase()}.</li>
+            <li className="md:col-span-2"><span className="pill bg-slate-100 text-slate-600">Ad-set ranking</span> not enough variation to separate it — the whole {unit}&apos;s results, for ranking only.{campaign!.platform === "META" ? " Use “Split test” below to measure it." : ""}</li>
+          </ul>
         </div>
         {types.map((ty) => (
           <div key={ty} className="card">
             <h3 className="mb-2 text-sm font-semibold capitalize">{ty.replace(/_/g, " ")}</h3>
             <DataTable search={false} currency={scope.currency} initialSort="spend"
-              cols={[{ key: "option", label: "Option", wrap: true }, { key: "adSets", label: meta.adSetLabel, fmt: "num" }, { key: "spend", label: "Spend", fmt: "money" }, { key: "ctr", label: "CTR", fmt: "pct" }, { key: "cpc", label: "CPC", fmt: "money2" }, { key: "leads", label: "Leads", fmt: "num" }, { key: "cpl", label: "CPL", fmt: "money2" }, { key: "leadsCollected", label: "Lead forms", fmt: "num" }, { key: "roas", label: "ROAS", fmt: "ratio" }]}
-              rows={perf.filter((p) => p.type === ty).map((p) => ({ ...mrow(p.m), option: p.value, adSets: p.adSets, leadsCollected: p.leadsCollected }))} />
+              cols={[{ key: "option", label: "Option", wrap: true, sub: "note" }, { key: "source", label: "Source", fmt: "badge" }, { key: "adSets", label: meta.adSetLabel, fmt: "num" }, { key: "spend", label: "Spend", fmt: "money" }, { key: "ctr", label: "CTR", fmt: "pct" }, { key: "cpc", label: "CPC", fmt: "money2" }, { key: "leads", label: "Leads", fmt: "dec" }, { key: "cpl", label: "CPL", fmt: "money2" }, { key: "conversions", label: "Conv.", fmt: "dec" }, { key: "cpa", label: "CPA", fmt: "money2" }]}
+              rows={segRows.filter((p) => p.type === ty).map((p) => ({ ...mrow(p.m), option: p.value, source: SOURCE_LABEL[p.source], note: p.source === "estimated" || p.source === "adset" ? p.note : "", adSets: p.adSets }))} />
           </div>
         ))}
+        {settings.length > 0 && (
+          <div className="card">
+            <h3 className="mb-2 text-sm font-semibold">Delivery settings</h3>
+            <p className="mb-2 text-xs text-muted">Age, gender, location and placement choices, with the results of the {meta.adSetLabel.toLowerCase()} using them. Their actual split is on the Breakdowns tab.</p>
+            <DataTable search={false} currency={scope.currency} initialSort="spend"
+              cols={[{ key: "type", label: "Setting" }, { key: "option", label: "Value", wrap: true }, { key: "adSets", label: meta.adSetLabel, fmt: "num" }, { key: "spend", label: "Spend", fmt: "money" }, { key: "leads", label: "Leads", fmt: "num" }, { key: "cpl", label: "CPL", fmt: "money2" }]}
+              rows={settings.map((p) => ({ ...mrow(p.m), type: p.type.replace(/_/g, " "), option: p.value, adSets: p.adSets }))} />
+          </div>
+        )}
+        {tests.length > 0 && (
+          <div className="card">
+            <h3 className="mb-2 text-sm font-semibold">Interest split tests</h3>
+            <table className="tbl"><tbody>
+              {tests.map((t) => (
+                <tr key={t.id}>
+                  <td>{sets.find((x) => x.id === t.sourceAdSetId)?.name ?? "—"}</td>
+                  <td className="!whitespace-normal">{(t.arms as { interest: { value: string } }[]).map((a) => a.interest.value).join(" · ") || "—"}</td>
+                  <td><span className={`pill ${t.status === "failed" ? "bg-red-100 text-bad" : "bg-blue-100 text-blue-800"}`}>{t.status === "created" ? "created — paused" : t.status}</span></td>
+                  <td className="text-xs text-muted">{t.createdAt.toISOString().slice(0, 10)}{t.error ? ` · ${t.error}` : ""}</td>
+                </tr>
+              ))}
+            </tbody></table>
+          </div>
+        )}
         <div className="card">
-          <h3 className="mb-3 text-sm font-semibold">Full targeting per {meta.adSetLabel.toLowerCase().replace(/s$/, "")}</h3>
+          <h3 className="mb-3 text-sm font-semibold">Full targeting per {unit}</h3>
           <div className="space-y-4">
-            {sets.map((s) => (
-              <div key={s.id} className="rounded-lg border border-line p-3">
-                <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <div className="font-medium">{s.name}</div>
-                  <div className="text-xs text-muted tabular-nums">
-                    {fmtMetric("spend", s.m.spend, scope.currency)} · {fmtMetric("leads", s.m.leads, scope.currency)} leads · CPL {fmtMetric("cpl", s.m.cpl, scope.currency)} · CTR {fmtMetric("ctr", s.m.ctr, scope.currency)}
+            {sets.map((s) => {
+              const splittable = campaign!.platform === "META" && canEdit(c.viewer) && !testedSource.has(s.id) && s.targeting.filter((x) => !x.exclude && (x.type === "interest" || x.type === "behavior")).length >= 2;
+              return (
+                <div key={s.id} className="rounded-lg border border-line p-3">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <div className="font-medium">{s.name}</div>
+                    <div className="text-xs text-muted tabular-nums">
+                      {fmtMetric("spend", s.m.spend, scope.currency)} · {fmtMetric("leads", s.m.leads, scope.currency)} leads · CPL {fmtMetric("cpl", s.m.cpl, scope.currency)} · CTR {fmtMetric("ctr", s.m.ctr, scope.currency)}
+                    </div>
                   </div>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {s.targeting.map((x) => (
+                      <span key={x.id} className={`pill ${x.exclude ? "bg-red-50 text-bad line-through" : "bg-bg text-ink"}`}>
+                        <span className="me-1 text-muted">{x.type.replace(/_/g, " ")}:</span>{x.value}
+                      </span>
+                    ))}
+                  </div>
+                  {splittable && (
+                    <div className="mt-2">
+                      <SplitTestButton adSetId={s.id} currency={campaign!.account.currency}
+                        dailyBudget={s.dailyBudget ? Number(s.dailyBudget) : null}
+                        interests={s.targeting.filter((x) => !x.exclude && (x.type === "interest" || x.type === "behavior")).map((x) => ({ id: x.id, value: x.value }))} />
+                    </div>
+                  )}
                 </div>
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {s.targeting.map((x) => (
-                    <span key={x.id} className={`pill ${x.exclude ? "bg-red-50 text-bad line-through" : "bg-bg text-ink"}`}>
-                      <span className="me-1 text-muted">{x.type.replace(/_/g, " ")}:</span>{x.value}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </div>
@@ -221,31 +272,42 @@ export default async function CampaignPage({ params, searchParams }: { params: P
       where: { campaignId: id, createdAt: { gte: toDate(range.from), lt: new Date(toDate(range.to).getTime() + 86_400_000) } },
       orderBy: { createdAt: "desc" }, take: 2000,
     });
-    const sets = await db.adSet.findMany({ where: { campaignId: id }, include: { targeting: { where: { exclude: false, type: { in: ["interest", "behavior", "audience", "lookalike", "job_title", "keyword"] } } } } });
+    const sets = await db.adSet.findMany({ where: { campaignId: id }, select: { id: true, name: true } });
     const ads = await db.ad.findMany({ where: { campaignId: id }, select: { id: true, name: true } });
-    const setMap = new Map(sets.map((s) => [s.id, s]));
+    const shares = await leadSegmentShares(scope, range, sets.map((x) => x.id));
+    const setName = new Map(sets.map((s) => [s.id, s.name]));
     const adName = new Map(ads.map((a) => [a.id, a.name]));
     const fieldKeys = [...new Set(leads.flatMap((l) => Object.keys(l.fields as object)))].slice(0, 6);
+    const shareText = (sid: string | null) => (sid ? (shares.get(sid) ?? []).map((x) => `${x.value} ${Math.round(x.share * 100)}%`).join(" · ") : "");
+
+    // Leads per segment: each lead credited to its ad set's segments by share.
+    const perSegment = new Map<string, number>();
+    for (const l of leads) for (const x of l.adSetId ? shares.get(l.adSetId) ?? [] : []) perSegment.set(x.value, (perSegment.get(x.value) ?? 0) + x.share);
     const bySet = new Map<string, number>();
     leads.forEach((l) => l.adSetId && bySet.set(l.adSetId, (bySet.get(l.adSetId) ?? 0) + 1));
     return (
       <div className="space-y-4">
-        <div className="card">
-          <h3 className="mb-2 text-sm font-semibold">Where leads came from</h3>
-          <DataTable search={false} cols={[{ key: "set", label: meta.adSetLabel }, { key: "n", label: "Leads", fmt: "num" }, { key: "targeting", label: "Targeting of that " + meta.adSetLabel.toLowerCase().replace(/s$/, ""), wrap: true }]}
-            initialSort="n" rows={[...bySet.entries()].map(([sid, n]) => ({ set: setMap.get(sid)?.name ?? "—", n, targeting: setMap.get(sid)?.targeting.map((x) => x.value).join(" · ") ?? "" }))} />
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="card">
+            <h3 className="mb-2 text-sm font-semibold">Leads by interest / audience</h3>
+            <p className="mb-2 text-xs text-muted">A lead from a single-segment {meta.adSetLabel.toLowerCase().replace(/s$/, "")} counts fully for that segment; from a mixed one it is shared by each segment&apos;s modelled contribution.</p>
+            <DataTable search={false} initialSort="n" cols={[{ key: "seg", label: "Segment", wrap: true }, { key: "n", label: "Leads", fmt: "dec" }]}
+              rows={[...perSegment.entries()].map(([seg, n]) => ({ seg, n }))} />
+          </div>
+          <div className="card">
+            <h3 className="mb-2 text-sm font-semibold">Leads by {meta.adSetLabel.toLowerCase().replace(/s$/, "")}</h3>
+            <DataTable search={false} cols={[{ key: "set", label: meta.adSetLabel, sub: "targeting", wrap: true }, { key: "n", label: "Leads", fmt: "num" }]}
+              initialSort="n" rows={[...bySet.entries()].map(([sid, n]) => ({ set: setName.get(sid) ?? "—", n, targeting: shareText(sid) }))} />
+          </div>
         </div>
         <div className="card">
           <h3 className="mb-2 text-sm font-semibold">Leads ({leads.length})</h3>
           <DataTable csvName="leads" limit={100}
-            cols={[{ key: "createdAt", label: "Received" }, ...fieldKeys.map((k) => ({ key: k, label: k.replace(/_/g, " ") })), { key: "set", label: meta.adSetLabel }, { key: "ad", label: "Ad" }, { key: "interests", label: "Targeting", wrap: true }]}
-            rows={leads.map((l) => {
-              const s = l.adSetId ? setMap.get(l.adSetId) : undefined;
-              return {
-                createdAt: l.createdAt.toISOString().replace("T", " ").slice(0, 16), ...(l.fields as Record<string, string>),
-                set: s?.name ?? "", ad: l.adId ? adName.get(l.adId) ?? "" : "", interests: s?.targeting.map((x) => x.value).join(" · ") ?? "",
-              };
-            })} />
+            cols={[{ key: "createdAt", label: "Received" }, ...fieldKeys.map((k) => ({ key: k, label: k.replace(/_/g, " ") })), { key: "set", label: meta.adSetLabel }, { key: "ad", label: "Ad" }, { key: "interests", label: "Likely came from", wrap: true }]}
+            rows={leads.map((l) => ({
+              createdAt: l.createdAt.toISOString().replace("T", " ").slice(0, 16), ...(l.fields as Record<string, string>),
+              set: l.adSetId ? setName.get(l.adSetId) ?? "" : "", ad: l.adId ? adName.get(l.adId) ?? "" : "", interests: shareText(l.adSetId),
+            }))} />
         </div>
       </div>
     );

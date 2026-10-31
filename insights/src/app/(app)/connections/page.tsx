@@ -43,6 +43,7 @@ export default async function Connections({ searchParams }: { searchParams: Prom
                 {edit && (
                   <div className="ms-auto flex gap-2">
                     {live && <a className="btn" href={`/api/oauth/${meta.slug}/start`}>Connect {meta.label}</a>}
+                    {live && p === "META" && <a className="btn-ghost" href={`/api/oauth/${meta.slug}/start?write=1`} title="Also grants ads_management so the dashboard can create paused interest split-test ad sets">Connect with split tests</a>}
                     {(!live || demoEnabled()) && <a className={live ? "btn-ghost" : "btn"} href={`/api/oauth/${meta.slug}/start?demo=1`}>{live ? "Add demo login" : `Connect ${meta.label} (demo)`}</a>}
                   </div>
                 )}
@@ -56,6 +57,7 @@ export default async function Connections({ searchParams }: { searchParams: Prom
                     {c.isDemo && <span className="pill bg-amber-100 text-amber-800">demo</span>}
                     <span className={`pill ${c.status === "active" ? "bg-green-100 text-good" : "bg-red-100 text-bad"}`}>{c.status}</span>
                     {c.expiresAt && <span className="text-xs text-muted">token expires {c.expiresAt.toISOString().slice(0, 10)}</span>}
+                    {p === "META" && !c.isDemo && <span className="text-xs text-muted">{c.scopes.split(",").includes("ads_management") ? "split tests allowed" : "read-only"}</span>}
                     {c.lastError && <span className="text-xs text-bad">{c.lastError}</span>}
                     {edit && (
                       <form action={removeConnectionAction} className="ms-auto">

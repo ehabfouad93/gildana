@@ -96,10 +96,11 @@ export const tiktok: Connector = {
       externalId: String(c.campaign_id), name: c.campaign_name, objective: c.objective_type ?? "", status: c.operation_status ?? "",
       dailyBudget: c.budget_mode === "BUDGET_MODE_DAY" ? Number(c.budget) : undefined, totalBudget: c.budget_mode === "BUDGET_MODE_TOTAL" ? Number(c.budget) : undefined,
     }));
+    const names = await interestNames(t, adv);
     const adSets: RemoteAdSet[] = groups.map((g) => ({
       externalId: String(g.adgroup_id), campaignExternalId: String(g.campaign_id), name: g.adgroup_name, status: g.operation_status ?? "",
       optimizationGoal: g.optimization_goal ?? "", bidStrategy: g.bid_type ?? "", dailyBudget: g.budget_mode === "BUDGET_MODE_DAY" ? Number(g.budget) : undefined,
-      targetingRaw: g, targeting: ttTargeting(g),
+      targetingRaw: g, targeting: ttTargeting(g).map((x) => (x.type === "interest" && names.has(x.value) ? { ...x, value: names.get(x.value)! } : x)),
     }));
     const adList: RemoteAd[] = ads.map((a) => ({
       externalId: String(a.ad_id), adSetExternalId: String(a.adgroup_id), campaignExternalId: String(a.campaign_id), name: a.ad_name, status: a.operation_status ?? "",
@@ -140,6 +141,34 @@ export const tiktok: Connector = {
         }
       }
     }
+    // Per ad group: results for each interest category TikTok delivered to — reported, not estimated.
+    const names = await interestNames(t, adv);
+    for (let start = from; start <= to; start = addDays(start, 30)) {
+      const end = addDays(start, 29) < to ? addDays(start, 29) : to;
+      let rows: any[] = [];
+      try {
+        rows = await pages(t, "/report/integrated/get/", {
+          advertiser_id: adv, report_type: "AUDIENCE", data_level: "AUCTION_ADGROUP", dimensions: ["adgroup_id", "stat_time_day", "interest_category"],
+          metrics: ["spend", "impressions", "clicks", "conversion"], start_date: start, end_date: end,
+        });
+      } catch { continue; }
+      for (const r of rows) {
+        const id = String(r.dimensions.interest_category ?? "");
+        if (!id || id === "-") continue;
+        breakdowns.push({ level: "ADSET", externalId: String(r.dimensions.adgroup_id), date: String(r.dimensions.stat_time_day).slice(0, 10), dimension: "seg_interest", bucket: names.get(id) ?? id, ...ttMetrics(r.metrics) });
+      }
+    }
     return { stats, breakdowns };
   },
 };
+
+/** Interest category ids → names, so reported rows line up with ad group targeting. */
+async function interestNames(t: string, adv: string): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  try {
+    const d = await call(t, "/tool/interest_category/", { advertiser_id: adv, version: 2 });
+    const walk = (xs: any[]) => xs?.forEach((x) => { out.set(String(x.interest_category_id), x.interest_category_name); walk(x.children ?? []); });
+    walk(d.interest_categories ?? d.list ?? []);
+  } catch { /* names are cosmetic */ }
+  return out;
+}

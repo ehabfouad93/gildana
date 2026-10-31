@@ -705,3 +705,23 @@ model AiVisibility {
 
   @@index([promptId, checkedAt])
 }
+
+/// A Meta ad set split into one ad set per interest, so each interest's
+/// results are measured directly instead of estimated.
+model InterestTest {
+  id            String   @id @default(cuid())
+  clientId      String
+  accountId     String
+  campaignId    String
+  sourceAdSetId String
+  /// [{ externalId, adSetId?, interest: {type, value, externalId} }]
+  arms          Json
+  dailyBudget   Decimal? @db.Decimal(14, 2)
+  status        String   @default("created") // created | active | ended | failed
+  error         String   @default("")
+  createdById   String?
+  createdAt     DateTime @default(now())
+
+  @@index([clientId])
+  @@index([campaignId])
+}

@@ -176,6 +176,21 @@ export const linkedin: Connector = {
         }
       }
     }
+    // The same pivots per LinkedIn campaign (our ad set level), so each job title, seniority,
+    // industry and company size targeted gets its own reported results.
+    const live = [...new Set(stats.filter((x) => x.level === "ADSET" && (x.impressions ?? 0) > 0).map((x) => x.externalId))];
+    for (const c of live) {
+      for (const [pivot, dimension] of DEMO_PIVOTS) {
+        if (dimension === "country") continue;
+        let r: any;
+        try { r = await fetchJson(`${base.replace(/&accounts=[^&]+/, "")}&campaigns=List(${enc(`urn:li:sponsoredCampaign:${c}`)})&pivot=${pivot}`, { headers: h(t) }); } catch { continue; }
+        for (const e of r.elements ?? []) {
+          const u = String(e.pivotValues?.[0] ?? "");
+          urns.push(u);
+          breakdowns.push({ level: "ADSET", externalId: c, date: day(e), dimension: `seg_${dimension}`, bucket: u, ...liMetrics(e) });
+        }
+      }
+    }
     const names = await resolveNames(t, urns);
     for (const b of breakdowns) b.bucket = names.get(b.bucket) ?? liValue(b.bucket);
     return { stats, breakdowns };

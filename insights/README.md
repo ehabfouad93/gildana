@@ -31,7 +31,21 @@ Roles: **Admin** (Gildana — sees every client, opens any client's dashboard), 
 
 Money is converted per account into the client's reporting currency (`src/lib/fx.ts`; rows in `FxRate` override the built-in rates).
 
-**Interests and per-interest results:** Meta and TikTok report results per ad set, not per interest. The targeting views credit each option with the full results of the ad sets that use it — good for ranking, and the UI says so. For a true per-interest cost, run one interest per ad set.
+**Per-interest and per-audience results.** Every number on the Targeting tab and `/audiences` is labelled with its source:
+
+| Source | Where it comes from |
+|---|---|
+| Reported | The platform reports the segment itself — Google audience segments, topics and keywords; TikTok interest categories; LinkedIn job title, seniority, industry and company size; Snapchat interests where available. Stored as ad-set-level `seg_*` breakdowns. |
+| Measured | An ad set that targets that one segment only. |
+| Tested | An ad set created by an **interest split test** from the dashboard. |
+| Estimated | Meta ad sets with several interests (Meta has no per-interest breakdown): split by a non-negative ridge regression fitted across all the account's ad sets (`src/lib/attribution.ts`). Shown only when the interest appears alone somewhere or in 3+ ad sets with different companions. |
+| Ad-set ranking | Too little variation to separate it — the whole ad set's results, for ranking only. |
+
+Leads are credited the same way: fully to a single-segment ad set's segment, otherwise shared by the model's weights.
+
+**Interest split tests (Meta).** On a multi-interest Meta ad set, *Split test these interests* creates one ad set per chosen interest — same campaign, ads, optimisation, placements and other targeting, budget split evenly — all **paused**. It needs the `ads_management` permission: use *Connect with split tests* on the Ad accounts page (the normal connect stays read-only). Demo logins simulate it.
+
+Meta also gets the closest splits it does offer: customer segment (`user_segment_key`: new / engaged / existing customers, Advantage+), frequency, and creative assets (headline, primary text, image, video, CTA — dynamic creative). Breakdowns an account doesn't support are skipped.
 
 ## Run locally
 

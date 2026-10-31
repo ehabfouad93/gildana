@@ -70,6 +70,8 @@ export type RemoteLead = {
 export type SyncContext = {
   accessToken: string;
   account: { externalId: string; currency: string; timezone: string; parentId?: string };
+  /** Interest split tests created from this app; only the demo connector needs them (real platforms return the ad sets themselves). */
+  splitTests?: { sourceAdSet: string; arms: { externalId: string; interest: RemoteTargetingItem }[] }[];
 };
 
 export type StatsBundle = {
@@ -84,7 +86,7 @@ export interface Connector {
   platform: Platform;
   /** Whether the app credentials for this platform are present in the environment. */
   configured(): boolean;
-  authUrl(state: string, redirectUri: string): string;
+  authUrl(state: string, redirectUri: string, opts?: { write?: boolean }): string;
   exchange(code: string, redirectUri: string): Promise<TokenSet>;
   refresh?(refreshToken: string): Promise<TokenSet>;
   listAccounts(accessToken: string): Promise<RemoteAccount[]>;

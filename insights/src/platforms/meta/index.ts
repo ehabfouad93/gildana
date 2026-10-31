@@ -7,6 +7,8 @@ const V = () => process.env.META_GRAPH_VERSION || "v21.0";
 const G = () => `https://graph.facebook.com/${V()}`;
 
 const SCOPES = ["ads_read", "leads_retrieval", "business_management", "pages_show_list", "pages_read_engagement", "pages_manage_ads"];
+/** Only requested when the client opts in to interest split tests, which create (paused) ad sets. */
+export const WRITE_SCOPE = "ads_management";
 
 /** Follows Graph `paging.next` until exhausted. */
 async function all<T = any>(url: string, max = 50): Promise<T[]> {
@@ -27,6 +29,16 @@ function q(path: string, token: string, params: Record<string, string | number> 
   return u.toString();
 }
 
+/** The permissions the person actually granted (they can untick some in the dialog). */
+async function grantedScopes(token: string): Promise<string> {
+  try {
+    const r: any = await fetchJson(q("me/permissions", token));
+    return (r.data ?? []).filter((p: any) => p.status === "granted").map((p: any) => p.permission).join(",");
+  } catch {
+    return SCOPES.join(",");
+  }
+}
+
 const act = (id: string) => (id.startsWith("act_") ? id : `act_${id}`);
 
 const LEVEL_PARAM: Record<StatLevel, string> = { ACCOUNT: "account", CAMPAIGN: "campaign", ADSET: "adset", AD: "ad" };
@@ -37,12 +49,12 @@ export const meta: Connector & { preview(token: string, adId: string, format?: s
   platform: "META",
   configured: () => !!(process.env.META_APP_ID && process.env.META_APP_SECRET),
 
-  authUrl(state, redirectUri) {
+  authUrl(state, redirectUri, opts) {
     const u = new URL(`https://www.facebook.com/${V()}/dialog/oauth`);
     u.searchParams.set("client_id", process.env.META_APP_ID!);
     u.searchParams.set("redirect_uri", redirectUri);
     u.searchParams.set("state", state);
-    u.searchParams.set("scope", SCOPES.join(","));
+    u.searchParams.set("scope", [...SCOPES, ...(opts?.write ? [WRITE_SCOPE] : [])].join(","));
     return u.toString();
   },
 
@@ -55,7 +67,7 @@ export const meta: Connector & { preview(token: string, adId: string, format?: s
     return {
       accessToken: long.access_token,
       expiresAt: long.expires_in ? new Date(Date.now() + long.expires_in * 1000) : undefined,
-      scopes: SCOPES.join(","), externalUser: me.id, label: me.name,
+      scopes: await grantedScopes(long.access_token), externalUser: me.id, label: me.name,
     };
   },
 
@@ -106,7 +118,14 @@ export const meta: Connector & { preview(token: string, adId: string, format?: s
     }
     const breakdowns: RemoteBreakdown[] = [];
     for (const [dimension, param] of Object.entries(META_BREAKDOWNS)) {
-      const rows = await all(q(`${a}/insights`, t, { level: "campaign", time_increment: 1, time_range: range, breakdowns: param, fields: "campaign_id,spend,impressions,reach,clicks,actions,action_values", limit: 500 }), 200);
+      let rows: any[];
+      try {
+        rows = await all(q(`${a}/insights`, t, { level: "campaign", time_increment: 1, time_range: range, breakdowns: param, fields: "campaign_id,spend,impressions,reach,clicks,actions,action_values", limit: 500 }), 200);
+      } catch (e) {
+        // A breakdown this account or its campaigns don't support (e.g. asset splits without dynamic creative) is skipped, not fatal.
+        if (e instanceof PlatformError && e.status >= 400 && e.status < 500) continue;
+        throw e;
+      }
       for (const r of rows) {
         const m = insightMetrics(r);
         breakdowns.push({ level: "CAMPAIGN", externalId: r.campaign_id, date: r.date_start, dimension, bucket: breakdownValue(dimension, r), ...m });

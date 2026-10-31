@@ -85,9 +85,25 @@ export function breakdownValue(dimension: string, row: Record<string, any>): str
     case "placement": return `${row.publisher_platform}_${row.platform_position}`;
     case "device": return String(row.device_platform ?? row.impression_device ?? "unknown");
     case "hour": return String(row.hourly_stats_aggregated_by_advertiser_time_zone ?? "").slice(0, 2);
+    case "customer_segment": return SEGMENT[String(row.user_segment_key)] ?? String(row.user_segment_key ?? "unknown");
+    case "frequency": return String(row.frequency_value ?? "unknown");
+    case "asset_body": case "asset_title": case "asset_image": case "asset_video": case "asset_cta": case "asset_link": {
+      const a = row[ASSET_FIELD[dimension]] ?? {};
+      return String(a.text ?? a.name ?? a.video_name ?? a.url ?? a.website_url ?? a.hash ?? a.id ?? "unknown").slice(0, 300);
+    }
     default: return String(row[dimension] ?? "unknown");
   }
 }
+
+/** Advantage+ audience segments reported by the user_segment_key breakdown. */
+const SEGMENT: Record<string, string> = {
+  new_users: "New audience", engaged_users: "Engaged audience", existing_users: "Existing customers",
+  prospecting: "New audience", engaged: "Engaged audience", existing: "Existing customers",
+};
+
+const ASSET_FIELD: Record<string, string> = {
+  asset_body: "body_asset", asset_title: "title_asset", asset_image: "image_asset", asset_video: "video_asset", asset_cta: "call_to_action_asset", asset_link: "link_url_asset",
+};
 
 /** Our dimension name → the `breakdowns` parameter Meta expects. */
 export const META_BREAKDOWNS: Record<string, string> = {
@@ -99,4 +115,14 @@ export const META_BREAKDOWNS: Record<string, string> = {
   device: "device_platform",
   placement: "publisher_platform,platform_position",
   hour: "hourly_stats_aggregated_by_advertiser_time_zone",
+  // Meta has no per-interest breakdown. These are the closest audience and
+  // creative splits it offers; not every account or campaign supports each.
+  customer_segment: "user_segment_key",
+  frequency: "frequency_value",
+  asset_body: "body_asset",
+  asset_title: "title_asset",
+  asset_image: "image_asset",
+  asset_video: "video_asset",
+  asset_cta: "call_to_action_asset",
+  asset_link: "link_url_asset",
 };

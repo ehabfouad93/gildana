@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { decrypt, encrypt } from "@/lib/crypto";
 import { toDate } from "@/lib/dates";
 import { connectorFor } from "@/platforms";
-import type { Connector, Metrics, SyncContext } from "@/platforms/types";
+import type { Connector, Metrics, RemoteTargetingItem, SyncContext } from "@/platforms/types";
 
 /**
  * Pulls one ad account for one date window and writes it into the warehouse.
@@ -17,6 +17,7 @@ export async function syncAccount(accountId: string, from: string, to: string, l
   const ctx: SyncContext = {
     accessToken: conn.isDemo ? "demo" : await freshToken(conn, connector),
     account: { externalId: account.externalId, currency: account.currency, timezone: account.timezone, parentId: account.parentId },
+    splitTests: conn.isDemo ? await demoSplitTests(accountId) : undefined,
   };
   const platform = account.platform;
 
@@ -110,7 +111,7 @@ export async function syncAccount(accountId: string, from: string, to: string, l
     if (!entityId) continue;
     const x = m(r);
     bdRows.push({
-      accountId, platform, level: r.level, entityId, campaignId: r.level === "CAMPAIGN" ? entityId : null, date: toDate(r.date),
+      accountId, platform, level: r.level, entityId, campaignId: r.level === "CAMPAIGN" ? entityId : r.level === "ADSET" ? setCampaign.get(entityId) ?? null : null, date: toDate(r.date),
       dimension: r.dimension, value: r.bucket, spend: x.spend, impressions: x.impressions, reach: x.reach, clicks: x.clicks,
       conversions: x.conversions, leads: x.leads, convValue: x.value,
     });
@@ -160,6 +161,18 @@ export async function syncAccount(accountId: string, from: string, to: string, l
   }
 
   await db.adAccount.update({ where: { id: accountId }, data: { lastSyncAt: new Date(), syncError: "" } });
+}
+
+/** Split tests created in demo mode, so the demo connector can generate their ad sets and results. */
+async function demoSplitTests(accountId: string): Promise<SyncContext["splitTests"]> {
+  const tests = await db.interestTest.findMany({ where: { accountId, status: { not: "failed" } } });
+  if (!tests.length) return [];
+  const sources = await db.adSet.findMany({ where: { id: { in: tests.map((t) => t.sourceAdSetId) } }, select: { id: true, externalId: true } });
+  const ext = new Map(sources.map((s) => [s.id, s.externalId]));
+  return tests.flatMap((t) => {
+    const src = ext.get(t.sourceAdSetId);
+    return src ? [{ sourceAdSet: src, arms: (t.arms as { externalId: string; interest: RemoteTargetingItem }[]).map((a) => ({ externalId: a.externalId, interest: a.interest })) }] : [];
+  });
 }
 
 /**

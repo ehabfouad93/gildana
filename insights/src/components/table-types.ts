@@ -1,4 +1,4 @@
-export type Fmt = "text" | "money" | "money2" | "num" | "compact" | "pct" | "ratio" | "dec";
+export type Fmt = "text" | "money" | "money2" | "num" | "compact" | "pct" | "ratio" | "dec" | "badge";
 export type Col = { key: string; label: string; fmt?: Fmt; href?: string; sub?: string; wrap?: boolean };
 export type Row = Record<string, string | number | null | undefined>;
 
@@ -15,3 +15,8 @@ export const METRIC_COLS: Col[] = [
   { key: "cpl", label: "CPL", fmt: "money2" },
   { key: "roas", label: "ROAS", fmt: "ratio" },
 ];
+
+/** Where a per-segment number comes from (see audienceInsights in src/lib/queries.ts). */
+export const SOURCE_LABEL: Record<string, string> = {
+  reported: "Reported", tested: "Tested", measured: "Measured", estimated: "Estimated", adset: "Ad-set ranking", setting: "Setting",
+};
