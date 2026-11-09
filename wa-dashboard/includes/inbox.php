@@ -108,7 +108,44 @@ function inbox_split(array $client): bool
 {
     if (!function_exists('wa_lines_ready') || !wa_lines_ready()) return false;
     // Business numbers only: a salesperson's own phone was always part of the one conversation.
-    return count(array_filter(array_keys(wa_lines($client)), fn($k) => $k[0] !== 'u')) > 1;
+    // A disconnected or removed number keeps its conversations apart too, so they can be hidden.
+    return count(array_filter(array_keys(wa_lines($client)), fn($k) => $k[0] !== 'u')) > 1 || inbox_offline_lines($client);
+}
+
+/**
+ * The account's numbers that are not working now: disconnected (a phone unlinked, an API number
+ * without its token) or removed in Settings. Their conversations leave everyone's Inbox; an Admin
+ * can still pick them in the number filter. [line => ['label', 'phone', 'state' => off|removed]]
+ */
+function inbox_offline_lines(array $client): array
+{
+    if (!function_exists('wa_lines_ready') || !wa_lines_ready()) return [];
+    $cache = &$GLOBALS['__ib_offline']; $cache ??= [];
+    $ck = (int) $client['id'];
+    if (isset($cache[$ck])) return $cache[$ck];
+    $out = [];
+    foreach (wa_lines($client) as $k => $l) {
+        if (!$l['ready']) $out[$k] = ['label' => $l['label'], 'phone' => $l['phone'], 'state' => 'off'];
+    }
+    foreach (wa_numbers_for((int) $client['id'], false) as $n) {
+        if ((int) $n['active']) continue;
+        $out['n' . $n['id']] = ['label' => trim((string) $n['label']) ?: 'Removed number',
+                                'phone' => wa_pretty_phone($n['kind'] === 'cloud' ? $n['display_phone'] : $n['msisdn']), 'state' => 'removed'];
+    }
+    return $cache[$ck] = $out;
+}
+
+/** An Admin of the account (or of the platform): sees disconnected numbers' conversations on request. */
+function inbox_is_admin(): bool
+{
+    return function_exists('is_client_admin') && is_client_admin();
+}
+
+/** A line's state for the Inbox: connected, off (not connected) or removed. */
+function inbox_line_state(array $client, string $line): string
+{
+    if ($line === '' || $line[0] === 'u') return 'connected';
+    return inbox_offline_lines($client)[$line]['state'] ?? 'connected';
 }
 
 /** The lines this person's Inbox shows: every one, or only the number the Admin gave them. NULL = all. */
@@ -254,6 +291,10 @@ function inbox_threads_split(array $client, string $q, int $limit, string $chann
     if (in_array($channel, ['messenger', 'instagram'], true)) { $where .= " AND lm.ln=''"; }
     elseif ($channel === 'whatsapp') { $where .= " AND lm.ln<>''"; }
     if ($lineFilter !== '' && wa_line_valid($lineFilter)) { $where .= " AND lm.ln=?"; $p[] = $lineFilter; }
+    // A number that is not working now: gone from the Inbox, except for an Admin who picks it.
+    $off = array_keys(inbox_offline_lines($client));
+    if ($lineFilter !== '' && in_array($lineFilter, $off, true) && inbox_is_admin()) $off = [];
+    if ($off) { $where .= " AND lm.ln NOT IN (" . implode(',', array_fill(0, count($off), '?')) . ")"; $p = array_merge($p, $off); }
     $vis = inbox_visible_lines($client);
     if ($vis !== null) { $where .= " AND (lm.ln='' OR lm.ln IN (" . ($vis ? implode(',', array_fill(0, count($vis), '?')) : "'-'") . "))"; $p = array_merge($p, $vis); }
     [$scope, $sp] = crm_scope('c');
@@ -516,6 +557,8 @@ function inbox_handle_ajax(array $client): void
         if ($line !== null && $line !== '' && !wa_line_valid($line)) json_out(['ok' => false]);
         $vis = $split ? inbox_visible_lines($client) : null;
         if ($line !== null && $line !== '' && $vis !== null && !in_array($line, $vis, true)) json_out(['ok' => false, 'error' => 'Contact not found.']);
+        $lineState = $line !== null ? inbox_line_state($client, $line) : 'connected';
+        if ($lineState !== 'connected' && !inbox_is_admin()) json_out(['ok' => false, 'error' => 'Contact not found.']);
         $msgs = inbox_thread($cid, $contactId, $after, 400, $line);
         inbox_mark_read($cid, $contactId, $line);
         // Every channel this person can be answered on, the one they last wrote on, and its 24-hour window.
@@ -571,7 +614,7 @@ function inbox_handle_ajax(array $client): void
                                && (!function_exists('can_write') || can_write())
                                && !db_val("SELECT 1 FROM social_optins WHERE client_id=? AND contact_id=? AND (status='active' OR asked_at > NOW() - INTERVAL 1 DAY)", [$cid, (int) $contact['id']]),
             'name' => (string) $who['name'], 'phone' => (string) $who['phone_e164'], 'no_number' => $who['no_number'],
-            'line' => $line, 'line_label' => $line !== null && $line !== '' ? wa_line_label($client, $line) : '',
+            'line' => $line, 'line_label' => $line !== null && $line !== '' ? wa_line_label($client, $line) : '', 'line_state' => $lineState,
             'bot_paused' => inbox_bot_paused($contact),
             // For the owner picker in the header — present only where it can be used.
             'owner'      => $contact['owner_user_id'] !== null ? (int) $contact['owner_user_id'] : null,

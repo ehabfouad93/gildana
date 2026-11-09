@@ -126,13 +126,24 @@ $IB_CHANNELS = isset($CLIENT) && function_exists('client_channels')
       <?php foreach ($IB_CHANNELS as $ch): ?><button type="button" data-ch="<?= e($ch) ?>"><?= e(['whatsapp' => 'WhatsApp', 'messenger' => 'Messenger', 'instagram' => 'Instagram'][$ch]) ?></button><?php endforeach; ?>
     </div>
     <?php endif; ?>
-    <?php $IB_LINES = isset($CLIENT) && function_exists('inbox_split') && inbox_split($CLIENT)
-            ? array_intersect_key(wa_lines($CLIENT), array_flip(inbox_visible_lines($CLIENT) ?? array_keys(wa_lines($CLIENT)))) : []; ?>
-    <?php if (count($IB_LINES) > 1): ?>
+    <?php
+      /* The number filter: the working numbers this person sees — and, for an Admin, the ones that
+         are disconnected or removed, whose conversations are otherwise gone from the Inbox. */
+      $IB_LINES = []; $IB_OFF = [];
+      if (isset($CLIENT) && function_exists('inbox_split') && inbox_split($CLIENT)) {
+          $IB_OFF = inbox_offline_lines($CLIENT);
+          $IB_LINES = array_diff_key(array_intersect_key(wa_lines($CLIENT), array_flip(inbox_visible_lines($CLIENT) ?? array_keys(wa_lines($CLIENT)))), $IB_OFF);
+          if (!inbox_is_admin()) $IB_OFF = [];
+      } ?>
+    <?php if (count($IB_LINES) > 1 || $IB_OFF): ?>
     <div class="ib-search" style="padding-bottom:0"><select id="ib-line" aria-label="WhatsApp number" style="width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:8px;font-size:13px;background:var(--surface);color:inherit">
       <option value="">All WhatsApp numbers</option>
-      <?php foreach ($IB_LINES as $k => $l): ?><option value="<?= e($k) ?>"><?= e($l['label'] . ($l['phone'] !== '' ? ' (' . $l['phone'] . ')' : '')) ?></option><?php endforeach; ?>
-    </select></div>
+      <?php foreach ($IB_LINES as $k => $l): ?><option value="<?= e($k) ?>" data-state="connected"><?= e($l['label'] . ($l['phone'] !== '' ? ' (' . $l['phone'] . ')' : '')) ?></option><?php endforeach; ?>
+      <?php if ($IB_OFF): ?><optgroup label="Not connected — Admins only">
+        <?php foreach ($IB_OFF as $k => $l): ?><option value="<?= e($k) ?>" data-state="<?= e($l['state']) ?>"><?= e($l['label'] . ($l['phone'] !== '' ? ' (' . $l['phone'] . ')' : '') . ($l['state'] === 'removed' ? ' — removed' : ' — not connected')) ?></option><?php endforeach; ?>
+      </optgroup><?php endif; ?>
+    </select>
+    <div id="ib-line-st" style="font-size:12px;margin-top:6px" hidden></div></div>
     <?php endif; ?>
     <?php $IB_SYNC = isset($CLIENT) && function_exists('inbox_sync_lines') && inbox_sync_lines($CLIENT) && (!function_exists('can_write') || can_write()); ?>
     <div class="ib-search" style="display:flex;gap:6px"><input type="text" id="ib-q" placeholder="Search name or number…" style="flex:1;min-width:0">
@@ -279,6 +290,7 @@ async function pollThread(){
   if(!d.ok) return;
   if (d.line_label) el('ib-hphone').textContent = (d.phone ? '+'+d.phone+' · ' : (d.no_number ? 'Number hidden by WhatsApp · ' : '')) + 'on ' + d.line_label;
   else if (d.no_number) el('ib-hphone').textContent = 'Number hidden by WhatsApp';
+  if (d.line_state && d.line_state !== 'connected') el('ib-hphone').textContent += d.line_state === 'removed' ? ' · removed number' : ' · not connected';
   const body = el('ib-body'); const atBottom = body.scrollHeight-body.scrollTop-body.clientHeight < 80;
   d.messages.forEach(m=>{
     ibLast=Math.max(ibLast,m.id);
@@ -393,7 +405,16 @@ el('ib-form').addEventListener('submit', async e=>{
 el('ib-from').addEventListener('change', e=>{ ibFrom=e.target.value; ibFromPicked=true; const f=ibFromList.find(x=>x.key===ibFrom);
   if (f) { ibOpen=!!f.open; el('ib-form').style.display = ibOpen ? 'flex' : 'none'; el('ib-closed').style.display = ibOpen ? 'none' : 'block'; } });
 el('ib-ch').addEventListener('change', e=>{ ibCh=e.target.value; ibChPicked=true; ibLast=Math.max(0,ibLast); pollThread(); });
-if (el('ib-line')) el('ib-line').addEventListener('change', e=>{ ibLineFilter = e.target.value; loadThreads(); });
+/* Picking a number says whether it is working: connected, not connected, or removed. */
+function ibLineState(){
+  const st = el('ib-line-st'); if (!st) return;
+  const o = el('ib-line').selectedOptions[0]; const s = o && o.value ? o.dataset.state : '';
+  st.hidden = !s;
+  if (s === 'connected') st.innerHTML = '<span style="color:var(--success,#16a34a)">●</span> Connected';
+  else if (s === 'off') st.innerHTML = '<span style="color:var(--danger,#dc2626)">●</span> Not connected — only Admins see these conversations. Link it again in <a href="settings.php#numbers">Settings → WhatsApp numbers</a>.';
+  else if (s === 'removed') st.innerHTML = '<span style="color:var(--muted,#6b7280)">●</span> Removed — only Admins see these conversations.';
+}
+if (el('ib-line')) el('ib-line').addEventListener('change', e=>{ ibLineFilter = e.target.value; ibLineState(); loadThreads(); });
 document.querySelectorAll('#ib-tabs button').forEach(b=>b.addEventListener('click',()=>{
   document.querySelectorAll('#ib-tabs button').forEach(x=>x.classList.toggle('on',x===b)); ibFilter=b.dataset.ch; loadThreads();
 }));

@@ -109,7 +109,7 @@ function wa_lines(array $client, bool $withUsers = false): array
 /** Forget the cached lines (after numbers are added or changed in the same request). */
 function wa_lines_reset(): void
 {
-    unset($GLOBALS['__wa_lines']);
+    unset($GLOBALS['__wa_lines'], $GLOBALS['__ib_offline']);
 }
 
 /** A line's name for people: "Sales (+20 100…)" — or the key when the line is gone. */

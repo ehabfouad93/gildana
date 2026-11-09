@@ -513,4 +513,5 @@ return [
     'There is no linked phone to sync. Link one in Settings → WhatsApp numbers.' => 'لا يوجد هاتف مربوط للمزامنة. اربط هاتفاً من الإعدادات ← أرقام واتساب.',
     'Sees in the Inbox' => 'يرى في صندوق الوارد', 'The numbers they send from' => 'الأرقام التي يرسل منها', 'Choose numbers' => 'اختيار الأرقام',
     'Only these numbers\' conversations appear in their Inbox. Messenger and Instagram are not affected.' => 'تظهر في صندوق الوارد محادثات هذه الأرقام فقط. لا يؤثر ذلك على ماسنجر وإنستجرام.',
+    'Not connected — Admins only' => 'غير متصل — للمسؤولين فقط', 'Connected' => 'متصل',
 ];
