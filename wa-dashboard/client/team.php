@@ -70,6 +70,15 @@ function team_phone_from_post(array $client): ?string
     return $n !== '' ? $n : null;
 }
 
+/** "Sees in the Inbox": null = the numbers they send from; otherwise the ticked ones. */
+function team_inbox_lines_from_post(array $client): ?string
+{
+    if (($_POST['inbox_mode'] ?? '') !== 'pick') return null;
+    $all = function_exists('wa_lines') ? wa_lines($client) : [];
+    $keys = array_values(array_intersect(array_map('strval', (array) ($_POST['inbox_lines'] ?? [])), array_keys($all)));
+    return implode(',', $keys);
+}
+
 function team_send_via_from_post(): ?string
 {
     $v = (string) ($_POST['send_via'] ?? '');
@@ -99,6 +108,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 db_run("UPDATE users SET phone=?, wa_alerts=? WHERE email=?", [team_phone_from_post($CLIENT), !empty($_POST['wa_alerts']) ? 1 : 0, $email]);
             }
             if (db_has_column('users', 'crm_pages')) db_run("UPDATE users SET crm_pages=? WHERE email=?", [team_crm_pages_from_post(), $email]);
+            if (db_has_column('users', 'inbox_lines')) db_run("UPDATE users SET inbox_lines=? WHERE email=?", [team_inbox_lines_from_post($CLIENT), $email]);
             flash(($name ?: $email) . ' added as ' . $roles[$role]['label'] . '.');
             redirect('team.php');
         }
@@ -125,6 +135,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     [$role, team_modules_from_post($clientHas), team_send_via_from_post(), $status,
                      trim((string) ($_POST['name'] ?? '')), $uid, $cid]);      // NOT NULL column
                 if (db_has_column('users', 'crm_pages')) db_run("UPDATE users SET crm_pages=? WHERE id=?", [team_crm_pages_from_post(), $uid]);
+                if (db_has_column('users', 'inbox_lines')) db_run("UPDATE users SET inbox_lines=? WHERE id=?", [team_inbox_lines_from_post($CLIENT), $uid]);
                 if (db_has_column('users', 'phone')) {
                     if (trim((string) ($_POST['phone'] ?? '')) !== '' && team_phone_from_post($CLIENT) === null) $err = 'That WhatsApp number does not look right.';
                     else db_run("UPDATE users SET phone=?, wa_alerts=? WHERE id=?", [team_phone_from_post($CLIENT), !empty($_POST['wa_alerts']) ? 1 : 0, $uid]);
@@ -184,6 +195,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
             <button class="btn btn-ghost btn-sm" onclick='teamOpen(<?= json_encode([
                 'id' => (int) $p['id'], 'email' => $p['email'], 'name' => $p['name'],
                 'role' => user_client_role($p), 'status' => $p['status'], 'send_via' => (string) ($p['send_via'] ?? ''),
+                'inbox_lines' => isset($p['inbox_lines']) ? array_values(array_filter(explode(',', (string) $p['inbox_lines']))) : null,
                 'phone' => (string) ($p['phone'] ?? ''), 'wa_alerts' => (int) ($p['wa_alerts'] ?? 1),
                 'modules' => perm_parse($p['modules'] ?? null),
                 'crm_pages' => ($cp = user_crm_pages($p + ['role' => 'client'])) === null ? null : $cp,
@@ -257,6 +269,19 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
       <span class="text-muted" style="font-size:11.5px">"Their own phone" — they link it themselves from My WhatsApp.
         It can be banned by WhatsApp like any personal number.</span></div>
 
+    <?php $tLines = function_exists('wa_lines') && wa_lines_ready() && db_has_column('users', 'inbox_lines') ? wa_lines($CLIENT) : []; ?>
+    <?php if (count($tLines) > 1): ?>
+    <div class="field"><span class="lbl">Sees in the Inbox</span>
+      <label class="mod-all"><input type="radio" name="inbox_mode" value="" id="t-ibl-auto" checked> The numbers they send from</label>
+      <label class="mod-all"><input type="radio" name="inbox_mode" value="pick" id="t-ibl-pick"> Choose numbers</label>
+      <div class="mod-grid" id="t-ibl-list" hidden>
+        <?php foreach ($tLines as $k => $l): ?>
+          <label class="mod-opt"><input type="checkbox" class="t-ibl" name="inbox_lines[]" value="<?= e($k) ?>"> <?= e($l['label'] . ($l['phone'] !== '' ? ' (' . $l['phone'] . ')' : '')) ?></label>
+        <?php endforeach; ?>
+      </div>
+      <span class="text-muted" style="font-size:11.5px">Only these numbers' conversations appear in their Inbox. Messenger and Instagram are not affected.</span></div>
+    <?php endif; ?>
+
     <div class="field"><span class="lbl">Their WhatsApp number, for alerts</span>
       <input type="tel" name="phone" id="t-phone" placeholder="01001234567" inputmode="tel">
       <label class="mod-all" style="margin-top:6px"><input type="checkbox" name="wa_alerts" value="1" id="t-wa" checked>
@@ -307,6 +332,7 @@ function teamCrmSub(){
   document.querySelectorAll('#t-crm-sub [data-admin-only]').forEach(l => l.hidden = !admin);
   const acts = $t('t-actions'); if (acts) acts.hidden = admin;
 }
+document.querySelectorAll('input[name=inbox_mode]').forEach(r => r.addEventListener('change', () => { $t('t-ibl-list').hidden = !$t('t-ibl-pick').checked; }));
 $t('t-role')?.addEventListener('change', teamCrmSub);
 document.querySelector('.t-mod[value="crm"]')?.addEventListener('change', teamCrmSub);
 function teamOpen(p){
@@ -322,6 +348,12 @@ function teamOpen(p){
   $t('t-pass-lbl').textContent = edit ? 'New password (leave empty to keep)' : 'Password';
   $t('t-role').value         = edit ? p.role : 'sales';
   $t('t-send').value         = edit ? (p.send_via || '') : '';
+  if ($t('t-ibl-pick')) {
+    const pick = edit && Array.isArray(p.inbox_lines);
+    $t('t-ibl-pick').checked = pick; $t('t-ibl-auto').checked = !pick;
+    document.querySelectorAll('.t-ibl').forEach(c => c.checked = pick && p.inbox_lines.includes(c.value));
+    $t('t-ibl-list').hidden = !pick;
+  }
   $t('t-phone').value        = edit ? (p.phone ? '+' + p.phone : '') : '';
   $t('t-wa').checked         = edit ? !!p.wa_alerts : true;
   $t('t-status-wrap').hidden = !edit;

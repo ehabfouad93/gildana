@@ -112,10 +112,22 @@ function inbox_split(array $client): bool
 }
 
 /** The lines this person's Inbox shows: every one, or only the number the Admin gave them. NULL = all. */
+/** The numbers a person was given in the Inbox on the Team page, or null = not chosen. */
+function inbox_lines_of(array $u): ?array
+{
+    $v = $u['inbox_lines'] ?? null;
+    if ($v === null) return null;
+    return array_values(array_filter(array_map('trim', explode(',', (string) $v)), fn($k) => $k !== '' && wa_line_valid($k)));
+}
+
 function inbox_visible_lines(array $client): ?array
 {
     $u = function_exists('sending_user') ? sending_user() : null;
-    if (!$u || ($u['role'] ?? '') === 'admin' || in_array((string) ($u['send_via'] ?? ''), ['', 'any', 'none'], true)) return null;
+    if (!$u || ($u['role'] ?? '') === 'admin') return null;
+    // Chosen on the Team page ("Sees in the Inbox"): exactly those numbers.
+    $chosen = inbox_lines_of($u);
+    if ($chosen !== null) return array_values(array_intersect($chosen, array_keys(wa_lines($client, true))));
+    if (in_array((string) ($u['send_via'] ?? ''), ['', 'any', 'none'], true)) return null;
     return array_keys(wa_lines_for_user($client, $u));
 }
 

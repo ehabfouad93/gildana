@@ -511,4 +511,6 @@ return [
     'Link the phone first.' => 'اربط الهاتف أولاً.', 'That is not a linked phone of this account.' => 'هذا ليس هاتفاً مربوطاً بهذا الحساب.',
     'Number hidden by WhatsApp' => 'الرقم مخفي من واتساب', 'WhatsApp user' => 'مستخدم واتساب', '↻ Sync' => '↻ مزامنة', 'Syncing…' => 'جارٍ المزامنة…',
     'There is no linked phone to sync. Link one in Settings → WhatsApp numbers.' => 'لا يوجد هاتف مربوط للمزامنة. اربط هاتفاً من الإعدادات ← أرقام واتساب.',
+    'Sees in the Inbox' => 'يرى في صندوق الوارد', 'The numbers they send from' => 'الأرقام التي يرسل منها', 'Choose numbers' => 'اختيار الأرقام',
+    'Only these numbers\' conversations appear in their Inbox. Messenger and Instagram are not affected.' => 'تظهر في صندوق الوارد محادثات هذه الأرقام فقط. لا يؤثر ذلك على ماسنجر وإنستجرام.',
 ];
