@@ -119,6 +119,54 @@ function inbox_visible_lines(array $client): ?array
     return array_keys(wa_lines_for_user($client, $u));
 }
 
+/** The linked phones this person may sync from the Inbox: ready, and visible to them. */
+function inbox_sync_lines(array $client): array
+{
+    if (!function_exists('wa_lines') || !wa_lines_ready()) return [];
+    $vis = inbox_visible_lines($client);
+    $u = function_exists('sending_user') ? sending_user() : null;
+    $out = [];
+    foreach (wa_lines($client, true) as $k => $l) {
+        if ($l['kind'] !== 'personal' || !$l['ready']) continue;
+        if ($k[0] === 'u' && $u && ($u['role'] ?? '') !== 'admin' && !(function_exists('is_client_admin') && is_client_admin()) && $k !== 'u' . (int) $u['id']) continue;
+        if ($vis !== null && $k[0] !== 'u' && !in_array($k, $vis, true)) continue;
+        $out[$k] = $l;
+    }
+    return $out;
+}
+
+/** For the Sync button: whether any of those phones is being synced now, and how far it got. */
+function inbox_sync_progress(array $client): ?array
+{
+    $lines = inbox_sync_lines($client);
+    if (!$lines) return null;
+    require_once __DIR__ . '/pw_history.php';
+    if (!pw_history_ready()) return null;
+    $ph = implode(',', array_fill(0, count($lines), '?'));
+    $run = db_row("SELECT COUNT(*) n, COALESCE(SUM(imported),0) imported FROM pw_history WHERE client_id=? AND line IN ($ph) AND status IN ('queued','running')",
+                  array_merge([(int) $client['id']], array_keys($lines)));
+    return ['running' => (int) $run['n'] > 0, 'imported' => (int) $run['imported']];
+}
+
+/**
+ * What the Inbox shows for a person. WhatsApp sometimes hides a customer's number behind an
+ * internal id (an "@lid" address); until the real number is known the contact is filed under that
+ * id's digits, which are not a phone number and must not be shown as one. Nor is a "name" that is
+ * only digits. The real number replaces the id as soon as WhatsApp reveals it (webhook_personal.php,
+ * pw_history.php).
+ */
+function inbox_person(array &$r): void
+{
+    $jid = (string) ($r['wa_jid'] ?? '');
+    $phone = (string) ($r['phone_e164'] ?? '');
+    $lid = str_ends_with($jid, '@lid') ? (preg_replace('/\D+/', '', explode('@', $jid)[0]) ?? '') : '';
+    $r['no_number'] = $lid !== '' && ($phone === '' || $phone === $lid);
+    if ($r['no_number']) $r['phone_e164'] = '';
+    $name = trim((string) ($r['name'] ?? ''));
+    if ($name !== '' && preg_match('/^\+?[\d\s-]{7,}$/', $name) && ($r['no_number'] || preg_replace('/\D+/', '', $name) === $lid || preg_replace('/\D+/', '', $name) === $phone)) $r['name'] = '';
+    unset($r['wa_jid']);
+}
+
 /** Thread list for a client: newest conversation first, with unread counts. */
 function inbox_threads(int $clientId, string $q = '', int $limit = 200, string $channel = '', string $lineFilter = ''): array
 {
@@ -153,7 +201,7 @@ function inbox_threads(int $clientId, string $q = '', int $limit = 200, string $
                 (SELECT COUNT(*) FROM messages mi
                    WHERE mi.client_id=? AND mi.contact_id=t.contact_id AND mi.direction='in' AND COALESCE(mi.source,'')<>'history'
                      AND mi.created_at > COALESCE(t.inbox_read_at,'2000-01-01')) unread
-           FROM (SELECT c.id contact_id, c.phone_e164, c.name, c.last_inbound_at, c.inbox_read_at, lm.mat{$sx}
+           FROM (SELECT c.id contact_id, c.phone_e164, c.name, c.wa_jid, c.last_inbound_at, c.inbox_read_at, lm.mat{$sx}
                    FROM (SELECT contact_id, MAX(created_at) mat FROM messages WHERE client_id=? GROUP BY contact_id) lm
                    JOIN contacts c ON c.id = lm.contact_id
                   WHERE c.client_id=?{$search}
@@ -167,6 +215,7 @@ function inbox_threads(int $clientId, string $q = '', int $limit = 200, string $
     $hide = function_exists('crm_phone_hidden') && crm_phone_hidden();
     foreach ($rows as &$r) {
         unset($r['inbox_read_at'], $r['mat']);
+        inbox_person($r);
         // The Inbox adds the "+" itself; a hidden number arrives already masked, without it.
         if ($hide && (string) $r['phone_e164'] !== '') $r['phone_e164'] = ltrim(crm_phone_mask((string) $r['phone_e164']), '+');
         $r['phone_e164'] = (string) ($r['phone_e164'] ?? '');
@@ -203,7 +252,7 @@ function inbox_threads_split(array $client, string $q, int $limit, string $chann
                 (SELECT COUNT(*) FROM messages mi
                   WHERE mi.client_id=? AND mi.contact_id=t.contact_id AND COALESCE(mi.line,'')=t.line AND mi.direction='in' AND COALESCE(mi.source,'')<>'history'
                     AND mi.created_at > COALESCE(t.read_at, '2000-01-01')) unread
-           FROM (SELECT c.id contact_id, c.phone_e164, c.name, c.last_inbound_at, c.fb_psid IS NOT NULL has_fb, c.ig_sid IS NOT NULL has_ig, c.ig_username,
+           FROM (SELECT c.id contact_id, c.phone_e164, c.name, c.wa_jid, c.last_inbound_at, c.fb_psid IS NOT NULL has_fb, c.ig_sid IS NOT NULL has_ig, c.ig_username,
                         lm.ln line, lm.mat, COALESCE(ir.read_at, c.inbox_read_at) read_at
                    FROM (SELECT contact_id, COALESCE(line,'') ln, MAX(created_at) mat FROM messages WHERE client_id=? GROUP BY contact_id, COALESCE(line,'')) lm
                    JOIN contacts c ON c.id = lm.contact_id
@@ -218,6 +267,7 @@ function inbox_threads_split(array $client, string $q, int $limit, string $chann
     $label = ['[audio]' => '🎤 Voice note', '[voice]' => '🎤 Voice note', '[image]' => '📷 Photo', '[video]' => '🎥 Video', '[document]' => '📎 File', '[sticker]' => 'Sticker'];
     foreach ($rows as &$r) {
         unset($r['read_at'], $r['mat']);
+        inbox_person($r);
         if ($hide && (string) $r['phone_e164'] !== '') $r['phone_e164'] = ltrim(crm_phone_mask((string) $r['phone_e164']), '+');
         $r['phone_e164'] = (string) ($r['phone_e164'] ?? '');
         $r['last_channel'] = (string) ($r['last_channel'] ?? 'whatsapp');
@@ -404,7 +454,22 @@ function inbox_handle_ajax(array $client): void
 
     if ($a === 'threads') {
         json_out(['ok' => true, 'threads' => inbox_threads($cid, trim((string) ($_GET['q'] ?? '')), 200, (string) ($_GET['ch'] ?? ''), (string) ($_GET['line'] ?? '')),
-                  'split' => inbox_split($client)]);
+                  'split' => inbox_split($client), 'sync' => inbox_sync_progress($client)]);
+    }
+    /* Sync: bring in the linked phones' chats again (the one picked in the number filter, or all
+       of them). Safe to repeat — every message is stored once (includes/pw_history.php). */
+    if ($a === 'sync_history') {
+        verify_csrf();
+        if (function_exists('can_write') && !can_write()) json_out(['ok' => false, 'error' => 'You can only look at this account.']);
+        $lines = inbox_sync_lines($client);
+        $want = (string) ($_POST['line'] ?? '');
+        if ($want !== '') $lines = array_intersect_key($lines, [$want => 1]);
+        if (!$lines) json_out(['ok' => false, 'error' => 'There is no linked phone to sync. Link one in Settings → WhatsApp numbers.']);
+        require_once __DIR__ . '/pw_history.php';
+        $base = db_row("SELECT * FROM clients WHERE id=?", [$cid]) ?: $client;
+        foreach (array_keys($lines) as $ln) pw_history_start(wa_line_client($base, $ln) ?? $base, $ln, false, true);
+        json_out(['ok' => true, 'message' => 'Syncing ' . (count($lines) === 1 ? reset($lines)['label'] : count($lines) . ' phones') . ' — chats appear here over the next minutes.',
+                  'sync' => inbox_sync_progress($client)]);
     }
     /* Every action below names a contact. Check that this user may see it before any of them run:
        the thread list is scoped, but ids are guessable, and a salesperson must not be able to read
@@ -477,6 +542,7 @@ function inbox_handle_ajax(array $client): void
         foreach (array_keys($reach) as $ch) {
             $windows[$ch] = $ch === 'whatsapp' ? inbox_window_open($contact, $s['ok'] ? $s['client'] : $client) : social_window_open($contact, $ch);
         }
+        $who = $contact; inbox_person($who);          // never WhatsApp's internal id as a number
         json_out([
             'ok' => true, 'messages' => $msgs,
             // Judged against the number THIS person sends from — own/company phone has no window.
@@ -492,7 +558,7 @@ function inbox_handle_ajax(array $client): void
             'can_ask_optin' => !empty($contact['fb_psid']) && !empty($windows['messenger']) && function_exists('client_has_channel') && client_has_channel($client, 'social_mm')
                                && (!function_exists('can_write') || can_write())
                                && !db_val("SELECT 1 FROM social_optins WHERE client_id=? AND contact_id=? AND (status='active' OR asked_at > NOW() - INTERVAL 1 DAY)", [$cid, (int) $contact['id']]),
-            'name' => (string) $contact['name'], 'phone' => (string) ($contact['phone_e164'] ?? ''),
+            'name' => (string) $who['name'], 'phone' => (string) $who['phone_e164'], 'no_number' => $who['no_number'],
             'line' => $line, 'line_label' => $line !== null && $line !== '' ? wa_line_label($client, $line) : '',
             'bot_paused' => inbox_bot_paused($contact),
             // For the owner picker in the header — present only where it can be used.

@@ -134,7 +134,10 @@ $IB_CHANNELS = isset($CLIENT) && function_exists('client_channels')
       <?php foreach ($IB_LINES as $k => $l): ?><option value="<?= e($k) ?>"><?= e($l['label'] . ($l['phone'] !== '' ? ' (' . $l['phone'] . ')' : '')) ?></option><?php endforeach; ?>
     </select></div>
     <?php endif; ?>
-    <div class="ib-search"><input type="text" id="ib-q" placeholder="Search name or number…"></div>
+    <?php $IB_SYNC = isset($CLIENT) && function_exists('inbox_sync_lines') && inbox_sync_lines($CLIENT) && (!function_exists('can_write') || can_write()); ?>
+    <div class="ib-search" style="display:flex;gap:6px"><input type="text" id="ib-q" placeholder="Search name or number…" style="flex:1;min-width:0">
+      <?php if ($IB_SYNC): ?><button type="button" id="ib-sync" class="btn btn-ghost btn-sm" style="white-space:nowrap" title="Bring in your linked phone's chats again — past messages and the real numbers WhatsApp has since revealed">&#8635; Sync</button><?php endif; ?></div>
+    <div id="ib-sync-st" class="text-muted" style="font-size:12px;padding:0 14px 6px" hidden></div>
     <div class="ib-threads" id="ib-threads"><div class="ib-empty" style="padding:20px">Loading…</div></div>
   </div>
   <div class="ib-chat">
@@ -241,7 +244,7 @@ async function loadThreads(){
   const q = encodeURIComponent(el('ib-q').value||'');
   const r = await fetch(IB_URL+IB_SEP+'ajax=threads&q='+q+'&ch='+encodeURIComponent(ibFilter)+'&line='+encodeURIComponent(ibLineFilter)); const d = await r.json();
   if(!d.ok) return;
-  ibSplit = !!d.split;
+  ibSplit = !!d.split; ibSyncShow(d.sync);
   const box = el('ib-threads');
   if(!d.threads.length){ box.innerHTML='<div class="ib-empty" style="padding:20px">No conversations yet.</div>'; return; }
   box.innerHTML = d.threads.map(t=>{
@@ -274,7 +277,8 @@ async function pollThread(){
   if(!ibCur) return;
   const r = await fetch(IB_URL+IB_SEP+'ajax=thread&contact='+ibCur+'&after='+ibLast+(ibLine!==null?'&line='+encodeURIComponent(ibLine):'')); const d = await r.json();
   if(!d.ok) return;
-  if (d.line_label) el('ib-hphone').textContent = (d.phone ? '+'+d.phone+' · ' : '') + 'on ' + d.line_label;
+  if (d.line_label) el('ib-hphone').textContent = (d.phone ? '+'+d.phone+' · ' : (d.no_number ? 'Number hidden by WhatsApp · ' : '')) + 'on ' + d.line_label;
+  else if (d.no_number) el('ib-hphone').textContent = 'Number hidden by WhatsApp';
   const body = el('ib-body'); const atBottom = body.scrollHeight-body.scrollTop-body.clientHeight < 80;
   d.messages.forEach(m=>{
     ibLast=Math.max(ibLast,m.id);
@@ -322,7 +326,7 @@ async function pollThread(){
   const sel = el('ib-ch');
   sel.innerHTML = chans.map(c=>`<option value="${c}" ${c===ibCh?'selected':''}>${IB_CH_NAME[c]||c}</option>`).join('');
   sel.hidden = chans.length < 2;
-  if (!d.phone && chans.length) el('ib-hphone').textContent = chans.map(c=>IB_CH_NAME[c]).join(' · ') + (d.ig_username ? ' · @'+d.ig_username : '');
+  if (!d.phone && !d.no_number && chans.length) el('ib-hphone').textContent = chans.map(c=>IB_CH_NAME[c]).join(' · ') + (d.ig_username ? ' · @'+d.ig_username : '');
   el('ib-addlead').hidden = !d.can_add_lead;
   el('ib-optin').hidden = !d.can_ask_optin;
   ibOpen = d.windows && (ibCh in d.windows) ? !!d.windows[ibCh] : !!d.window_open;
@@ -586,6 +590,23 @@ el('ib-back').addEventListener('click',()=>{
   ibCur=0; loadThreads();
 });
 el('ib-q').addEventListener('input',()=>{ clearTimeout(window._ibq); window._ibq=setTimeout(loadThreads,300); });
+/* Sync: bring in the linked phone's chats again (the number picked in the filter, or all). */
+function ibSyncShow(sy){
+  const b = el('ib-sync'), st = el('ib-sync-st'); if (!b || !st) return;
+  const on = !!(sy && sy.running);
+  b.disabled = on; b.innerHTML = on ? '&#8635; Syncing…' : '&#8635; Sync';
+  st.hidden = !on; if (on) st.textContent = 'Bringing in your phone\'s chats… ' + (sy.imported||0).toLocaleString() + ' messages so far.';
+}
+if (el('ib-sync')) el('ib-sync').addEventListener('click', async ()=>{
+  const b = el('ib-sync'); b.disabled = true;
+  const fd = new FormData(); fd.append('ajax','sync_history'); fd.append('csrf_token',IB_CSRF);
+  const lf = el('ib-line') ? el('ib-line').value : ''; if (lf) fd.append('line', lf);
+  try {
+    const d = await (await fetch(IB_URL, {method:'POST', body:fd})).json();
+    if (!d.ok) { alert(d.error || 'Could not start the sync.'); b.disabled = false; return; }
+    ibSyncShow(d.sync); const st = el('ib-sync-st'); st.hidden = false; st.textContent = d.message;
+  } catch (e) { b.disabled = false; }
+});
 loadThreads(); setInterval(loadThreads,5000); setInterval(pollThread,3500);
 el('ib-owner')?.addEventListener('change', async e => {
   if (!ibCur) return;

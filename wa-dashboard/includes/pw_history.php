@@ -33,7 +33,7 @@ function pw_history_ready(): bool
  * handed over another part of its history — a waiting import waits a little longer, so the parts
  * that arrive together are read in one go.
  */
-function pw_history_start(array $client, ?string $line = null, bool $nudge = false): void
+function pw_history_start(array $client, ?string $line = null, bool $nudge = false, bool $now = false): void
 {
     if (!pw_history_ready()) return;
     $line ??= wa_line_of($client);
@@ -44,8 +44,9 @@ function pw_history_start(array $client, ?string $line = null, bool $nudge = fal
         return;
     }
     // A short wait: the phone sends its history in the first minutes after linking.
-    db_insert("INSERT INTO pw_history (client_id,line,status,page,next_at,created_at,updated_at) VALUES (?,?, 'queued', 1, NOW() + INTERVAL 2 MINUTE, NOW(), NOW())",
-              [(int) $client['id'], $line]);
+    // $now: asked for by hand (the Inbox's Sync button) — the next worker run starts it.
+    db_insert("INSERT INTO pw_history (client_id,line,status,page,next_at,created_at,updated_at) VALUES (?,?, 'queued', 1, NOW() + INTERVAL ? SECOND, NOW(), NOW())",
+              [(int) $client['id'], $line, $now ? 0 : 120]);
 }
 
 /** The latest import of a line, for Settings. */
@@ -66,13 +67,25 @@ function pw_history_store(array $client, array $raw): string
     if ($m === null) return 'skipped';
     $cid = (int) $client['id'];
     $wamid = (string) $m['wamid'];
-    if ($wamid !== '' && db_val("SELECT 1 FROM messages WHERE wa_message_id=? AND client_id=? LIMIT 1", [$wamid, $cid])) return 'seen';
-    if ($m['text'] === '' && $m['type'] === 'text') return 'skipped';                              // protocol messages, reactions…
 
-    // The contact: by the exact address first, then the number — as for a live message.
+    // The contact: by the exact address first, then the number — as for a live message — then,
+    // for a hidden number, the id's digits it was filed under.
     $jid = (string) ($m['jid'] ?? '');
     $c = $jid !== '' ? db_row("SELECT * FROM contacts WHERE client_id=? AND wa_jid=?", [$cid, $jid]) : null;
     if (!$c) $c = db_row("SELECT * FROM contacts WHERE client_id=? AND phone_e164=?", [$cid, (string) $m['from']]);
+    $lidDigits = !empty($m['is_lid']) ? (preg_replace('/\D+/', '', explode('@', $jid)[0]) ?? '') : '';
+    if (!$c && $lidDigits !== '') $c = db_row("SELECT * FROM contacts WHERE client_id=? AND phone_e164=?", [$cid, $lidDigits]);
+    // The real number, where this message reveals it: a contact known only by WhatsApp's internal
+    // id gets it (unless another contact already has that number). Done even for a message already
+    // stored — re-syncing is how old conversations get their numbers.
+    if ($c && !empty($m['mapped']) && (string) $c['phone_e164'] !== (string) $m['from']
+        && ($lidDigits !== '' && (string) $c['phone_e164'] === $lidDigits || (string) $c['phone_e164'] === '')
+        && !db_val("SELECT 1 FROM contacts WHERE client_id=? AND phone_e164=? AND id<>?", [$cid, (string) $m['from'], (int) $c['id']])) {
+        db_run("UPDATE contacts SET phone_e164=?, wa_jid=COALESCE(wa_jid, NULLIF(?,'')) WHERE id=?", [(string) $m['from'], $jid, (int) $c['id']]);
+        $c = db_row("SELECT * FROM contacts WHERE id=?", [(int) $c['id']]);
+    }
+    if ($wamid !== '' && db_val("SELECT 1 FROM messages WHERE wa_message_id=? AND client_id=? LIMIT 1", [$wamid, $cid])) return 'seen';
+    if ($m['text'] === '' && $m['type'] === 'text') return 'skipped';                              // protocol messages, reactions…
     $at = $m['ts'] ? date('Y-m-d H:i:s', $m['ts']) : null;
     if (!$c) {
         // Someone from the phone's past: a contact (so the conversation has a name), not a new lead.

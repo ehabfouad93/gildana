@@ -509,4 +509,6 @@ return [
     'Sync past chats' => 'مزامنة المحادثات السابقة', 'Past chats: waiting to start' => 'المحادثات السابقة: في انتظار البدء',
     'Past chats come in when it links' => 'تُجلب المحادثات السابقة عند ربط الهاتف', 'Bring in this phone\'s past chats again' => 'جلب المحادثات السابقة لهذا الهاتف مرة أخرى',
     'Link the phone first.' => 'اربط الهاتف أولاً.', 'That is not a linked phone of this account.' => 'هذا ليس هاتفاً مربوطاً بهذا الحساب.',
+    'Number hidden by WhatsApp' => 'الرقم مخفي من واتساب', 'WhatsApp user' => 'مستخدم واتساب', '↻ Sync' => '↻ مزامنة', 'Syncing…' => 'جارٍ المزامنة…',
+    'There is no linked phone to sync. Link one in Settings → WhatsApp numbers.' => 'لا يوجد هاتف مربوط للمزامنة. اربط هاتفاً من الإعدادات ← أرقام واتساب.',
 ];
