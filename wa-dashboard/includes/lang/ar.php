@@ -514,4 +514,6 @@ return [
     'Sees in the Inbox' => 'يرى في صندوق الوارد', 'The numbers they send from' => 'الأرقام التي يرسل منها', 'Choose numbers' => 'اختيار الأرقام',
     'Only these numbers\' conversations appear in their Inbox. Messenger and Instagram are not affected.' => 'تظهر في صندوق الوارد محادثات هذه الأرقام فقط. لا يؤثر ذلك على ماسنجر وإنستجرام.',
     'Not connected — Admins only' => 'غير متصل — للمسؤولين فقط', 'Connected' => 'متصل',
+    'Only specific numbers' => 'أرقام محددة فقط', 'The same numbers they send from' => 'نفس الأرقام التي يرسل منها',
+    'Which numbers\' conversations appear in their Inbox. A number that is not connected is shown to Admins only. Messenger and Instagram are not affected.' => 'محادثات أي أرقام تظهر في صندوق الوارد الخاص به. الرقم غير المتصل يظهر للمسؤولين فقط. لا يؤثر ذلك على ماسنجر وإنستجرام.',
 ];

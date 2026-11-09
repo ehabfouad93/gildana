@@ -70,10 +70,12 @@ function team_phone_from_post(array $client): ?string
     return $n !== '' ? $n : null;
 }
 
-/** "Sees in the Inbox": null = the numbers they send from; otherwise the ticked ones. */
+/** "Sees in the Inbox": '*' = every number, the ticked ones, or null = the numbers they send from. */
 function team_inbox_lines_from_post(array $client): ?string
 {
-    if (($_POST['inbox_mode'] ?? '') !== 'pick') return null;
+    $mode = (string) ($_POST['inbox_mode'] ?? '');
+    if ($mode === 'all') return '*';
+    if ($mode !== 'pick') return null;
     $all = function_exists('wa_lines') ? wa_lines($client) : [];
     $keys = array_values(array_intersect(array_map('strval', (array) ($_POST['inbox_lines'] ?? [])), array_keys($all)));
     return implode(',', $keys);
@@ -189,6 +191,14 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
                 echo ($pc && $pc['status'] === 'connected')
                     ? ' <span class="pill green">linked' . (!empty($pc['msisdn']) ? ' +' . e((string) $pc['msisdn']) : '') . '</span>'
                     : ' <span class="pill gray" title="They link it from My WhatsApp">not linked yet</span>';
+            }
+            // Which numbers' conversations they see (Team → "Sees in the Inbox").
+            if (db_has_column('users', 'inbox_lines') && function_exists('wa_lines') && wa_lines_ready() && wa_lines($CLIENT)) {
+                $il = $p['inbox_lines'] ?? null;
+                $ilTxt = $il === null ? 'same as they send from'
+                       : ($il === '*' ? 'all numbers'
+                       : (implode(', ', array_map(fn($k) => wa_line_label($CLIENT, $k, false), array_filter(explode(',', (string) $il)))) ?: 'no numbers'));
+                echo '<div class="text-muted" style="font-size:11.5px;margin-top:3px">Inbox: ' . e($ilTxt) . '</div>';
             } ?></td>
           <td class="text-muted"><?= $p['last_login_at'] ? e(date('j M, H:i', strtotime((string) $p['last_login_at']))) : 'Never' ?></td>
           <td style="text-align: end;white-space:nowrap">
@@ -270,16 +280,17 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
         It can be banned by WhatsApp like any personal number.</span></div>
 
     <?php $tLines = function_exists('wa_lines') && wa_lines_ready() && db_has_column('users', 'inbox_lines') ? wa_lines($CLIENT) : []; ?>
-    <?php if (count($tLines) > 1): ?>
+    <?php if (count($tLines) >= 1): ?>
     <div class="field"><span class="lbl">Sees in the Inbox</span>
-      <label class="mod-all"><input type="radio" name="inbox_mode" value="" id="t-ibl-auto" checked> The numbers they send from</label>
-      <label class="mod-all"><input type="radio" name="inbox_mode" value="pick" id="t-ibl-pick"> Choose numbers</label>
+      <label class="mod-all"><input type="radio" name="inbox_mode" value="all" id="t-ibl-all" checked> All WhatsApp numbers</label>
+      <label class="mod-all"><input type="radio" name="inbox_mode" value="" id="t-ibl-auto"> The same numbers they send from</label>
+      <label class="mod-all"><input type="radio" name="inbox_mode" value="pick" id="t-ibl-pick"> Only specific numbers</label>
       <div class="mod-grid" id="t-ibl-list" hidden>
         <?php foreach ($tLines as $k => $l): ?>
           <label class="mod-opt"><input type="checkbox" class="t-ibl" name="inbox_lines[]" value="<?= e($k) ?>"> <?= e($l['label'] . ($l['phone'] !== '' ? ' (' . $l['phone'] . ')' : '')) ?></label>
         <?php endforeach; ?>
       </div>
-      <span class="text-muted" style="font-size:11.5px">Only these numbers' conversations appear in their Inbox. Messenger and Instagram are not affected.</span></div>
+      <span class="text-muted" style="font-size:11.5px">Which numbers' conversations appear in their Inbox. A number that is not connected is shown to Admins only. Messenger and Instagram are not affected.</span></div>
     <?php endif; ?>
 
     <div class="field"><span class="lbl">Their WhatsApp number, for alerts</span>
@@ -349,9 +360,12 @@ function teamOpen(p){
   $t('t-role').value         = edit ? p.role : 'sales';
   $t('t-send').value         = edit ? (p.send_via || '') : '';
   if ($t('t-ibl-pick')) {
-    const pick = edit && Array.isArray(p.inbox_lines);
-    $t('t-ibl-pick').checked = pick; $t('t-ibl-auto').checked = !pick;
-    document.querySelectorAll('.t-ibl').forEach(c => c.checked = pick && p.inbox_lines.includes(c.value));
+    // '*' = all numbers, a list = those, null = same as they send from (new people: all).
+    const il = edit ? p.inbox_lines : ['*'];
+    const all = Array.isArray(il) && il.length === 1 && il[0] === '*';
+    const pick = Array.isArray(il) && !all;
+    $t('t-ibl-all').checked = all; $t('t-ibl-pick').checked = pick; $t('t-ibl-auto').checked = !all && !pick;
+    document.querySelectorAll('.t-ibl').forEach(c => c.checked = pick && il.includes(c.value));
     $t('t-ibl-list').hidden = !pick;
   }
   $t('t-phone').value        = edit ? (p.phone ? '+' + p.phone : '') : '';

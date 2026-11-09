@@ -161,7 +161,8 @@ function inbox_visible_lines(array $client): ?array
 {
     $u = function_exists('sending_user') ? sending_user() : null;
     if (!$u || ($u['role'] ?? '') === 'admin') return null;
-    // Chosen on the Team page ("Sees in the Inbox"): exactly those numbers.
+    // Chosen on the Team page ("Sees in the Inbox"): every number, or exactly those numbers.
+    if (($u['inbox_lines'] ?? null) === '*') return null;
     $chosen = inbox_lines_of($u);
     if ($chosen !== null) return array_values(array_intersect($chosen, array_keys(wa_lines($client, true))));
     if (in_array((string) ($u['send_via'] ?? ''), ['', 'any', 'none'], true)) return null;
