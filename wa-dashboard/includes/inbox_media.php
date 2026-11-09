@@ -79,6 +79,8 @@ function inbox_media_get(array $msg): array
     }
     $client = db_row("SELECT * FROM clients WHERE id=?", [(int) $msg['client_id']]);
     if (!$client) return ['ok' => false, 'error' => 'Account not found.'];
+    // The number it came in on holds the file: that number's token, or that phone's session.
+    if (!empty($msg['line']) && function_exists('wa_line_client')) $client = wa_line_client($client, (string) $msg['line']) ?? $client;
     $ref = (string) ($msg['media_ref'] ?? '');
     $bytes = null;
 
@@ -106,7 +108,7 @@ function inbox_media_get(array $msg): array
         // Linked phone: the gateway finds the file by the message's id — also for messages that
         // arrived before files were saved. A salesperson's own phone holds its own messages.
         $row = $client;
-        if (($msg['via'] ?? '') === 'own') {
+        if (($msg['via'] ?? '') === 'own' && empty($msg['line'])) {
             $owner = (int) db_val("SELECT owner_user_id FROM contacts WHERE id=?", [(int) $msg['contact_id']]);
             $uc = $owner ? user_channel_for_media($owner) : null;
             if ($uc) $row = user_channel_client($client, $uc);

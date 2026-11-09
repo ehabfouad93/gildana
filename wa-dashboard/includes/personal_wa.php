@@ -53,8 +53,10 @@ function pw_cfg(): array
             'webhook_set' => '/webhook/set/{instance}',
             'send_text'   => '/message/sendText/{instance}',
             'send_img'    => '/message/sendMedia/{instance}',
+            'settings'    => '/settings/set/{instance}',
+            'find_msgs'   => '/chat/findMessages/{instance}',
         ],
-        'header'  => (string) (setting_get('pw_auth_header', 'apikey') ?? 'apikey'),
+        'header'  => trim((string) (setting_get('pw_auth_header', 'apikey') ?? '')) ?: 'apikey',      // a blank setting means the default
     ];
 }
 
@@ -162,7 +164,8 @@ function pw_webhook_payload(string $hook): array
         'byEvents' => false,
         'base64'   => false,
         // MESSAGES_UPDATE carries delivered / read receipts for what we send.
-        'events'   => ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE'],
+        // MESSAGING_HISTORY_SET: the past chats the phone hands over when it links (pw_history.php).
+        'events'   => ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE', 'MESSAGING_HISTORY_SET'],
     ];
 }
 
@@ -285,6 +288,9 @@ function pw_instance_create(array $client): array
         'instanceName' => $inst,
         'qrcode'       => true,
         'integration'  => 'WHATSAPP-BAILEYS',
+        // Ask the phone for its whole chat history when it links, and leave group chats out.
+        'syncFullHistory' => true,
+        'groupsIgnore'    => true,
         'webhook'      => pw_webhook_payload($hook),
     ]);
     // An instance that already exists is not an error — we just reuse it.
@@ -304,6 +310,9 @@ function pw_instance_create(array $client): array
     // it again here, unconditionally, via the dedicated endpoint means every connect (first
     // time or a reconnect) leaves the webhook correctly set, regardless of which branch fired.
     pw_set_webhook(['id' => (int) $client['id'], 'personal_instance' => $inst, 'personal_hook_secret' => $secret]);
+    // Same for an existing instance's settings: full history on the next link, no groups.
+    pw_request('POST', pw_path('settings', $inst), ['syncFullHistory' => true, 'groupsIgnore' => true, 'rejectCall' => false,
+                                                    'alwaysOnline' => false, 'readMessages' => false, 'readStatus' => false]);
 
     return ['ok' => true, 'instance' => $inst, 'secret' => $secret, 'error' => ''];
 }
@@ -616,6 +625,28 @@ function pw_parse_inbound_all(array $payload): array
     return $out;
 }
 
+function pw_timestamp($t): ?int
+{
+    if (is_array($t)) $t = $t['low'] ?? null;
+    if (is_numeric($t) && (int) $t > 1000000000) return (int) $t > 100000000000 ? intdiv((int) $t, 1000) : (int) $t;
+    return null;
+}
+
+/**
+ * One page of the messages the gateway keeps for this phone, newest first or oldest first —
+ * whichever the gateway does; the import does not depend on the order.
+ * @return array{ok:bool, records:array, pages:int, error:string}
+ */
+function pw_fetch_messages(array $client, int $page, int $per = 100): array
+{
+    $res = pw_request('POST', pw_path('find_msgs', pw_instance($client)), ['where' => new stdClass(), 'page' => $page, 'offset' => $per], 60);
+    if ($res['error'] !== '') return ['ok' => false, 'records' => [], 'pages' => 0, 'error' => $res['error']];
+    $j = $res['json'] ?? [];
+    // Evolution v2: {messages: {total, pages, currentPage, records: [...]}}; older builds: a plain list.
+    $records = $j['messages']['records'] ?? (isset($j['messages']) && array_is_list((array) $j['messages']) ? $j['messages'] : (array_is_list((array) $j) ? $j : []));
+    return ['ok' => true, 'records' => array_values(array_filter((array) $records, 'is_array')), 'pages' => (int) ($j['messages']['pages'] ?? 0), 'error' => ''];
+}
+
 /** Parse a single message object out of a gateway payload. */
 function pw_parse_one(array $d): ?array
 {
@@ -690,5 +721,7 @@ function pw_parse_one(array $d): ?array
         'media'   => function_exists('inbox_media_from_gateway') ? inbox_media_from_gateway($d) : [null, null, null],
         'from_me' => !empty($key['fromMe']),
         'name'    => (string) ($d['pushName'] ?? ''),
+        // When it was sent (seconds). Baileys gives a number, a numeric string or {low, high}.
+        'ts'      => pw_timestamp($d['messageTimestamp'] ?? ($d['timestamp'] ?? null)),
     ];
 }

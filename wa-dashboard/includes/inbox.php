@@ -147,24 +147,26 @@ function inbox_threads(int $clientId, string $q = '', int $limit = 200, string $
        unread counts worked out — for those rows alone. Counting unread for every contact before
        sorting took minutes on an account with 20,000 conversations. */
     $params = array_merge([$clientId], $params);
+    $cidSql = (int) $clientId;
     $rows = db_all(
         "SELECT t.*, m.body last_body, m.direction last_dir, m.type last_type, m.created_at last_at{$mx},
                 (SELECT COUNT(*) FROM messages mi
-                   WHERE mi.client_id=? AND mi.contact_id=t.contact_id AND mi.direction='in'
+                   WHERE mi.client_id=? AND mi.contact_id=t.contact_id AND mi.direction='in' AND COALESCE(mi.source,'')<>'history'
                      AND mi.created_at > COALESCE(t.inbox_read_at,'2000-01-01')) unread
-           FROM (SELECT c.id contact_id, c.phone_e164, c.name, c.last_inbound_at, c.inbox_read_at, lm.mid{$sx}
-                   FROM (SELECT contact_id, MAX(id) mid FROM messages WHERE client_id=? GROUP BY contact_id) lm
+           FROM (SELECT c.id contact_id, c.phone_e164, c.name, c.last_inbound_at, c.inbox_read_at, lm.mat{$sx}
+                   FROM (SELECT contact_id, MAX(created_at) mat FROM messages WHERE client_id=? GROUP BY contact_id) lm
                    JOIN contacts c ON c.id = lm.contact_id
                   WHERE c.client_id=?{$search}
-                  ORDER BY lm.mid DESC
+                  ORDER BY lm.mat DESC
                   LIMIT {$limit}) t
-           JOIN messages m ON m.id = t.mid
-          ORDER BY t.mid DESC",
+           JOIN messages m ON m.id = (SELECT x.id FROM messages x WHERE x.client_id={$cidSql} AND x.contact_id=t.contact_id
+                                       ORDER BY x.created_at DESC, x.id DESC LIMIT 1)
+          ORDER BY t.mat DESC, m.id DESC",
         array_merge([$clientId], $params)
     );
     $hide = function_exists('crm_phone_hidden') && crm_phone_hidden();
     foreach ($rows as &$r) {
-        unset($r['inbox_read_at'], $r['mid']);
+        unset($r['inbox_read_at'], $r['mat']);
         // The Inbox adds the "+" itself; a hidden number arrives already masked, without it.
         if ($hide && (string) $r['phone_e164'] !== '') $r['phone_e164'] = ltrim(crm_phone_mask((string) $r['phone_e164']), '+');
         $r['phone_e164'] = (string) ($r['phone_e164'] ?? '');
@@ -199,22 +201,23 @@ function inbox_threads_split(array $client, string $q, int $limit, string $chann
     $rows = db_all(
         "SELECT t.*, m.body last_body, m.direction last_dir, m.type last_type, m.created_at last_at, m.channel last_channel,
                 (SELECT COUNT(*) FROM messages mi
-                  WHERE mi.client_id=? AND mi.contact_id=t.contact_id AND COALESCE(mi.line,'')=t.line AND mi.direction='in'
+                  WHERE mi.client_id=? AND mi.contact_id=t.contact_id AND COALESCE(mi.line,'')=t.line AND mi.direction='in' AND COALESCE(mi.source,'')<>'history'
                     AND mi.created_at > COALESCE(t.read_at, '2000-01-01')) unread
            FROM (SELECT c.id contact_id, c.phone_e164, c.name, c.last_inbound_at, c.fb_psid IS NOT NULL has_fb, c.ig_sid IS NOT NULL has_ig, c.ig_username,
-                        lm.ln line, lm.mid, COALESCE(ir.read_at, c.inbox_read_at) read_at
-                   FROM (SELECT contact_id, COALESCE(line,'') ln, MAX(id) mid FROM messages WHERE client_id=? GROUP BY contact_id, COALESCE(line,'')) lm
+                        lm.ln line, lm.mat, COALESCE(ir.read_at, c.inbox_read_at) read_at
+                   FROM (SELECT contact_id, COALESCE(line,'') ln, MAX(created_at) mat FROM messages WHERE client_id=? GROUP BY contact_id, COALESCE(line,'')) lm
                    JOIN contacts c ON c.id = lm.contact_id
                    LEFT JOIN inbox_reads ir ON ir.contact_id = lm.contact_id AND ir.line = lm.ln
                   WHERE c.client_id=?{$where}
-                  ORDER BY lm.mid DESC LIMIT {$limit}) t
-           JOIN messages m ON m.id = t.mid
-          ORDER BY t.mid DESC",
+                  ORDER BY lm.mat DESC LIMIT {$limit}) t
+           JOIN messages m ON m.id = (SELECT x.id FROM messages x WHERE x.client_id={$clientId} AND x.contact_id=t.contact_id AND COALESCE(x.line,'')=t.line
+                                       ORDER BY x.created_at DESC, x.id DESC LIMIT 1)
+          ORDER BY t.mat DESC, m.id DESC",
         array_merge([$clientId, $clientId, $clientId], $p));
     $hide = function_exists('crm_phone_hidden') && crm_phone_hidden();
     $label = ['[audio]' => '🎤 Voice note', '[voice]' => '🎤 Voice note', '[image]' => '📷 Photo', '[video]' => '🎥 Video', '[document]' => '📎 File', '[sticker]' => 'Sticker'];
     foreach ($rows as &$r) {
-        unset($r['read_at'], $r['mid']);
+        unset($r['read_at'], $r['mat']);
         if ($hide && (string) $r['phone_e164'] !== '') $r['phone_e164'] = ltrim(crm_phone_mask((string) $r['phone_e164']), '+');
         $r['phone_e164'] = (string) ($r['phone_e164'] ?? '');
         $r['last_channel'] = (string) ($r['last_channel'] ?? 'whatsapp');
@@ -247,12 +250,17 @@ function inbox_thread(int $clientId, int $contactId, int $afterId = 0, int $limi
     foreach (['error_code', 'source_ref_id', 'template_id', 'media_mime', 'media_name', 'wa_message_id', 'media_ref', 'media_path', 'via', 'channel'] as $col) {
         if (db_has_column('messages', $col)) $extra .= ', ' . $col;
     }
-    $rows = db_all(
-        "SELECT id, direction, type, body, status, error_title, source, created_at{$extra}
-           FROM messages WHERE client_id=? AND contact_id=? AND id>?{$lineSql}
-          ORDER BY id ASC LIMIT {$limit}",
-        array_merge([$clientId, $contactId, $afterId], $lineP)
-    );
+    /* Opening a conversation shows its latest messages in the order they happened. Past chats
+       brought in from a linked phone (pw_history.php) arrive after newer messages and so have
+       higher ids — order by time, and keep them out of the "new since" poll, where they would
+       otherwise land at the bottom as if they had just been sent. */
+    $rows = $afterId > 0
+        ? db_all("SELECT id, direction, type, body, status, error_title, source, created_at{$extra}
+                    FROM messages WHERE client_id=? AND contact_id=? AND id>? AND COALESCE(source,'')<>'history'{$lineSql}
+                   ORDER BY id ASC LIMIT {$limit}", array_merge([$clientId, $contactId, $afterId], $lineP))
+        : array_reverse(db_all("SELECT id, direction, type, body, status, error_title, source, created_at{$extra}
+                    FROM messages WHERE client_id=? AND contact_id=?{$lineSql}
+                   ORDER BY created_at DESC, id DESC LIMIT {$limit}", array_merge([$clientId, $contactId], $lineP)));
     /* Meta's own wording is all the thread used to show — "This message was not delivered to
        maintain healthy ecosystem engagement" tells an agent nothing about whether the lead is
        reachable, whether it was their fault, or what to do next. Attach the plain-language
@@ -360,7 +368,7 @@ function inbox_unread_total(int $clientId, ?int $ownerId = null): int
     $own = $ownerId !== null ? ' AND c.owner_user_id = ?' : '';
     return (int) db_val(
         "SELECT COUNT(*) FROM messages m JOIN contacts c ON c.id=m.contact_id
-          WHERE m.client_id=? AND m.direction='in' AND m.created_at > COALESCE(c.inbox_read_at,'2000-01-01'){$own}",
+          WHERE m.client_id=? AND m.direction='in' AND COALESCE(m.source,'')<>'history' AND m.created_at > COALESCE(c.inbox_read_at,'2000-01-01'){$own}",
         $ownerId !== null ? [$clientId, $ownerId] : [$clientId]
     );
 }

@@ -86,6 +86,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && str_starts_with((string) ($_POST['a
         flash('Business API number added' . ($chk['phone'] ? ' (+' . $chk['phone'] . ')' : '') . '. Point its webhook at the same address as your main number.');
         redirect('settings.php#numbers');
     }
+    if ($a === 'nw_history') {
+        // Bring in a linked phone's past chats again (they also come in by themselves when it links).
+        require_once __DIR__ . '/../includes/pw_history.php';
+        $ln = (string) ($_POST['line'] ?? '');
+        $l = wa_lines($fresh)[$ln] ?? null;
+        if (!$l || $l['kind'] !== 'personal') $fail('That is not a linked phone of this account.');
+        if (!$l['ready']) $fail('Link the phone first.');
+        pw_history_start(wa_line_client($fresh, $ln) ?? $fresh, $ln);
+        flash('Bringing in the past chats of ' . $l['label'] . ' — they appear in the Inbox over the next minutes.');
+        redirect('settings.php#numbers');
+    }
     $n = wa_number((int) ($_POST['number'] ?? 0), $cid);
     if (!$n || !(int) $n['active']) $fail('That number is not on this account.');
     $lc = wa_line_client($fresh, 'n' . $n['id']);
@@ -355,6 +366,19 @@ function chNote(){
         <td><?= $l['kind'] === 'cloud' ? 'Business API' : 'Linked phone' ?></td>
         <td><span class="pill <?= $l['ready'] ? 'green' : 'red' ?>" id="nw-st-<?= e($k) ?>"><?= $l['ready'] ? 'Connected' : 'Not connected' ?></span></td>
         <td style="white-space:nowrap">
+          <?php if ($l['kind'] === 'personal'):
+            require_once __DIR__ . '/../includes/pw_history.php';
+            $hj = pw_history_last($cid, $k); ?>
+            <span class="text-muted" style="font-size:11.5px;display:block;margin-bottom:4px"><?php
+              if (!$hj) echo $l['ready'] ? 'Past chats: waiting to start' : 'Past chats come in when it links';
+              elseif (in_array($hj['status'], ['queued', 'running'], true)) echo 'Bringing in past chats… ' . (int) $hj['imported'] . ' so far';
+              elseif ($hj['status'] === 'done') echo 'Past chats: ' . number_format((int) $hj['imported']) . ' messages brought in, ' . e(date('j M', strtotime((string) $hj['updated_at'])));
+              else echo 'Past chats: ' . e((string) ($hj['error'] ?: 'not brought in')); ?></span>
+            <?php if ($nwAdmin && $l['ready'] && (!$hj || !in_array($hj['status'], ['queued', 'running'], true))): ?>
+              <form method="post" style="display:inline"><?= csrf_field() ?><input type="hidden" name="action" value="nw_history"><input type="hidden" name="line" value="<?= e($k) ?>">
+                <button class="btn btn-ghost btn-sm" title="Bring in this phone's past chats again">Sync past chats</button></form>
+            <?php endif; ?>
+          <?php endif; ?>
           <?php if ($nr && $nwAdmin): ?>
             <?php if ($nr['kind'] === 'personal'): ?>
               <button type="button" class="btn btn-ghost btn-sm" onclick="nwLink(<?= (int) $nr['id'] ?>, <?= e(json_encode($l['label'])) ?>)"><?= $l['ready'] ? 'Re-link' : 'Link phone' ?></button>

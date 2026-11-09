@@ -477,10 +477,13 @@ try {
             // Lead-form safety net: re-read connected forms for leads Meta never announced.
             // Throttled per form inside meta_poll(), so this is cheap on most passes.
             $formLeads = function_exists('meta_poll') ? meta_poll()['imported'] : 0;
+            $apps = [];
+            // Linked phones' past chats, a few pages per pass (includes/pw_history.php).
+            try { require_once __DIR__ . '/../includes/pw_history.php'; $apps['phone_history'] = pw_history_tick(); }
+            catch (Throwable $e) { out('Phone history: ' . $e->getMessage()); }
             // Connected apps (Shopify, Zoho): their queued calls, polls, abandoned carts and Zoho notes.
             // Before the CRM's clock, so order messages they queue go out in this same pass.
-            $apps = [];
-            try { require_once __DIR__ . '/../includes/integrations.php'; $apps = integrations_tick(); }
+            try { require_once __DIR__ . '/../includes/integrations.php'; $apps = integrations_tick() + $apps; }
             catch (Throwable $e) { out('Connected apps: ' . $e->getMessage()); }
             // The CRM's clock: follow-up reminders, the morning summary, response-time alerts,
             // taking back leads nobody contacted, stale leads, and fresh scores.

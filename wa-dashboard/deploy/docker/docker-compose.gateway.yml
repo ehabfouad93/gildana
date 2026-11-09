@@ -34,6 +34,9 @@ services:
       DATABASE_SAVE_MESSAGE_UPDATE: "false"
       DATABASE_SAVE_DATA_CONTACTS: "false"
       DATABASE_SAVE_DATA_CHATS: "false"
+      # A linked phone's past chats (handed over when it links) are kept here until the
+      # dashboard's worker has read them in — Settings → WhatsApp numbers → past chats.
+      DATABASE_SAVE_DATA_HISTORIC: "true"
 
       CACHE_REDIS_ENABLED: "true"
       CACHE_REDIS_URI: redis://evolution-redis:6379/6

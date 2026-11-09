@@ -65,7 +65,7 @@ function topbar_unread(array $user): int
     if (!$user) return 0;
     try {
         $sql = "SELECT COUNT(*) FROM messages m JOIN contacts c ON c.id = m.contact_id
-                 WHERE m.direction='in' AND m.created_at > COALESCE(c.inbox_read_at,'2000-01-01')";
+                 WHERE m.direction='in' AND COALESCE(m.source,'')<>'history' AND m.created_at > COALESCE(c.inbox_read_at,'2000-01-01')";
         if (($user['role'] ?? '') !== 'admin' && !empty($user['client_id'])) {
             return (int) db_val($sql . " AND c.client_id = ?", [(int) $user['client_id']]);
         }

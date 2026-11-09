@@ -506,4 +506,7 @@ return [
     'Any number — replies from the one they wrote to' => 'أي رقم — الرد من الرقم الذي راسلوه', 'Extra WhatsApp numbers the client may add' => 'عدد أرقام واتساب الإضافية المسموح بها للعميل',
     'Any of the account\'s numbers (chooses when sending)' => 'أي رقم من أرقام الحساب (يختار عند الإرسال)', 'Only the main Business API number' => 'رقم واتساب بيزنس الرئيسي فقط',
     'Only the company\'s main phone' => 'هاتف الشركة الرئيسي فقط', 'Their own phone' => 'هاتفه الشخصي', 'Cannot send' => 'لا يمكنه الإرسال',
+    'Sync past chats' => 'مزامنة المحادثات السابقة', 'Past chats: waiting to start' => 'المحادثات السابقة: في انتظار البدء',
+    'Past chats come in when it links' => 'تُجلب المحادثات السابقة عند ربط الهاتف', 'Bring in this phone\'s past chats again' => 'جلب المحادثات السابقة لهذا الهاتف مرة أخرى',
+    'Link the phone first.' => 'اربط الهاتف أولاً.', 'That is not a linked phone of this account.' => 'هذا ليس هاتفاً مربوطاً بهذا الحساب.',
 ];

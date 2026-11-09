@@ -96,6 +96,20 @@ respond_and_continue('ok');
 $data = json_decode($raw, true);
 if (!is_array($data)) exit;
 
+$ev = strtolower((string) ($data['event'] ?? ''));
+
+/* ── the phone's past chats, handed over when it links ──
+   Some gateway builds put the messages in the event; others only say how many they stored, and
+   the worker reads them from the gateway (pw_history_tick). Either way an import is queued. Not
+   kept in the raw log: one of these can carry thousands of messages. */
+if (str_contains($ev, 'history')) {
+    require_once __DIR__ . '/includes/pw_history.php';
+    $d = (array) ($data['data'] ?? []);
+    pw_history_store_all($client, (array) ($d['messages'] ?? (array_is_list($d) ? $d : [])));
+    pw_history_start($client, null, true);
+    exit;
+}
+
 // Best-effort raw log, same as the Cloud webhook (ignore duplicate deliveries).
 try {
     $key = substr(hash('sha256', 'pw' . $raw), 0, 60);
@@ -119,13 +133,17 @@ if ($receipts) {
 }
 
 /* ── connection-state events keep the client's status in sync (QR scanned, phone offline) ── */
-$ev = strtolower((string) ($data['event'] ?? ''));
 if (strpos($ev, 'connection') !== false) {
     $state = strtolower((string) ($data['data']['state'] ?? $data['state'] ?? ''));
     $mapped = in_array($state, ['open', 'connected'], true) ? 'connected'
             : (in_array($state, ['connecting', 'qr'], true) ? 'qr_pending' : 'disconnected');
     // To whichever phone this is — the company's or a salesperson's.
     pw_store($client, "personal_status=?, personal_connected_at=IF(?='connected', NOW(), personal_connected_at)", [$mapped, $mapped]);
+    // Just linked: bring in its past chats (pw_history.php).
+    if ($mapped === 'connected' && ($client['personal_status'] ?? '') !== 'connected') {
+        require_once __DIR__ . '/includes/pw_history.php';
+        pw_history_start($client);
+    }
     exit;
 }
 
