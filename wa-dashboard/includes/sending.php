@@ -20,16 +20,23 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/channel.php';
 require_once __DIR__ . '/personal_wa.php';
+require_once __DIR__ . '/numbers.php';
 
-function send_via_labels(): array
+function send_via_labels(?array $client = null): array
 {
-    return [
-        ''                 => 'The account\'s usual number',
-        'api'              => 'The WhatsApp Business API number',
-        'company_personal' => 'The company\'s linked phone',
-        'own'              => 'Their own phone',
-        'none'             => 'Cannot send',
+    $o = [
+        ''                 => 'Any of the account\'s numbers (chooses when sending)',
+        'api'              => 'Only the main Business API number',
+        'company_personal' => 'Only the company\'s main phone',
     ];
+    // The account's extra numbers (Settings → WhatsApp numbers): one person, one number.
+    if ($client && function_exists('wa_numbers_for')) {
+        $have = wa_lines($client);
+        if (!isset($have['api'])) unset($o['api']);
+        if (!isset($have['phone'])) unset($o['company_personal']);
+        foreach (wa_lines($client) as $k => $l) if ($k[0] === 'n') $o[$k] = 'Only ' . $l['label'] . ($l['phone'] !== '' ? ' (' . $l['phone'] . ')' : '');
+    }
+    return $o + ['own' => 'Their own phone', 'none' => 'Cannot send'];
 }
 
 /** This person's linked number, if they have started linking one. */
@@ -73,47 +80,25 @@ function user_channel_client(array $client, array $uc): array
 /**
  * The client row a send by this person should use, or why they cannot send.
  *
- * @param array|null $user the signed-in user's row; NULL (the system — bots, campaigns) keeps the
- *                         account's own channel, as before
- * @return array{ok:bool, client?:array, via:string, error?:string}
+ * Which numbers a person may use is the Admin's choice on the Team page (users.send_via):
+ * any of the account's numbers, one number, their own phone, or none. $line asks for one number
+ * (an Inbox conversation's, a "Send from" picker's); otherwise the contact's last number, then
+ * the account's usual one. See includes/numbers.php.
+ *
+ * @param array|null $user the signed-in user's row; NULL (the system — bots, campaigns) may use
+ *                         every business number
+ * @return array{ok:bool, client?:array, via:string, line?:string, error?:string}
  */
-function sender_for(array $client, ?array $user): array
+function sender_for(array $client, ?array $user, ?string $line = null, ?array $contact = null): array
 {
-    $accountVia = channel_is_personal($client) ? 'company_personal' : 'api';
-    // The system, and a platform operator working inside an account, send as the account does.
-    if (!$user || ($user['role'] ?? '') === 'admin') return ['ok' => true, 'client' => $client, 'via' => $accountVia];
-
-    $choice = (string) ($user['send_via'] ?? '');
-    switch ($choice) {
-        case '':
-            return ['ok' => true, 'client' => $client, 'via' => $accountVia];
-
-        case 'none':
-            return ['ok' => false, 'via' => 'none',
-                    'error' => 'Your account admin has not set you up to send messages. Ask them to choose a number for you on the Team page.'];
-
-        case 'api':
-            if (trim((string) ($client['phone_number_id'] ?? '')) === '') {
-                return ['ok' => false, 'via' => 'api', 'error' => 'This account has no WhatsApp Business API number connected, '
-                                                                 . 'so there is nothing to send from. Ask your admin.'];
-            }
-            return ['ok' => true, 'client' => array_merge($client, ['channel' => 'cloud']), 'via' => 'api'];
-
-        case 'company_personal':
-            if (($client['personal_status'] ?? '') !== 'connected') {
-                return ['ok' => false, 'via' => 'company_personal', 'error' => 'The company\'s phone is not linked right now, '
-                                                                            . 'so messages cannot go out from it. Ask your admin to reconnect it in Settings.'];
-            }
-            return ['ok' => true, 'client' => array_merge($client, ['channel' => 'personal']), 'via' => 'company_personal'];
-
-        case 'own':
-            $uc = user_channel((int) $user['id']);
-            if (!$uc || $uc['status'] !== 'connected') {
-                return ['ok' => false, 'via' => 'own', 'error' => 'Your own WhatsApp is not linked yet. Open My WhatsApp and scan the code with your phone.'];
-            }
-            return ['ok' => true, 'client' => user_channel_client($client, $uc), 'via' => 'own'];
+    // A client row already set to a line (an automation replying on the number it was written to) keeps it.
+    if ($line === null && isset($client['__line'])) $line = (string) $client['__line'];
+    if (!wa_lines_ready()) {
+        $via = channel_is_personal($client) ? 'company_personal' : 'api';
+        return ['ok' => true, 'client' => $client, 'via' => $via, 'line' => wa_line_default($client)];
     }
-    return ['ok' => false, 'via' => $choice, 'error' => 'Unknown sending setting.'];
+    $r = wa_line_pick($client, $user && ($user['role'] ?? '') !== 'admin' ? $user : null, $line, $contact);
+    return $r + ['via' => 'none'];
 }
 
 /** The signed-in user's full row, for sender_for(), when there is one. */

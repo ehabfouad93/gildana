@@ -223,7 +223,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     if ($a === 'send') {
         // Out through whatever this person's admin chose for them — see sender_for().
-        $r = inbox_send($CLIENT, $id, (string) ($_POST['message'] ?? ''));
+        $ln = (string) ($_POST['line'] ?? '');
+        $r = inbox_send($CLIENT, $id, (string) ($_POST['message'] ?? ''), $ln !== '' && wa_line_valid($ln) ? $ln : null);
         if ($r['ok']) { flash('Sent.'); $back('#timeline'); }
         $err = $r['error'] ?: 'The message could not be sent.';
     }
@@ -349,10 +350,12 @@ if ($hideBefore !== null) {
 $counts = array_count_values(array_column($feed, 'group'));
 
 /* What the send box can do for this person, worked out before drawing it. */
-$snd = sender_for($CLIENT, sending_user());
+$snd = sender_for($CLIENT, sending_user(), null, $lead);          // the number they last talked to, when this person may use it
 $sendOpen = $snd['ok'] && inbox_window_open($lead, $snd['client']);
-$viaText = ['api' => 'the WhatsApp Business API number', 'company_personal' => 'the company\'s phone',
-            'own' => 'your own WhatsApp'][$snd['via']] ?? 'the account\'s number';
+$sendLines = wa_lines_ready() ? wa_line_options($CLIENT, sending_user()) : [];
+$viaText = !empty($snd['line']) && count($sendLines) > 1 ? wa_line_label($CLIENT, (string) $snd['line'])
+         : (['api' => 'the WhatsApp Business API number', 'company_personal' => 'the company\'s phone',
+             'own' => 'your own WhatsApp'][$snd['via']] ?? 'the account\'s number');
 
 $due  = $lead['next_followup_at'] ? strtotime((string) $lead['next_followup_at']) : 0;
 $dueState = !$due ? '' : ($due < time() ? 'late' : (date('Y-m-d', $due) === date('Y-m-d') ? 'today' : 'later'));
@@ -970,7 +973,14 @@ $ownerName = crm_user_name($lead['owner_user_id'] !== null ? (int) $lead['owner_
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap" class="mt10">
         <button class="btn btn-primary btn-sm">Send on WhatsApp</button>
         <?php if ($aiOn): ?><button type="button" class="btn btn-ghost btn-sm" id="ai-suggest" title="Write a reply from the conversation — check it before sending">Suggest a reply</button><?php endif; ?>
+        <?php if (count($sendLines) > 1): ?>
+          <label class="text-muted" style="font-size:12px;display:flex;gap:6px;align-items:center">From
+            <select name="line" style="width:auto;padding:4px 6px;font-size:12.5px">
+              <?php foreach ($sendLines as $k => $lbl): ?><option value="<?= e($k) ?>" <?= $k === ($snd['line'] ?? '') ? 'selected' : '' ?>><?= e($lbl) ?></option><?php endforeach; ?>
+            </select></label>
+        <?php else: ?>
         <span class="text-muted" style="font-size:12px">Goes out from <?= e($viaText) ?></span>
+        <?php endif; ?>
       </div>
     </form>
   <?php endif; ?>

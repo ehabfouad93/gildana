@@ -33,5 +33,16 @@ try {
         $r['ok'] ? $ok++ : $bad++;
     }
 } catch (Throwable $e) { echo "(salesperson phones skipped: " . $e->getMessage() . ")\n"; }
+try {
+    // The accounts' extra linked phones (Settings → WhatsApp numbers).
+    foreach (db_all("SELECT * FROM wa_numbers WHERE kind='personal' AND active=1 AND COALESCE(hook_secret,'')<>''") as $n) {
+        $base = db_row("SELECT * FROM clients WHERE id=?", [(int) $n['client_id']]);
+        $lc = $base ? wa_line_client($base, 'n' . $n['id']) : null;
+        if (!$lc) continue;
+        $r = pw_set_webhook($lc);
+        echo ($r['ok'] ? '✓ ' : '✗ ') . $base['name'] . ' — ' . ($n['label'] ?: 'extra phone') . ($r['ok'] ? '' : ' — ' . $r['error']) . "\n";
+        $r['ok'] ? $ok++ : $bad++;
+    }
+} catch (Throwable $e) { echo "(extra phones skipped: " . $e->getMessage() . ")\n"; }
 echo "\nDone: $ok updated, $bad failed.\n";
 exit($bad ? 1 : 0);

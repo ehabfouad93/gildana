@@ -125,6 +125,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $ready) {
     }
     if ($a === 'save_messages') {
         $events = integration_message_events((string) $it['provider']);
+        // Which WhatsApp number these messages go from ('' = the customer's last Business API number, else the main one).
+        if (function_exists('wa_lines') && wa_lines_ready()) {
+            $ln = (string) ($_POST['line'] ?? '');
+            $s['line'] = $ln !== '' && (wa_lines($CLIENT)[$ln]['kind'] ?? '') === 'cloud' ? $ln : '';
+        }
         foreach ($events as $ev => $_) {
             $p = (array) ($_POST['m'][$ev] ?? []);
             $r = $s['messages'][$ev] ?? [];
@@ -413,6 +418,13 @@ page_head((string) ($it['display_name'] ?: $it['account']), '<a class="btn btn-g
     Variables: <?= implode(' ', array_map(fn($k) => '<code>{{' . $k . '}}</code>', array_merge(['first_name'], array_keys(integration_order_vars())))) ?></p>
   <form method="post" id="msgs"><?= csrf_field() ?><input type="hidden" name="action" value="save_messages">
   <fieldset <?= $isAdmin ? '' : 'disabled' ?> style="border:0;padding:0;margin:0">
+  <?php $apLines = function_exists('wa_lines') && wa_lines_ready() ? array_filter(wa_lines($CLIENT), fn($l) => $l['kind'] === 'cloud') : [];
+    if (count($apLines) > 1): ?>
+    <div class="field" style="max-width:460px"><span class="lbl">Send WhatsApp messages from</span>
+      <select name="line"><option value="">The Business API number the customer last talked to (else the main one)</option>
+        <?php foreach ($apLines as $k => $l): ?><option value="<?= e($k) ?>" <?= ($s['line'] ?? '') === $k ? 'selected' : '' ?>><?= e($l['label'] . ($l['phone'] !== '' ? ' (' . $l['phone'] . ')' : '')) ?></option><?php endforeach; ?>
+      </select></div>
+  <?php endif; ?>
   <?php foreach ($events as $ev => $label): $r = $s['messages'][$ev]; $n = "m[$ev]"; ?>
     <div class="ap-rule" data-off="<?= empty($r['on']) ? 1 : 0 ?>" data-ev="<?= e($ev) ?>">
       <div class="ap-rule-head"><label class="mod-all" style="margin:0"><input type="checkbox" name="<?= $n ?>[on]" value="1" <?= !empty($r['on']) ? 'checked' : '' ?> onchange="this.closest('.ap-rule').dataset.off=this.checked?0:1"> <strong><?= e($label) ?></strong></label>

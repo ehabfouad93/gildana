@@ -4,6 +4,13 @@ require __DIR__ . '/_init.php';
 require_once __DIR__ . '/../includes/campaign.php';
 
 $cid = (int) $CLIENT['id'];
+require_once __DIR__ . '/../includes/sending.php';
+/* Send from: which WhatsApp number this campaign goes out on (only those this person may use).
+   A linked phone writes its own text; a Business API number sends an approved template. */
+$fromOpts = wa_lines_ready() ? wa_line_options($CLIENT, sending_user()) : [];
+$fromLine = (string) ($_POST['line'] ?? $_GET['from'] ?? '');
+if (!isset($fromOpts[$fromLine])) $fromLine = isset($fromOpts[wa_line_default($CLIENT)]) ? wa_line_default($CLIENT) : (string) (array_key_first($fromOpts) ?? '');
+$fromKind = $fromLine !== '' ? (wa_lines($CLIENT, true)[$fromLine]['kind'] ?? 'cloud') : (channel_is_personal($CLIENT) ? 'personal' : 'cloud');
 
 /* ── AJAX: opted-in recipient count for a list ── */
 if (isset($_GET['count'])) {
@@ -57,7 +64,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
     $templateId = (int) ($_POST['template_id'] ?? 0);
     $listId     = (int) ($_POST['list_id'] ?? 0);
     // A personal number has no approved templates — the campaign carries its own text.
-    $isPersonal = channel_is_personal($CLIENT);
+    $isPersonal = $fromKind === 'personal';
     $bodyText   = trim((string) ($_POST['body_text'] ?? ''));
     $bodyMedia  = trim((string) ($_POST['body_media'] ?? ''));   // optional image, sent with the text as its caption
     $when       = (string) ($_POST['when'] ?? 'now');
@@ -167,6 +174,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
                      $followFlowId, $followTrigger, $followDelay, $followAudience,
                      count($recipients), $scheduledAt ? null : date('Y-m-d H:i:s')]
                 );
+                if ($fromLine !== '' && wa_lines_ready()) db_run("UPDATE campaigns SET line=? WHERE id=?", [$fromLine, $campaignId]);
 
                 $ins = $pdo->prepare(
                     "INSERT INTO campaign_messages (campaign_id,client_id,contact_id,phone_e164,rendered_components,status,updated_at)
@@ -216,7 +224,7 @@ if (!client_ready($CLIENT)): ?>
   <?php layout_footer(); exit;
 endif;
 
-$PERSONAL = channel_is_personal($CLIENT);
+$PERSONAL = $fromKind === 'personal';
 // Templates are a Cloud API concept — a personal number has none and needs none.
 if (!$PERSONAL && !$templates): ?>
   <div class="alert info">You have no <strong>approved</strong> templates yet. Go to <a href="templates.php">Templates</a> and sync them first.</div>
@@ -236,6 +244,13 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
   <div class="card">
     <h2>1 · Campaign &amp; Message</h2>
     <div class="field"><span class="lbl">Campaign Name</span><input type="text" name="name" value="<?= old('name', (string) ($copy['name'] ?? '')) ?>" placeholder="e.g. July Promo" required></div>
+    <?php if (count($fromOpts) > 1): ?>
+      <div class="field" style="max-width:460px"><span class="lbl">Send from</span>
+        <select name="line" id="camp-line" onchange="if (this.dataset.kind !== this.selectedOptions[0].dataset.kind) { const u = new URL(location.href); u.searchParams.set('from', this.value); location.href = u.toString(); }" data-kind="<?= e($fromKind) ?>">
+          <?php foreach ($fromOpts as $k => $lbl): ?><option value="<?= e($k) ?>" data-kind="<?= e(wa_lines($CLIENT, true)[$k]['kind'] ?? 'cloud') ?>" <?= $k === $fromLine ? 'selected' : '' ?>><?= e($lbl) ?></option><?php endforeach; ?>
+        </select>
+        <span class="text-muted" style="font-size:12px">Replies come back to this number's conversations in the Inbox.<?= $fromKind === 'cloud' ? ' The template must exist in this number\'s WhatsApp Business Account.' : '' ?></span></div>
+    <?php elseif ($fromLine !== ''): ?><input type="hidden" name="line" value="<?= e($fromLine) ?>"><?php endif; ?>
 
     <?php if ($PERSONAL): ?>
       <!-- Personal number: no approved templates exist, so the message is written here. -->

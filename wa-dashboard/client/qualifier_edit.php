@@ -12,7 +12,12 @@ if (!$flow) { http_response_code(404); exit('Qualifier not found.'); }
 
 $err = '';
 // A personal number has no approved templates, so the cold first message is written here.
-$PERSONAL = channel_is_personal($CLIENT);
+/* Send from: the number this qualifier messages its leads from. A linked phone writes its own
+   first message; a Business API number sends an approved template. */
+$fromOpts = wa_lines_ready() ? wa_line_options($CLIENT, null) : [];
+$fromLine = (string) ($_POST['line'] ?? $_GET['from'] ?? ($flow['line'] ?? ''));
+if (!isset($fromOpts[$fromLine])) $fromLine = isset($fromOpts[wa_line_default($CLIENT)]) ? wa_line_default($CLIENT) : (string) (array_key_first($fromOpts) ?? '');
+$PERSONAL = $fromLine !== '' ? (wa_lines($CLIENT)[$fromLine]['kind'] ?? 'cloud') === 'personal' : channel_is_personal($CLIENT);
 
 /* ── Send now: import new leads + send outreach + retry stuck ones ── */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'send_now') {
@@ -135,6 +140,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save'
 
         db_run("UPDATE flows SET name=?, source_config=?, hot_min=?, warm_min=?, first_step_id=?, updated_at=NOW() WHERE id=?",
             [$name, $sourceConfig, $hotMin, $warmMin, $ids[0] ?? null, $id]);
+        if (wa_lines_ready()) db_run("UPDATE flows SET line=? WHERE id=?", [$fromLine !== '' ? $fromLine : null, $id]);
         $pdo->commit();
         flash('Qualifier saved.');
         redirect('qualifier_edit.php?id=' . $id);
@@ -212,6 +218,13 @@ client_header('Qualifier · ' . $flow['name'], 'qualifier', $CLIENT);
     <h2>1 · Lead source (Google Sheet)</h2>
     <div class="alert info" style="font-size:12px">In Google Sheets: File → Share → <strong>Publish to web</strong> → choose the sheet → <strong>CSV</strong> → copy the link. The sheet must contain a phone column (opted-in contacts only).</div>
     <div class="field"><span class="lbl">Name</span><input type="text" name="name" value="<?= e((string) $flow['name']) ?>" required></div>
+    <?php if (count($fromOpts) > 1): ?>
+      <div class="field" style="max-width:460px"><span class="lbl">Send from</span>
+        <select name="line" data-kind="<?= $PERSONAL ? 'personal' : 'cloud' ?>" onchange="if (this.dataset.kind !== this.selectedOptions[0].dataset.kind) { if (confirm('This number writes its first message differently (template / own text). Reload the form for it? Unsaved changes are lost.')) { const u = new URL(location.href); u.searchParams.set('from', this.value); location.href = u.toString(); } else this.value = <?= e(json_encode($fromLine)) ?>; }">
+          <?php foreach ($fromOpts as $k => $lbl): ?><option value="<?= e($k) ?>" data-kind="<?= e(wa_lines($CLIENT)[$k]['kind'] ?? 'cloud') ?>" <?= $k === $fromLine ? 'selected' : '' ?>><?= e($lbl) ?></option><?php endforeach; ?>
+        </select>
+        <div class="hint">Leads are messaged from this number, and their replies come back to its conversations.</div></div>
+    <?php elseif ($fromLine !== ''): ?><input type="hidden" name="line" value="<?= e($fromLine) ?>"><?php endif; ?>
     <div class="field"><span class="lbl">Published CSV URL</span><input type="text" name="csv_url" value="<?= e((string) ($sc['csv_url'] ?? '')) ?>" placeholder="https://docs.google.com/spreadsheets/.../pub?output=csv"></div>
     <div class="grid3">
       <div class="field"><span class="lbl">Phone column</span><input type="text" name="map_phone" value="<?= e((string) ($sc['column_map']['phone'] ?? '')) ?>" placeholder="phone"></div>

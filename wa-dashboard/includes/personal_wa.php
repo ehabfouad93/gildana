@@ -246,6 +246,15 @@ function pw_rotate_hook_secret(array $client): array
 function pw_store(array $client, string $set, array $params): void
 {
     $uc = (int) ($client['__user_channel'] ?? 0);
+    $wn = (int) ($client['__wa_number'] ?? 0);
+    if ($wn > 0) {
+        // An extra linked phone (Settings → WhatsApp numbers): its own row, same column names as user_channels.
+        $map = ['personal_hook_secret_prev' => 'hook_secret_prev', 'personal_hook_rotated_at' => 'hook_rotated_at',
+                'personal_connected_at' => 'connected_at', 'personal_hook_secret' => 'hook_secret',
+                'personal_instance' => 'instance', 'personal_status' => 'status', 'personal_msisdn' => 'msisdn'];
+        db_run("UPDATE wa_numbers SET " . strtr($set, $map) . " WHERE id=?", array_merge($params, [$wn]));
+        return;
+    }
     if ($uc <= 0) {
         db_run("UPDATE clients SET {$set} WHERE id=?", array_merge($params, [(int) $client['id']]));
         return;

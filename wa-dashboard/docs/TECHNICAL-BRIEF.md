@@ -88,7 +88,8 @@
 |---|---|
 | Tenancy & users | `clients`, `users`, `user_channels`, `login_attempts`, `plans`, `usage_periods` |
 | Credits & billing | `credit_transactions`, `message_charges`, `wa_rates`, `ai_rates`, `ai_usage` |
-| Contacts & messaging | `contacts`, `contact_lists`, `contact_list_members`, `messages`, `templates`, `media_cache`, `webhook_events`, `inbound_log` |
+| Contacts & messaging | `contacts` (`last_line`), `contact_lists`, `contact_list_members`, `messages` (`line`), `templates` (`waba_id`), `media_cache`, `webhook_events`, `inbound_log`, `inbox_reads` |
+| WhatsApp numbers | `wa_numbers` (extra Business API numbers and linked phones per account; limit `clients.max_numbers`), `user_channels` (salespeople's own phones) |
 | Campaigns | `campaigns`, `campaign_messages` (queue + delivery log), `send_attempts`, `wa_ads` |
 | Automations / qualifier / agent | `flows` (`kind`: bot, qualifier, agent), `flow_steps`, `flow_triggers`, `flow_runs`, `flow_step_events`, `flow_messages`, `flow_collected`, `flow_exports`, `flow_templates` |
 | CRM | `crm_stages`, `crm_substatuses`, `crm_projects`, `crm_options`, `crm_fields`, `crm_events`, `crm_notes`, `crm_visits`, `crm_rules`, `crm_teams`, `crm_targets`, `crm_transfers`, `crm_requests`, `crm_views`, `crm_settings`, `crm_audit`, `crm_imports`, `crm_import_items`, `crm_materials`, `crm_notices`, `crm_stage_msgs`, `crm_sequences`, `crm_seq_steps`, `crm_seq_runs`, `crm_msg_queue`, `sales_events`, `sales_event_guests` |
@@ -116,6 +117,7 @@ Period-based KPIs vs the previous period (messages, read rate, reply time, credi
 - Failure explanation ladder `wa_error_explain()` (`includes/whatsapp.php`) → label, hint, action (`later` = resendable, `fix`, `never`); "Send again" / "Try another template".
 - Human takeover pauses bots (`contacts.bot_paused_until`); "Add to CRM".
 - Facebook & Instagram connect banner (`social_connect_banner()`).
+- Several WhatsApp numbers: one conversation per customer **and number** (`inbox_threads_split()`; Messenger / Instagram / SMS form their own thread), a number filter, per-thread unread (`inbox_reads`), the 24-hour window judged per number, replies from the conversation's number. With one number the Inbox is unchanged (`inbox_split()`). People given a single number see only its conversations.
 
 ### 4.3 Comments — `client/comments.php`, `includes/social.php`
 Facebook Page and Instagram comments grouped by post; filters; public reply, one private reply, hide, delete, add to CRM. Rules (`social_rules`): **moderate** (phone / link / keywords / AI → hide or delete) and **reply** (keywords → public reply and/or DM). `social_comment_event()` is the single entry for webhook and polling.
@@ -179,6 +181,14 @@ Tabbed: messaging, campaigns, templates, failures, automations, ad clicks, SMS. 
 
 ### 4.14 Billing & credits — `client/billing.php`, `includes/credits.php`, `includes/billing.php`
 Ledger `credit_transactions`; `credits_adjust()`, `credits_reserve()`/`credits_release()`; plans with monthly included credits (`billing_renew()` in the worker); per-category WhatsApp rates; low-credit alerts.
+
+### 4.15a Several WhatsApp numbers — `includes/numbers.php`, Settings → WhatsApp numbers
+- Every number an account sends from is a **line**: `api` (main Business API number), `phone` (main linked phone), `n<id>` (extra number, `wa_numbers`), `u<id>` (a salesperson's own phone). The key is written on every WhatsApp message (`messages.line`) and remembered per contact (`contacts.last_line`).
+- `wa_line_client($client, $line)` returns the client row with that line's credentials in place, so every send function works unchanged; `pw_store()` writes a linked phone's session to `clients`, `wa_numbers` or `user_channels`.
+- Inbound: `wa_client_by_pnid()` (Cloud webhook, by `phone_number_id`) and the per-number webhook secret (`webhook_personal.php`) pick the account and line; automations reply on the line they were written to (`flow_runs.line`).
+- Adding: the client's Admin adds Business API numbers (checked with Meta, own token / app secret / WABA optional) and links phones by QR, up to `clients.max_numbers` (set by the platform admin on the client's page). Templates are synced from each extra number's WABA too (`templates.waba_id`).
+- Who sends from which: `users.send_via` = any number (`''`, chooses when sending), one number (`api`, `company_personal`, `n<id>`), own phone, or none; `wa_lines_for_user()` / `wa_line_pick()` / `sender_for()`.
+- "Send from" everywhere: campaigns (`campaigns.line`; the worker sends per account and number), automations and the Lead Qualifier (`flows.line` — an automation limited to a number answers only that number), CRM automatic messages (`crm_settings.auto_line`, else the lead's last API number), connected-app messages (integration setting `line`), the lead page.
 
 ### 4.15 Team & permissions — `client/team.php`, `includes/permissions.php`
 Roles `admin`, `sales`, `viewer` (+ team leader via `crm_teams`); per-user module lists; `can_use()`, `can_write()`, `is_client_admin()`, `crm_scope()` for row-level visibility.

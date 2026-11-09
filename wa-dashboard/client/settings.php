@@ -49,6 +49,72 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array(($_POST['action'] ?? ''), 
 }
 
 /* ── Google: start / stop the connection ── */
+/* ── WhatsApp numbers: the account's extra Business API numbers and linked phones ──
+   How many the account may add is set by the platform admin (clients.max_numbers). Only the
+   account's Admin adds, renames, links or removes them. See includes/numbers.php. */
+require_once __DIR__ . '/../includes/sending.php';
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && str_starts_with((string) ($_POST['action'] ?? ''), 'nw_')) {
+    verify_csrf();
+    $a = (string) $_POST['action'];
+    $ajax = in_array($a, ['nw_connect', 'nw_qr', 'nw_status', 'nw_pair', 'nw_logout', 'nw_resync'], true);
+    $fail = function (string $e) use ($ajax) { if ($ajax) json_out(['ok' => false, 'error' => $e]); flash($e, 'error'); redirect('settings.php#numbers'); };
+    if (!is_client_admin()) $fail('Only an Admin of the account can change its WhatsApp numbers.');
+    $fresh = db_row("SELECT * FROM clients WHERE id=?", [$cid]) ?: [];
+    if ($a === 'nw_add_cloud' || $a === 'nw_add_phone') {
+        if (wa_numbers_room($fresh) <= 0) $fail('Your account has no room for another number. Ask ' . BRAND_PARENT . ' to raise the limit.');
+        $label = mb_substr(trim((string) ($_POST['label'] ?? '')), 0, 60);
+        if ($a === 'nw_add_phone') {
+            if (!pw_configured()) $fail('Linking phones is not available on this platform yet — contact ' . BRAND_PARENT . '.');
+            $id = db_insert("INSERT INTO wa_numbers (client_id,kind,label,status,created_by,created_at) VALUES (?, 'personal', ?, 'disconnected', ?, NOW())", [$cid, $label, (int) ($PERM_USER['id'] ?? 0) ?: null]);
+            db_run("UPDATE wa_numbers SET instance=? WHERE id=?", ['client' . $cid . 'n' . $id, $id]);
+            flash('Phone added. Scan the code below with that phone to link it.');
+            redirect('settings.php?link=' . $id . '#numbers');
+        }
+        if (!client_may_edit_credentials($fresh) && !is_impersonating()) $fail('Your WhatsApp is managed by ' . BRAND_PARENT . ' — ask them to add the number.');
+        $pnid = preg_replace('/\D/', '', (string) ($_POST['phone_number_id'] ?? ''));
+        $waba = preg_replace('/\D/', '', (string) ($_POST['waba_id'] ?? ''));
+        if (strlen($pnid) < 5) $fail('Enter the Phone Number ID from Meta (WhatsApp Manager → Phone numbers).');
+        if ($pnid === (string) ($fresh['phone_number_id'] ?? '') || db_val("SELECT 1 FROM wa_numbers WHERE phone_number_id=?", [$pnid]) || db_val("SELECT 1 FROM clients WHERE phone_number_id=?", [$pnid])) $fail('That Phone Number ID is already connected.');
+        $tok = trim((string) ($_POST['access_token'] ?? '')); $sec = trim((string) ($_POST['app_secret'] ?? ''));
+        $row = ['phone_number_id' => $pnid, 'waba_id' => $waba ?: null, 'access_token_enc' => $tok !== '' ? encrypt_secret($tok) : null, 'app_secret_enc' => $sec !== '' ? encrypt_secret($sec) : null];
+        // Check it with Meta before saving, so a wrong id is caught now rather than at the first send.
+        $chk = wa_number_check(array_merge($fresh, ['phone_number_id' => $pnid, 'access_token_enc' => $row['access_token_enc'] ?? $fresh['access_token_enc']]));
+        if (!$chk['ok']) $fail('Meta did not accept that number with this account\'s access: ' . $chk['error']);
+        db_insert("INSERT INTO wa_numbers (client_id,kind,label,phone_number_id,waba_id,display_phone,access_token_enc,app_secret_enc,status,created_by,created_at)
+                   VALUES (?, 'cloud', ?, ?, ?, ?, ?, ?, 'connected', ?, NOW())",
+                  [$cid, $label ?: mb_substr($chk['name'], 0, 60), $pnid, $row['waba_id'], $chk['phone'] ?: null, $row['access_token_enc'], $row['app_secret_enc'], (int) ($PERM_USER['id'] ?? 0) ?: null]);
+        flash('Business API number added' . ($chk['phone'] ? ' (+' . $chk['phone'] . ')' : '') . '. Point its webhook at the same address as your main number.');
+        redirect('settings.php#numbers');
+    }
+    $n = wa_number((int) ($_POST['number'] ?? 0), $cid);
+    if (!$n || !(int) $n['active']) $fail('That number is not on this account.');
+    $lc = wa_line_client($fresh, 'n' . $n['id']);
+    if ($a === 'nw_rename') {
+        db_run("UPDATE wa_numbers SET label=? WHERE id=?", [mb_substr(trim((string) ($_POST['label'] ?? '')), 0, 60), (int) $n['id']]);
+        flash('Saved.'); redirect('settings.php#numbers');
+    }
+    if ($a === 'nw_remove') {
+        if ($n['kind'] === 'personal' && pw_configured()) pw_logout($lc);
+        db_run("UPDATE wa_numbers SET active=0, status='disconnected' WHERE id=?", [(int) $n['id']]);
+        db_run("UPDATE users SET send_via=NULL WHERE client_id=? AND send_via=?", [$cid, 'n' . $n['id']]);
+        flash('Number removed. Its conversations stay in the Inbox.'); redirect('settings.php#numbers');
+    }
+    if ($n['kind'] !== 'personal') $fail('Only a linked phone has a QR code.');
+    if (!pw_configured()) $fail('The WhatsApp gateway is not set up yet — contact support.');
+    if ($a === 'nw_connect') {
+        $r = pw_instance_create($lc);
+        if (empty($r['ok'])) json_out(['ok' => false, 'error' => $r['error']]);
+        $q = pw_qr(wa_line_client($fresh, 'n' . $n['id']));
+        json_out(['ok' => $q['ok'], 'qr' => $q['qr'], 'error' => $q['error']]);
+    }
+    if ($a === 'nw_qr')     { $q = pw_qr($lc); json_out(['ok' => $q['ok'], 'qr' => $q['qr'], 'error' => $q['error']]); }
+    if ($a === 'nw_pair')   { $r = pw_pair_code($lc, (string) ($_POST['msisdn'] ?? '')); json_out(['ok' => $r['ok'], 'code' => $r['code'], 'error' => $r['error']]); }
+    if ($a === 'nw_logout') { pw_logout($lc); json_out(['ok' => true]); }
+    if ($a === 'nw_resync') { $r = pw_set_webhook($lc); json_out(['ok' => $r['ok'], 'error' => $r['error']]); }
+    $st = pw_status($lc);
+    json_out(['ok' => true, 'state' => $st['state'], 'msisdn' => $st['msisdn'], 'error' => $st['error']]);
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'google_connect') {
     verify_csrf();
     if (!google_configured()) {
@@ -220,8 +286,8 @@ $hasPersonal = pw_configured();
 <div class="card" id="channel">
   <h2>Sending Channel</h2>
   <p class="text-muted" style="font-size:12.5px;margin:-6px 0 14px">
-    Where your messages go out from. Campaigns, Automations, the Lead Qualifier and the Inbox all
-    follow this one setting — switch it and every module follows immediately.
+    Your account's usual number: what campaigns, automations, the Lead Qualifier and the Inbox use when nothing
+    else chooses one. With several numbers (WhatsApp numbers, below), each of them can also pick its own.
   </p>
   <form method="post">
     <?= csrf_field() ?><input type="hidden" name="action" value="save_channel">
@@ -264,6 +330,121 @@ function chNote(){
   document.getElementById('ch-note-cloud').style.display    = p ? 'none' : 'block';
 }
 </script>
+
+<?php if (wa_lines_ready()):
+  $nwAdmin = is_client_admin();
+  $nwLines = wa_lines($CLIENT);
+  $nwRows  = [];
+  foreach (wa_numbers_for($cid) as $nr) $nwRows[(int) $nr['id']] = $nr;
+  $nwRoom  = wa_numbers_room($CLIENT);
+  $nwCanApi = client_may_edit_credentials($CLIENT) || is_impersonating();
+  $nwLink  = (int) ($_GET['link'] ?? 0); ?>
+<div class="card" id="numbers">
+  <h2>WhatsApp numbers</h2>
+  <p class="text-muted" style="font-size:12.5px;margin:-6px 0 14px">
+    Every number your account sends from. Each one has its own conversations in the Inbox, and wherever you send — campaigns, automations, the Lead Qualifier, the CRM —
+    you choose which number it goes from. On the Team page, decide who may use which number.
+  </p>
+  <div class="table-wrap"><table class="data">
+    <thead><tr><th>Number</th><th>Type</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+    <?php foreach ($nwLines as $k => $l): $nr = isset($l['id']) ? ($nwRows[$l['id']] ?? null) : null; ?>
+      <tr data-line="<?= e($k) ?>">
+        <td><strong><?= e($l['label']) ?></strong><?php if ($l['phone'] !== ''): ?> <span class="text-muted ltr" style="unicode-bidi:isolate"><?= e($l['phone']) ?></span><?php endif; ?>
+          <?php if (!$nr): ?><span class="pill gray" style="margin-inline-start:6px">Main</span><?php endif; ?></td>
+        <td><?= $l['kind'] === 'cloud' ? 'Business API' : 'Linked phone' ?></td>
+        <td><span class="pill <?= $l['ready'] ? 'green' : 'red' ?>" id="nw-st-<?= e($k) ?>"><?= $l['ready'] ? 'Connected' : 'Not connected' ?></span></td>
+        <td style="white-space:nowrap">
+          <?php if ($nr && $nwAdmin): ?>
+            <?php if ($nr['kind'] === 'personal'): ?>
+              <button type="button" class="btn btn-ghost btn-sm" onclick="nwLink(<?= (int) $nr['id'] ?>, <?= e(json_encode($l['label'])) ?>)"><?= $l['ready'] ? 'Re-link' : 'Link phone' ?></button>
+            <?php endif; ?>
+            <details style="display:inline-block;position:relative"><summary class="btn btn-ghost btn-sm">Rename</summary>
+              <form method="post" style="position:absolute;inset-inline-end:0;z-index:5;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px;display:flex;gap:6px;min-width:260px">
+                <?= csrf_field() ?><input type="hidden" name="action" value="nw_rename"><input type="hidden" name="number" value="<?= (int) $nr['id'] ?>">
+                <input name="label" maxlength="60" value="<?= e((string) $nr['label']) ?>" placeholder="Sales, Support, Branch 2…"><button class="btn btn-primary btn-sm">Save</button></form></details>
+            <form method="post" style="display:inline" onsubmit="return confirm('Remove <?= e(addslashes($l['label'])) ?>? Nothing more will be sent or received on it. Its conversations stay in the Inbox.')">
+              <?= csrf_field() ?><input type="hidden" name="action" value="nw_remove"><input type="hidden" name="number" value="<?= (int) $nr['id'] ?>">
+              <button class="btn-link" style="color:var(--danger)">Remove</button></form>
+          <?php elseif (!$nr): ?>
+            <span class="text-muted" style="font-size:12px"><?= $l['kind'] === 'cloud' ? 'Set under WhatsApp API Credentials' : 'Linked under My WhatsApp Number' ?></span>
+          <?php endif; ?>
+        </td>
+      </tr>
+    <?php endforeach; ?>
+    <?php if (!$nwLines): ?><tr><td colspan="4" class="text-muted">No WhatsApp number yet.</td></tr><?php endif; ?>
+    </tbody></table></div>
+
+  <?php if ($nwAdmin): ?>
+    <?php if ($nwRoom > 0): ?>
+      <p class="text-muted" style="font-size:12.5px">You can add <?= $nwRoom ?> more number<?= $nwRoom === 1 ? '' : 's' ?>.</p>
+      <div class="grid2">
+        <?php if ($nwCanApi): ?>
+        <details class="int-add"><summary class="btn btn-primary btn-sm">+ Add a Business API number</summary>
+          <form method="post" class="mt10"><?= csrf_field() ?><input type="hidden" name="action" value="nw_add_cloud">
+            <div class="field"><span class="lbl">Name</span><input name="label" maxlength="60" placeholder="Sales, Support, Branch 2…"></div>
+            <div class="field"><span class="lbl">Phone Number ID</span><input name="phone_number_id" required inputmode="numeric" class="ltr" placeholder="WhatsApp Manager → Phone numbers"></div>
+            <div class="field"><span class="lbl">WhatsApp Business Account ID <span class="text-muted">(if it is in another account than your main number)</span></span><input name="waba_id" inputmode="numeric" class="ltr"></div>
+            <div class="field"><span class="lbl">Access token <span class="text-muted">(only if your main token cannot reach this number)</span></span><input type="password" name="access_token" autocomplete="new-password" class="ltr"></div>
+            <div class="field"><span class="lbl">App secret <span class="text-muted">(only for a different Meta app)</span></span><input type="password" name="app_secret" autocomplete="new-password" class="ltr"></div>
+            <p class="text-muted" style="font-size:12px">We check the number with Meta before saving. In your Meta app, the WhatsApp webhook stays the same — every number of the app arrives at it.</p>
+            <button class="btn btn-primary btn-sm">Add number</button></form></details>
+        <?php endif; ?>
+        <?php if (pw_configured()): ?>
+        <details class="int-add"><summary class="btn btn-primary btn-sm">+ Link another phone</summary>
+          <form method="post" class="mt10"><?= csrf_field() ?><input type="hidden" name="action" value="nw_add_phone">
+            <div class="field"><span class="lbl">Name</span><input name="label" maxlength="60" placeholder="Sales phone, Branch 2…"></div>
+            <div class="alert error" style="font-size:12px">A linked phone uses a WhatsApp Web session, which is against WhatsApp's Terms: the number can be banned, more so when it sends fast. Messages go out in small paced batches.</div>
+            <button class="btn btn-primary btn-sm">Add and link</button></form></details>
+        <?php endif; ?>
+      </div>
+    <?php else: ?>
+      <p class="text-muted" style="font-size:12.5px;margin-bottom:0">To add more numbers, ask <?= e(BRAND_PARENT) ?> to raise your account's limit.</p>
+    <?php endif; ?>
+  <?php endif; ?>
+
+  <!-- linking a phone -->
+  <div id="nw-modal" class="modal-back" role="dialog" aria-modal="true" aria-labelledby="nw-title">
+    <div class="modal" style="max-width:560px">
+      <h2 id="nw-title" style="margin-top:0">Link a phone</h2>
+      <div id="nw-msg" class="text-muted" style="font-size:13px">Preparing…</div>
+      <div id="nw-linking" style="display:none;gap:18px;flex-wrap:wrap;align-items:flex-start;margin-top:10px">
+        <img id="nw-qr" alt="WhatsApp QR code" style="width:220px;height:220px;border:1px solid var(--line);border-radius:10px;background:#fff">
+        <div style="flex:1;min-width:200px">
+          <ol style="padding-inline-start:18px;line-height:1.9;font-size:13px;margin:0">
+            <li>Open <strong>WhatsApp</strong> on that phone</li><li><strong>Settings</strong> → <strong>Linked devices</strong></li><li><strong>Link a device</strong> and scan</li></ol>
+          <button type="button" class="btn-link mt10" onclick="document.getElementById('nw-pair').hidden=false">Link with the phone number instead</button>
+          <div id="nw-pair" hidden style="margin-top:8px"><div style="display:flex;gap:6px"><input id="nw-msisdn" placeholder="201012345678" class="ltr"><button type="button" class="btn btn-ghost btn-sm" onclick="nwPair()">Get code</button></div>
+            <div id="nw-code" style="font-size:24px;letter-spacing:.2em;font-weight:700;margin-top:6px"></div></div>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;margin-top:14px"><button type="button" class="btn btn-ghost" onclick="nwClose()">Close</button></div>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  const CS = <?= json_encode(csrf_token()) ?>; let id = 0, tq = null, ts = null;
+  const el = i => document.getElementById(i);
+  async function post(action, extra){ const fd = new FormData(); fd.append('csrf_token', CS); fd.append('action', action); fd.append('number', id);
+    for (const k in (extra||{})) fd.append(k, extra[k]); const r = await fetch('settings.php', {method:'POST', body:fd}); return r.json(); }
+  function stop(){ clearInterval(tq); clearInterval(ts); tq = ts = null; }
+  window.nwClose = function(){ stop(); el('nw-modal').classList.remove('open'); if (id) location.reload(); };
+  window.nwLink = async function(n, label){
+    id = n; el('nw-title').textContent = 'Link ' + label; el('nw-msg').textContent = 'Preparing…'; el('nw-linking').style.display = 'none'; el('nw-modal').classList.add('open');
+    const d = await post('nw_connect');
+    if (!d.ok) { el('nw-msg').textContent = d.error || 'Could not start.'; return; }
+    el('nw-msg').textContent = 'Scan this code with the phone you are linking.'; if (d.qr) el('nw-qr').src = d.qr; el('nw-linking').style.display = 'flex';
+    tq = setInterval(async () => { const q = await post('nw_qr'); if (q.ok && q.qr) el('nw-qr').src = q.qr; }, 20000);
+    ts = setInterval(async () => { const s = await post('nw_status'); if (s.ok && s.state === 'connected') { stop(); el('nw-linking').style.display = 'none'; el('nw-msg').textContent = 'Linked' + (s.msisdn ? ' — +' + s.msisdn : '') + '. You can close this.'; } }, 3000);
+  };
+  window.nwPair = async function(){ const d = await post('nw_pair', {msisdn: el('nw-msisdn').value}); el('nw-code').textContent = d.ok ? d.code : (d.error || 'Could not get a code.'); };
+  <?php if ($nwLink && isset($nwRows[$nwLink]) && $nwRows[$nwLink]['kind'] === 'personal'): ?>
+  window.addEventListener('load', () => nwLink(<?= $nwLink ?>, <?= json_encode(wa_line_label($CLIENT, 'n' . $nwLink, false)) ?>));
+  <?php endif; ?>
+})();
+</script>
+<?php endif; ?>
 
 <?php if (channel_is_personal($CLIENT)): $pwState = (string) $CLIENT['personal_status']; ?>
 <div class="card" id="mynumber">

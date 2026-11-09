@@ -44,6 +44,8 @@ function msg_log(int $clientId, int $contactId, string $direction, string $body,
             // Who sent it by hand, and through which number — see includes/sending.php.
             'sent_by_user_id' => isset($opts['sent_by']) && (int) $opts['sent_by'] > 0 ? (int) $opts['sent_by'] : null,
             'via'             => isset($opts['via']) && $opts['via'] !== '' ? substr((string) $opts['via'], 0, 20) : null,
+            // Which WhatsApp number (line) — see includes/numbers.php. Not on Messenger / Instagram.
+            'line'            => isset($opts['line']) && $opts['line'] !== '' ? substr((string) $opts['line'], 0, 12) : null,
             // A picture, voice note, video or file: where to fetch it (includes/inbox_media.php).
             'media_ref'       => isset($opts['media_ref']) && $opts['media_ref'] !== '' ? substr((string) $opts['media_ref'], 0, 255) : null,
             'media_mime'      => isset($opts['media_mime']) && $opts['media_mime'] !== '' ? substr((string) $opts['media_mime'], 0, 100) : null,
@@ -67,6 +69,7 @@ function msg_log(int $clientId, int $contactId, string $direction, string $body,
             "INSERT INTO messages (" . implode(',', $cols) . ") VALUES ({$ph},?)",
             $vals
         );
+        if (!empty($opts['line']) && function_exists('wa_line_touch')) wa_line_touch($contactId, (string) $opts['line']);
         if (!empty($opts['quiet'])) return $id;          // history being filled in: no response times, no rescoring
         // A person answering a lead — the sales report's first-response time.
         if ($direction === 'out' && ($opts['status'] ?? '') !== 'failed') {
@@ -88,13 +91,39 @@ function inbox_window_open(array $contact, array $client = []): bool
     // The 24-hour rule belongs to Meta's Cloud API. A personal number sends ordinary
     // messages, so an agent can always reply from the Inbox on that channel.
     if ($client && function_exists('channel_is_personal') && channel_is_personal($client)) return true;
+    // Several numbers: the window is per number — they must have written to THIS number.
+    if ($client && isset($client['__line']) && function_exists('wa_lines_ready') && wa_lines_ready() && !empty($contact['id'])) {
+        $last = db_val("SELECT MAX(created_at) FROM messages WHERE contact_id=? AND direction='in' AND line=?", [(int) $contact['id'], (string) $client['__line']]);
+        return $last && strtotime((string) $last) > time() - 86400;
+    }
     $last = $contact['last_inbound_at'] ?? null;
     return $last && strtotime((string) $last) > time() - 86400;
 }
 
-/** Thread list for a client: newest conversation first, with unread counts. */
-function inbox_threads(int $clientId, string $q = '', int $limit = 200, string $channel = ''): array
+/**
+ * Several WhatsApp numbers: each customer has one conversation per number (the Admin's choice),
+ * keyed by the line. With one number, nothing changes — one conversation per customer.
+ */
+function inbox_split(array $client): bool
 {
+    if (!function_exists('wa_lines_ready') || !wa_lines_ready()) return false;
+    // Business numbers only: a salesperson's own phone was always part of the one conversation.
+    return count(array_filter(array_keys(wa_lines($client)), fn($k) => $k[0] !== 'u')) > 1;
+}
+
+/** The lines this person's Inbox shows: every one, or only the number the Admin gave them. NULL = all. */
+function inbox_visible_lines(array $client): ?array
+{
+    $u = function_exists('sending_user') ? sending_user() : null;
+    if (!$u || ($u['role'] ?? '') === 'admin' || in_array((string) ($u['send_via'] ?? ''), ['', 'any', 'none'], true)) return null;
+    return array_keys(wa_lines_for_user($client, $u));
+}
+
+/** Thread list for a client: newest conversation first, with unread counts. */
+function inbox_threads(int $clientId, string $q = '', int $limit = 200, string $channel = '', string $lineFilter = ''): array
+{
+    $client = db_row("SELECT * FROM clients WHERE id=?", [$clientId]) ?: ['id' => $clientId];
+    if (inbox_split($client)) return inbox_threads_split($client, $q, $limit, $channel, $lineFilter);
     $params = [$clientId];
     $search = '';
     $social = db_has_column('contacts', 'fb_psid');
@@ -150,16 +179,66 @@ function inbox_threads(int $clientId, string $q = '', int $limit = 200, string $
     return $rows;
 }
 
+/**
+ * The thread list when the account has several numbers: one row per customer AND number.
+ * Messenger / Instagram / SMS messages (no line) make a thread of their own ('').
+ */
+function inbox_threads_split(array $client, string $q, int $limit, string $channel, string $lineFilter): array
+{
+    $clientId = (int) $client['id'];
+    $where = ''; $p = [];
+    if ($q !== '') { $where .= " AND (c.name LIKE ? OR c.phone_e164 LIKE ? OR c.ig_username LIKE ?)"; array_push($p, "%$q%", "%$q%", "%$q%"); }
+    if (in_array($channel, ['messenger', 'instagram'], true)) { $where .= " AND lm.ln=''"; }
+    elseif ($channel === 'whatsapp') { $where .= " AND lm.ln<>''"; }
+    if ($lineFilter !== '' && wa_line_valid($lineFilter)) { $where .= " AND lm.ln=?"; $p[] = $lineFilter; }
+    $vis = inbox_visible_lines($client);
+    if ($vis !== null) { $where .= " AND (lm.ln='' OR lm.ln IN (" . ($vis ? implode(',', array_fill(0, count($vis), '?')) : "'-'") . "))"; $p = array_merge($p, $vis); }
+    [$scope, $sp] = crm_scope('c');
+    $where .= $scope; $p = array_merge($p, $sp);
+    $limit = max(1, min(500, $limit));
+    $rows = db_all(
+        "SELECT t.*, m.body last_body, m.direction last_dir, m.type last_type, m.created_at last_at, m.channel last_channel,
+                (SELECT COUNT(*) FROM messages mi
+                  WHERE mi.client_id=? AND mi.contact_id=t.contact_id AND COALESCE(mi.line,'')=t.line AND mi.direction='in'
+                    AND mi.created_at > COALESCE(t.read_at, '2000-01-01')) unread
+           FROM (SELECT c.id contact_id, c.phone_e164, c.name, c.last_inbound_at, c.fb_psid IS NOT NULL has_fb, c.ig_sid IS NOT NULL has_ig, c.ig_username,
+                        lm.ln line, lm.mid, COALESCE(ir.read_at, c.inbox_read_at) read_at
+                   FROM (SELECT contact_id, COALESCE(line,'') ln, MAX(id) mid FROM messages WHERE client_id=? GROUP BY contact_id, COALESCE(line,'')) lm
+                   JOIN contacts c ON c.id = lm.contact_id
+                   LEFT JOIN inbox_reads ir ON ir.contact_id = lm.contact_id AND ir.line = lm.ln
+                  WHERE c.client_id=?{$where}
+                  ORDER BY lm.mid DESC LIMIT {$limit}) t
+           JOIN messages m ON m.id = t.mid
+          ORDER BY t.mid DESC",
+        array_merge([$clientId, $clientId, $clientId], $p));
+    $hide = function_exists('crm_phone_hidden') && crm_phone_hidden();
+    $label = ['[audio]' => '🎤 Voice note', '[voice]' => '🎤 Voice note', '[image]' => '📷 Photo', '[video]' => '🎥 Video', '[document]' => '📎 File', '[sticker]' => 'Sticker'];
+    foreach ($rows as &$r) {
+        unset($r['read_at'], $r['mid']);
+        if ($hide && (string) $r['phone_e164'] !== '') $r['phone_e164'] = ltrim(crm_phone_mask((string) $r['phone_e164']), '+');
+        $r['phone_e164'] = (string) ($r['phone_e164'] ?? '');
+        $r['last_channel'] = (string) ($r['last_channel'] ?? 'whatsapp');
+        $r['line_label'] = $r['line'] !== '' ? wa_line_label($client, (string) $r['line']) : 'Messenger, Instagram & SMS';
+        $r['last_body'] = $label[(string) $r['last_body']] ?? $r['last_body'];
+    }
+    unset($r);
+    return $rows;
+}
+
 /** Messages in a thread after $afterId (ascending). */
-function inbox_thread(int $clientId, int $contactId, int $afterId = 0, int $limit = 400): array
+function inbox_thread(int $clientId, int $contactId, int $afterId = 0, int $limit = 400, ?string $line = null): array
 {
     $limit = max(1, min(1000, $limit));
+    // One number's conversation ($line), or '' for Messenger / Instagram / SMS; NULL = everything.
+    $lineSql = ''; $lineP = [];
+    if ($line !== null && db_has_column('messages', 'line')) { $lineSql = " AND COALESCE(line,'')=?"; $lineP = [$line]; }
 
     /* Whether free text can still reach this contact at all. A failed TEXT message outside the
        24-hour window can never be resent as-is — WhatsApp accepts only templates there — so the
        thread must not offer a button whose single outcome is an error message. */
     $contact  = db_row("SELECT * FROM contacts WHERE id=? AND client_id=?", [$contactId, $clientId]);
     $client   = $contact ? db_row("SELECT * FROM clients WHERE id=?", [$clientId]) : null;
+    if ($client && $line !== null && $line !== '' && function_exists('wa_line_client')) $client = wa_line_client($client, $line) ?? $client;
     $windowOn = $contact && $client ? inbox_window_open($contact, $client) : true;
 
     // Same reason as msg_log below: between a pull and its migration these may not exist yet,
@@ -170,9 +249,9 @@ function inbox_thread(int $clientId, int $contactId, int $afterId = 0, int $limi
     }
     $rows = db_all(
         "SELECT id, direction, type, body, status, error_title, source, created_at{$extra}
-           FROM messages WHERE client_id=? AND contact_id=? AND id>?
+           FROM messages WHERE client_id=? AND contact_id=? AND id>?{$lineSql}
           ORDER BY id ASC LIMIT {$limit}",
-        [$clientId, $contactId, $afterId]
+        array_merge([$clientId, $contactId, $afterId], $lineP)
     );
     /* Meta's own wording is all the thread used to show — "This message was not delivered to
        maintain healthy ecosystem engagement" tells an agent nothing about whether the lead is
@@ -258,8 +337,16 @@ function inbox_thread(int $clientId, int $contactId, int $afterId = 0, int $limi
 }
 
 /** Mark a thread read (clears its unread count). */
-function inbox_mark_read(int $clientId, int $contactId): void
+function inbox_mark_read(int $clientId, int $contactId, ?string $line = null): void
 {
+    if ($line !== null && db_has_column('messages', 'line')) {
+        // Per conversation: keep the other numbers' threads as read (or unread) as they were.
+        if (!db_val("SELECT 1 FROM contacts WHERE id=? AND client_id=?", [$contactId, $clientId])) return;
+        db_run("INSERT IGNORE INTO inbox_reads (contact_id, line, read_at)
+                SELECT DISTINCT m.contact_id, COALESCE(m.line,''), COALESCE(c.inbox_read_at, '2000-01-01')
+                  FROM messages m JOIN contacts c ON c.id=m.contact_id WHERE m.contact_id=?", [$contactId]);
+        db_run("INSERT INTO inbox_reads (contact_id, line, read_at) VALUES (?,?,NOW()) ON DUPLICATE KEY UPDATE read_at=NOW()", [$contactId, $line]);
+    }
     db_run("UPDATE contacts SET inbox_read_at=NOW() WHERE id=? AND client_id=?", [$contactId, $clientId]);
 }
 
@@ -308,7 +395,8 @@ function inbox_handle_ajax(array $client): void
     if ($a === '') return;
 
     if ($a === 'threads') {
-        json_out(['ok' => true, 'threads' => inbox_threads($cid, trim((string) ($_GET['q'] ?? '')), 200, (string) ($_GET['ch'] ?? ''))]);
+        json_out(['ok' => true, 'threads' => inbox_threads($cid, trim((string) ($_GET['q'] ?? '')), 200, (string) ($_GET['ch'] ?? ''), (string) ($_GET['line'] ?? '')),
+                  'split' => inbox_split($client)]);
     }
     /* Every action below names a contact. Check that this user may see it before any of them run:
        the thread list is scoped, but ids are guessable, and a salesperson must not be able to read
@@ -337,12 +425,19 @@ function inbox_handle_ajax(array $client): void
         $after     = (int) ($_GET['after'] ?? 0);
         $contact = db_row("SELECT * FROM contacts WHERE id=? AND client_id=?", [$contactId, $cid]);
         if (!$contact) json_out(['ok' => false]);
-        $msgs = inbox_thread($cid, $contactId, $after);
-        inbox_mark_read($cid, $contactId);
+        // Several numbers: this conversation is one number's ('' = Messenger / Instagram / SMS).
+        $split = inbox_split($client);
+        $line = $split ? (string) ($_GET['line'] ?? '') : null;
+        if ($line !== null && $line !== '' && !wa_line_valid($line)) json_out(['ok' => false]);
+        $vis = $split ? inbox_visible_lines($client) : null;
+        if ($line !== null && $line !== '' && $vis !== null && !in_array($line, $vis, true)) json_out(['ok' => false, 'error' => 'Contact not found.']);
+        $msgs = inbox_thread($cid, $contactId, $after, 400, $line);
+        inbox_mark_read($cid, $contactId, $line);
         // Every channel this person can be answered on, the one they last wrote on, and its 24-hour window.
         require_once __DIR__ . '/social.php';
-        $s = sender_for($client, sending_user());
+        $s = sender_for($client, sending_user(), $line !== null && $line !== '' ? $line : null, $contact);
         $reach = array_filter(social_reach($contact), fn($v, $ch) => client_has_channel($client, $ch), ARRAY_FILTER_USE_BOTH);
+        if ($line !== null) $reach = array_filter($reach, fn($v, $ch) => ($ch === 'whatsapp') === ($line !== ''), ARRAY_FILTER_USE_BOTH);
         $lastIn = db_has_column('messages', 'channel')
             ? (string) db_val("SELECT channel FROM messages WHERE client_id=? AND contact_id=? AND direction='in' ORDER BY id DESC LIMIT 1", [$cid, $contactId]) : '';
         $reply = isset($reach[$lastIn]) ? $lastIn : (array_key_first($reach) ?? 'whatsapp');
@@ -365,6 +460,7 @@ function inbox_handle_ajax(array $client): void
                                && (!function_exists('can_write') || can_write())
                                && !db_val("SELECT 1 FROM social_optins WHERE client_id=? AND contact_id=? AND (status='active' OR asked_at > NOW() - INTERVAL 1 DAY)", [$cid, (int) $contact['id']]),
             'name' => (string) $contact['name'], 'phone' => (string) ($contact['phone_e164'] ?? ''),
+            'line' => $line, 'line_label' => $line !== null && $line !== '' ? wa_line_label($client, $line) : '',
             'bot_paused' => inbox_bot_paused($contact),
             // For the owner picker in the header — present only where it can be used.
             'owner'      => $contact['owner_user_id'] !== null ? (int) $contact['owner_user_id'] : null,
@@ -377,7 +473,8 @@ function inbox_handle_ajax(array $client): void
             require_once __DIR__ . '/social.php';
             json_out(inbox_send_social($client, (int) ($_POST['contact'] ?? 0), (string) ($_POST['body'] ?? ''), $ch));
         }
-        json_out(inbox_send($client, (int) ($_POST['contact'] ?? 0), (string) ($_POST['body'] ?? '')));
+        $ln = (string) ($_POST['line'] ?? '');
+        json_out(inbox_send($client, (int) ($_POST['contact'] ?? 0), (string) ($_POST['body'] ?? ''), $ln !== '' && wa_line_valid($ln) ? $ln : null));
     }
     /* "Add to CRM as lead" — for a conversation that is not in the pipeline (Messenger and Instagram
        when the account does not add them by itself, or any WhatsApp contact). A phone number given
@@ -415,7 +512,8 @@ function inbox_handle_ajax(array $client): void
         $strs = fn($k): array => array_map('strval', (array) ($_POST[$k] ?? []));
         json_out(inbox_send_template(
             $client, (int) ($_POST['contact'] ?? 0), (int) ($_POST['template'] ?? 0),
-            $strs('vars'), $strs('header_vars'), (string) ($_POST['header_media'] ?? '')));
+            $strs('vars'), $strs('header_vars'), (string) ($_POST['header_media'] ?? ''),
+            ['line' => wa_line_valid((string) ($_POST['line'] ?? '')) ? (string) $_POST['line'] : null]));
     }
     /* Reassign from the conversation itself. An Admin reading a thread is exactly when they
        notice it belongs with someone else; making them go to the CRM to do it is friction. A
@@ -499,7 +597,8 @@ function inbox_resend_fallback(array $client, array $m): ?array
         return ['ok' => false, 'error' => 'More than 24 hours have passed, so only a template can reach '
                                         . 'this contact now — use “Try another template”.'];
     }
-    $res = inbox_send($client, $contactId, $body);
+    // Again from the number it first went from.
+    $res = inbox_send($client, $contactId, $body, !empty($m['line']) ? (string) $m['line'] : null);
     return ['ok' => !empty($res['ok']), 'error' => (string) ($res['error'] ?? '')];
 }
 
@@ -750,7 +849,7 @@ function inbox_send_template(array $client, int $contactId, int $templateId,
     if (trim($headerMedia) !== '') $cfg['header_media'] = trim($headerMedia);
 
     $who = sending_user();
-    $snd = sender_for($client, $who);
+    $snd = sender_for($client, $who, isset($opts['line']) && $opts['line'] !== '' ? (string) $opts['line'] : null, $contact);
     if (!$snd['ok']) return ['ok' => false, 'error' => $snd['error']];
     $via = $snd['client'];
 
@@ -779,7 +878,7 @@ function inbox_send_template(array $client, int $contactId, int $templateId,
         'status' => !empty($res['ok']) ? 'sent' : 'failed',
         'wamid' => $res['wamid'] ?? null,
         'error' => $res['error_title'] ?? null, 'error_code' => (string) ($res['error_code'] ?? ''),
-        'template_id' => $templateId, 'sent_by' => (int) ($who['id'] ?? 0), 'via' => $snd['via'],
+        'template_id' => $templateId, 'sent_by' => (int) ($who['id'] ?? 0), 'via' => $snd['via'], 'line' => $snd['line'] ?? null,
     ]);
     // An agent sending by hand is taking the conversation over, same as a typed reply.
     if (!empty($res['ok']) && $takeover) inbox_take_over($cid, $contactId);
@@ -797,7 +896,7 @@ function inbox_send_template(array $client, int $contactId, int $templateId,
 }
 
 /** Send a manual reply (free-form text, 24h window only). Costs 1 credit. */
-function inbox_send(array $client, int $contactId, string $body): array
+function inbox_send(array $client, int $contactId, string $body, ?string $line = null): array
 {
     $body = trim($body);
     if ($body === '') return ['ok' => false, 'error' => 'Type a message first.'];
@@ -807,7 +906,7 @@ function inbox_send(array $client, int $contactId, string $body): array
 
     // Out through THIS person's number: the API, the company phone, their own, or not at all.
     $who = sending_user();
-    $snd = sender_for($client, $who);
+    $snd = sender_for($client, $who, $line, $contact);
     if (!$snd['ok']) return ['ok' => false, 'error' => $snd['error']];
     $via = $snd['client'];
 
@@ -831,7 +930,7 @@ function inbox_send(array $client, int $contactId, string $body): array
         'source' => 'manual', 'status' => !empty($res['ok']) ? 'sent' : 'failed',
         'wamid' => $res['wamid'] ?? null, 'error' => $res['error_title'] ?? null,
         'error_code' => (string) ($res['error_code'] ?? ''),
-        'sent_by' => (int) ($who['id'] ?? 0), 'via' => $snd['via'],
+        'sent_by' => (int) ($who['id'] ?? 0), 'via' => $snd['via'], 'line' => $snd['line'] ?? null,
     ]);
     // A human just replied → take the conversation over so the bot can't talk over them.
     if (!empty($res['ok'])) inbox_take_over((int) $client['id'], $contactId);

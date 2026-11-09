@@ -85,6 +85,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $size  = max(1, min(50, (int) ($_POST['slot_size'] ?? 15)));
         $pause = max(30, min(3600, (int) ($_POST['slot_pause_sec'] ?? 180)));
         db_run("UPDATE clients SET channel=?, slot_size=?, slot_pause_sec=? WHERE id=?", [$ch, $size, $pause, $id]);
+        // How many extra WhatsApp numbers the client may add themselves (Settings → WhatsApp numbers).
+        if (db_has_column('clients', 'max_numbers')) db_run("UPDATE clients SET max_numbers=? WHERE id=?", [max(0, min(50, (int) ($_POST['max_numbers'] ?? 0))), $id]);
         flash($ch === 'personal'
             ? 'Switched to the client\'s own WhatsApp number. They now link it from their Settings.'
             : 'Switched to the WhatsApp Cloud API.');
@@ -492,6 +494,16 @@ $use      = db_row("SELECT * FROM usage_periods WHERE client_id=? AND period_sta
         <option value="personal" <?= $isPersonal ? 'selected' : '' ?>>Client's own personal number</option>
       </select>
     </div>
+
+    <?php if (db_has_column('clients', 'max_numbers')):
+      require_once __DIR__ . '/../includes/numbers.php';
+      $extra = wa_numbers_for($id); ?>
+    <div class="field" style="max-width:420px"><span class="lbl">Extra WhatsApp numbers the client may add</span>
+      <input type="number" name="max_numbers" min="0" max="50" value="<?= (int) ($client['max_numbers'] ?? 0) ?>">
+      <span class="text-muted" style="font-size:11.5px">On top of the main API number and the main phone. 0 = only the main ones.
+        In use: <?= count($extra) ?><?= $extra ? ' — ' . e(implode(', ', array_map(fn($n) => (trim((string) $n['label']) ?: ($n['kind'] === 'cloud' ? 'API number' : 'Phone')) . ' (' . ($n['kind'] === 'cloud' ? 'API' : 'phone') . ', ' . $n['status'] . ')', $extra))) : '' ?>.
+        The client adds them under Settings → WhatsApp numbers.</span></div>
+    <?php endif; ?>
 
     <div id="ch-personal" style="display:<?= $isPersonal ? 'block' : 'none' ?>">
       <div class="alert error" style="font-size:12.5px">

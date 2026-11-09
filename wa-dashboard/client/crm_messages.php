@@ -47,6 +47,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirect('crm_messages.php');
         }
     }
+    if ($a === 'auto_line') {
+        // Which Business API number the automatic messages go from.
+        $ln = (string) ($_POST['auto_line'] ?? '');
+        $cl = array_filter(wa_lines($CLIENT), fn($l) => $l['kind'] === 'cloud');
+        crm_settings_set($cid, ['auto_line' => isset($cl[$ln]) ? $ln : null]);
+        flash('Saved.'); redirect('crm_messages.php');
+    }
     if ($a === 'visit_msgs') {
         $ct = (int) ($_POST['confirm_tpl'] ?? 0); $rt = (int) ($_POST['remind_tpl'] ?? 0);
         $bs = (int) ($_POST['booked_stage'] ?? 0); $ds = (int) ($_POST['done_stage'] ?? 0);
@@ -170,6 +177,19 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 <p class="text-muted" style="font-size:12.5px;margin-top:-6px">Set by managers only, and sent from the company's
   <strong>WhatsApp Business API number</strong> — never from a salesperson's phone. Messages wait for working hours if you set them
   (Assignment rules → Timers), and never go to anyone who opted out.</p>
+
+<?php $amLines = function_exists('wa_lines') && wa_lines_ready() ? array_filter(wa_lines($CLIENT), fn($l) => $l['kind'] === 'cloud') : [];
+if (count($amLines) > 1): $amCur = (string) (crm_settings($cid)['auto_line'] ?? ''); ?>
+<form method="post" class="card" id="auto-line" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+  <?= csrf_field() ?><input type="hidden" name="action" value="auto_line">
+  <div class="field" style="margin:0;flex:1;min-width:260px"><span class="lbl">Send automatic messages from</span>
+    <select name="auto_line">
+      <option value="">The Business API number the lead last talked to (else the main one)</option>
+      <?php foreach ($amLines as $k => $l): ?><option value="<?= e($k) ?>" <?= $amCur === $k ? 'selected' : '' ?>><?= e($l['label'] . ($l['phone'] !== '' ? ' (' . $l['phone'] . ')' : '')) ?></option><?php endforeach; ?>
+    </select></div>
+  <button class="btn btn-primary btn-sm">Save</button>
+</form>
+<?php endif; ?>
 
 <div class="card card-flush" id="stage-msgs">
   <div style="padding:14px 18px"><h2 style="border:0;padding:0;margin:0">When a lead reaches a stage</h2>

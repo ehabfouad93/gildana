@@ -24,6 +24,7 @@ require_once __DIR__ . '/includes/notify.php';
 require_once __DIR__ . '/includes/automation.php';
 require_once __DIR__ . '/includes/push.php';
 require_once __DIR__ . '/includes/inbox_media.php';
+require_once __DIR__ . '/includes/sending.php';   // lines: the main number or an extra one (includes/numbers.php)
 
 /* ── GET verification ── */
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
@@ -57,7 +58,7 @@ function webhook_client_for(array $data): ?array
         foreach ((array) ($entry['changes'] ?? []) as $change) {
             $pnid = (string) ($change['value']['metadata']['phone_number_id'] ?? '');
             if ($pnid === '') continue;
-            $row = db_row("SELECT * FROM clients WHERE phone_number_id = ?", [$pnid]);
+            $row = wa_client_by_pnid($pnid);           // the main number, or an extra one (includes/numbers.php)
             if ($row) return $row;
         }
     }
@@ -142,9 +143,9 @@ foreach (($data['entry'] ?? []) as $entry) {
     foreach (($entry['changes'] ?? []) as $change) {
         $value = $change['value'] ?? [];
         $phoneNumberId = (string) ($value['metadata']['phone_number_id'] ?? '');
-        $client = $phoneNumberId !== ''
-            ? db_row("SELECT * FROM clients WHERE phone_number_id = ?", [$phoneNumberId])
-            : null;
+        // The account and the line (its main number or an extra one): replies, automations and the
+        // Inbox conversation all stay on the number they wrote to.
+        $client = $phoneNumberId !== '' ? wa_client_by_pnid($phoneNumberId) : null;
 
         /* ── Delivery statuses ── */
         foreach (($value['statuses'] ?? []) as $st) {
@@ -263,7 +264,7 @@ foreach (($data['entry'] ?? []) as $entry) {
                 $logBody = $text !== '' ? $text : '[' . $mtype . ']';
                 msg_log($cid, (int) $contact['id'], 'in', $logBody, [
                     'type' => $mtype, 'source' => 'inbound', 'wamid' => (string) ($in['id'] ?? '') ?: null,
-                    'media_ref' => $mRef, 'media_mime' => $mMime, 'media_name' => $mName,
+                    'media_ref' => $mRef, 'media_mime' => $mMime, 'media_name' => $mName, 'line' => wa_line_of($client),
                 ]);
 
                 // Flag the client for a push. This is one cheap UPSERT — the actual

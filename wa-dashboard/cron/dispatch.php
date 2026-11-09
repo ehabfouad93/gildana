@@ -140,7 +140,7 @@ try {
     $noCreditClients  = [];
 
     $clients = db_all(
-        "SELECT DISTINCT cl.*
+        "SELECT DISTINCT cl.*, COALESCE(c.line, '') AS camp_line
            FROM clients cl
            JOIN campaigns c        ON c.client_id = cl.id AND c.status = 'sending'{$waOnly}
            JOIN campaign_messages m ON m.campaign_id = c.id AND m.status = 'queued'
@@ -150,6 +150,12 @@ try {
     foreach ($clients as $client) {
         if ($sentTotal + $failedTotal >= $globalCap) break;
         $cid = (int) $client['id'];
+        // One pass per account AND number: a campaign goes out from the number chosen for it ("Send from").
+        $campLine = (string) $client['camp_line'];
+        unset($client['camp_line']);
+        if ($campLine !== '' && function_exists('wa_line_client')) $client = wa_line_client($client, $campLine) ?? $client;
+        elseif (function_exists('wa_line_default')) $client['__line'] = wa_line_default($client);
+        $lockKey = $cid . ($campLine !== '' ? '_' . $campLine : '');
         $limit = max(0, min($perClientCap, $globalCap - ($sentTotal + $failedTotal)));
         if ($limit === 0) break;
 
@@ -163,7 +169,7 @@ try {
         /* Take this tenant's lock. If another worker already has it, skip to the next
            tenant instead of waiting — this is what stops one slow client blocking the
            rest of the run. */
-        if ((int) $pdo->query("SELECT GET_LOCK('wa_dispatch_{$cid}', 0)")->fetchColumn() !== 1) {
+        if ((int) $pdo->query("SELECT GET_LOCK('wa_dispatch_{$lockKey}', 0)")->fetchColumn() !== 1) {
             out("Client {$cid}: already being sent by another worker — skipped.");
             continue;
         }
@@ -175,8 +181,9 @@ try {
             $ids = array_column(db_all(
                 "SELECT m.id FROM campaign_messages m JOIN campaigns c ON c.id = m.campaign_id
                   WHERE m.client_id = ? AND m.status = 'queued' AND c.status = 'sending'{$waOnly}
+                    AND COALESCE(c.line, '') = ?
                     AND (m.next_attempt_at IS NULL OR m.next_attempt_at <= NOW())
-                  ORDER BY m.id ASC LIMIT {$limit}", [$cid]
+                  ORDER BY m.id ASC LIMIT {$limit}", [$cid, $campLine]
             ), 'id');
             if (!$ids) continue;
 
@@ -415,6 +422,7 @@ try {
                         // to find the campaign it belonged to.
                         'ref' => (int) $mid,
                         'template_id' => (int) ($it['tpl']['template_id'] ?? 0),
+                        'line' => function_exists('wa_line_of') ? wa_line_of($client) : null,
                     ]);
                 }
                 // A send attempt spends slot budget even when it fails: the number still
@@ -431,7 +439,7 @@ try {
                 credits_release($cid, $creditsLeft, null, 'refund_unused');
             }
             $reservedCount = null; $creditsLeft = 0;
-            $pdo->query("SELECT RELEASE_LOCK('wa_dispatch_{$cid}')");
+            $pdo->query("SELECT RELEASE_LOCK('wa_dispatch_{$lockKey}')");
         }
     }
 

@@ -275,6 +275,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save'
 
         db_run("UPDATE flows SET name=?, trigger_type=?, trigger_config=?, source_config=?, hot_min=?, warm_min=?, first_step_id=?, updated_at=NOW() WHERE id=?",
             [$name, $trigger, $tc ? json_encode($tc, JSON_UNESCAPED_UNICODE) : null, $sourceConfig, $hotMin, $warmMin, $firstStep, $id]);
+        // Send from: '' = the number they wrote to (or last talked to); otherwise always this number.
+        if (wa_lines_ready()) { $ln = (string) ($_POST['line'] ?? ''); db_run("UPDATE flows SET line=? WHERE id=?", [$ln !== '' && isset(wa_lines($CLIENT)[$ln]) ? $ln : null, $id]); }
         // "Also start when…" — the flow's extra triggers, on any channel.
         $extra = isset($_POST['extra_triggers']) ? (array) (json_decode((string) $_POST['extra_triggers'], true) ?: []) : null;
         if ($mainKind !== '') {
@@ -481,6 +483,14 @@ client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
         </select>
         <div class="hint" id="trig-x-hint" <?= str_starts_with($mainVal, 'x:') ? '' : 'hidden' ?>>Set its keywords, posts, form or stage under <a href="#more-triggers">Also start this automation when…</a> below.</div>
       </div>
+      <?php $flLines = wa_lines_ready() ? array_filter(wa_lines($CLIENT), fn($l) => true) : []; if (count($flLines) > 1): ?>
+      <div class="field"><span class="lbl">Send from</span>
+        <select name="line">
+          <option value="">Any number — replies from the one they wrote to</option>
+          <?php foreach ($flLines as $k => $l): ?><option value="<?= e($k) ?>" <?= ($flow['line'] ?? '') === $k ? 'selected' : '' ?>>Only <?= e($l['label'] . ($l['phone'] !== '' ? ' (' . $l['phone'] . ')' : '')) ?></option><?php endforeach; ?>
+        </select>
+        <div class="hint">"Only" a number: it answers messages to that number, and starts conversations from it.</div></div>
+      <?php endif; ?>
       <div class="field" id="kw-wrap"><span class="lbl">Keywords</span><input type="text" name="keywords" value="<?= e(implode(', ', (array) ($tc['keywords'] ?? []))) ?>" placeholder="price, info"></div>
     </div>
     <div class="grid3">

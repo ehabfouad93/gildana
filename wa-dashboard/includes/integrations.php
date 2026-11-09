@@ -446,7 +446,8 @@ function integration_notify(array $it, array $order, string $event, int $delaySe
     // Values are already in the tokens and the SMS text; the context only says "send at any hour".
     try {
         crm_queue($client, (int) $order['contact_id'], $tpl, $tokens, '', mb_substr($it['provider'] . ':' . $event, 0, 40),
-                  date('Y-m-d H:i:s', time() + $delay), ['any_time' => 1, 'order_id' => (int) $order['id']], $by, $sms);
+                  date('Y-m-d H:i:s', time() + $delay), ['any_time' => 1, 'order_id' => (int) $order['id']], $by, $sms,
+                  ((string) ($s['line'] ?? '')) ?: null);     // Messages tab → "Send from
     } catch (Throwable $e) {
         integration_unclaim((int) $order['id'], $claimAs ?? $event);   // so a retry can still send it
         throw $e;

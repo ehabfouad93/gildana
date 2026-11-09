@@ -62,9 +62,20 @@ if (!$client) {
     } catch (Throwable $e) { $uc = null; }
     if ($uc) {
         $base   = db_row("SELECT * FROM clients WHERE id=?", [(int) $uc['client_id']]);
-        $client = $base ? user_channel_client($base, $uc) : null;
+        $client = $base ? array_merge(user_channel_client($base, $uc), ['__line' => 'u' . (int) $uc['user_id']]) : null;
     }
 }
+/* Or one of the account's extra phones (Settings → WhatsApp numbers): the client row for that line. */
+if (!$client) {
+    try {
+        $wn = db_row("SELECT * FROM wa_numbers WHERE kind='personal' AND active=1 AND (hook_secret = ? OR hook_secret_prev = ?)", [$secret, $secret]);
+    } catch (Throwable $e) { $wn = null; }
+    if ($wn) {
+        $base   = db_row("SELECT * FROM clients WHERE id=?", [(int) $wn['client_id']]);
+        $client = $base ? wa_line_client($base, 'n' . (int) $wn['id']) : null;
+    }
+}
+if ($client && !isset($client['__line'])) $client['__line'] = 'phone';     // the company's main phone
 if (!$client || ($client['status'] ?? '') !== 'active') {
     http_response_code(403);
     exit('unknown instance');
@@ -204,7 +215,7 @@ function pw_handle_inbound(array $client, array $in): void
 
     msg_log($cid, (int) $contact['id'], 'in', $text !== '' ? $text : '[' . $type . ']', [
         'type' => $type, 'source' => 'inbound', 'wamid' => $in['wamid'] !== '' ? $in['wamid'] : null,
-        'via' => $ownerOfPhone > 0 ? 'own' : 'company_personal',
+        'via' => $ownerOfPhone > 0 ? 'own' : 'company_personal', 'line' => wa_line_of($client),
         'media_ref' => $in['media'][0] ?? null, 'media_mime' => $in['media'][1] ?? null, 'media_name' => $in['media'][2] ?? null,
     ]);
 

@@ -177,7 +177,24 @@ function crm_auto_api_ready(array $client): bool
 }
 
 function crm_queue(array $client, int $contactId, int $templateId, array $tokens, string $headerMedia, string $reason,
-                   ?string $dueAt = null, array $context = [], string $sendBy = 'whatsapp', ?string $smsText = null): int
+                   ?string $dueAt = null, array $context = [], string $sendBy = 'whatsapp', ?string $smsText = null, ?string $line = null): int
+{
+    // Which WhatsApp number: the one asked for, else the account's CRM setting, else (empty) chosen at send time.
+    $line = $line ?? crm_auto_line($client);
+    $id = crm_queue_insert($client, $contactId, $templateId, $tokens, $headerMedia, $reason, $dueAt, $context, $sendBy, $smsText);
+    if ($line !== '' && $id && function_exists('wa_lines_ready') && wa_lines_ready()) db_run("UPDATE crm_msg_queue SET line=? WHERE id=?", [$line, $id]);
+    return $id;
+}
+
+/** The number the CRM's automatic messages go from: a set line, or '' = the lead's own Business API number (see crm_queue_tick). */
+function crm_auto_line(array $client): string
+{
+    $v = (string) (crm_settings((int) $client['id'])['auto_line'] ?? '');
+    return function_exists('wa_line_valid') && wa_line_valid($v) ? $v : '';
+}
+
+function crm_queue_insert(array $client, int $contactId, int $templateId, array $tokens, string $headerMedia, string $reason,
+                          ?string $dueAt, array $context, string $sendBy, ?string $smsText): int
 {
     // "Send by": whatsapp (the template), sms (its own text), or wa_then_sms (the template, and the text by SMS if WhatsApp fails).
     if (!db_has_column('crm_msg_queue', 'send_by')) $sendBy = 'whatsapp';
@@ -279,13 +296,21 @@ function crm_queue_tick(int $limit = 50): int
         /* Always from the WhatsApp Business API number — a managerial message on the company's
            official number, never from a salesperson's phone or the linked company phone, whatever
            the account's usual channel is. */
-        if (!crm_auto_api_ready($client)) {
-            $why = 'The WhatsApp Business API number is not connected (Settings → WhatsApp API Credentials).';
+        // Which Business API number: the one queued with it, else the one this lead last talked to
+        // (when that is an API number), else the main one.
+        $line = (string) ($q['line'] ?? '');
+        if ($line === '' && function_exists('wa_lines')) {
+            $ll = (string) ($c['last_line'] ?? '');
+            $line = ($ll !== '' && (wa_lines($client)[$ll]['kind'] ?? '') === 'cloud') ? $ll : 'api';
+        }
+        $why = $line !== '' && $line !== 'api' && function_exists('wa_line_blocked') ? wa_line_blocked($client, $line) : '';
+        if ($line === 'api' && !crm_auto_api_ready($client)) $why = 'The WhatsApp Business API number is not connected (Settings → WhatsApp API Credentials).';
+        if ($why !== '') {
             if (!$fallback($why)) $done('failed', $why);
             continue;
         }
         $r = inbox_send_template(array_merge($client, ['channel' => 'cloud']), (int) $c['id'], (int) $tpl['id'], $vals, $hvals, (string) ($q['header_media'] ?? ''),
-                                 ['source' => 'crm_auto', 'takeover' => false]);
+                                 ['source' => 'crm_auto', 'takeover' => false, 'line' => $line]);
         // "WhatsApp, SMS if it fails": the WhatsApp attempt failed for good, so the SMS text goes instead.
         if (empty($r['ok']) && $fallback((string) ($r['error'] ?? 'WhatsApp failed'))) continue;
         $done(!empty($r['ok']) ? 'sent' : 'failed', !empty($r['ok']) ? '' : (string) ($r['error'] ?? 'Not sent.'), isset($r['id']) ? (int) $r['id'] : null);

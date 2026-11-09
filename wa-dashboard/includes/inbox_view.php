@@ -125,6 +125,14 @@ $IB_CHANNELS = isset($CLIENT) && function_exists('client_channels')
       <?php foreach ($IB_CHANNELS as $ch): ?><button type="button" data-ch="<?= e($ch) ?>"><?= e(['whatsapp' => 'WhatsApp', 'messenger' => 'Messenger', 'instagram' => 'Instagram'][$ch]) ?></button><?php endforeach; ?>
     </div>
     <?php endif; ?>
+    <?php $IB_LINES = isset($CLIENT) && function_exists('inbox_split') && inbox_split($CLIENT)
+            ? array_intersect_key(wa_lines($CLIENT), array_flip(inbox_visible_lines($CLIENT) ?? array_keys(wa_lines($CLIENT)))) : []; ?>
+    <?php if (count($IB_LINES) > 1): ?>
+    <div class="ib-search" style="padding-bottom:0"><select id="ib-line" aria-label="WhatsApp number" style="width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:8px;font-size:13px;background:var(--surface);color:inherit">
+      <option value="">All WhatsApp numbers</option>
+      <?php foreach ($IB_LINES as $k => $l): ?><option value="<?= e($k) ?>"><?= e($l['label'] . ($l['phone'] !== '' ? ' (' . $l['phone'] . ')' : '')) ?></option><?php endforeach; ?>
+    </select></div>
+    <?php endif; ?>
     <div class="ib-search"><input type="text" id="ib-q" placeholder="Search name or number…"></div>
     <div class="ib-threads" id="ib-threads"><div class="ib-empty" style="padding:20px">Loading…</div></div>
   </div>
@@ -215,7 +223,7 @@ const IB_UPLOAD = <?= json_encode($IB_UPLOAD) ?>;
 const IB_SEP = <?= json_encode($IB_SEP) ?>;
 const IB_CSRF = <?= json_encode(csrf_token()) ?>;
 const IB_MULTI = <?= count($IB_CHANNELS) > 1 ? 'true' : 'false' ?>;
-let ibCur = 0, ibLast = 0, ibOpen = false, ibCh = '', ibChPicked = false, ibFilter = '';
+let ibCur = 0, ibLast = 0, ibOpen = false, ibCh = '', ibChPicked = false, ibFilter = '', ibLine = null, ibLineFilter = '', ibSplit = false;
 const IB_CH_SHORT = {whatsapp:'WA', messenger:'M', instagram:'IG', sms:'SMS'}, IB_CH_NAME = {whatsapp:'WhatsApp', messenger:'Messenger', instagram:'Instagram', sms:'SMS'};
 const chBadge = c => `<span class="ib-chb ${c}" title="${IB_CH_NAME[c]||c}">${IB_CH_SHORT[c]||'?'}</span>`;
 /* Who they are when there is no number yet: their Instagram handle, or the channel they wrote on. */
@@ -229,8 +237,9 @@ const tick = s => s==='read'?'✓✓':s==='delivered'?'✓✓':s==='sent'?'✓'
 
 async function loadThreads(){
   const q = encodeURIComponent(el('ib-q').value||'');
-  const r = await fetch(IB_URL+IB_SEP+'ajax=threads&q='+q+'&ch='+encodeURIComponent(ibFilter)); const d = await r.json();
+  const r = await fetch(IB_URL+IB_SEP+'ajax=threads&q='+q+'&ch='+encodeURIComponent(ibFilter)+'&line='+encodeURIComponent(ibLineFilter)); const d = await r.json();
   if(!d.ok) return;
+  ibSplit = !!d.split;
   const box = el('ib-threads');
   if(!d.threads.length){ box.innerHTML='<div class="ib-empty" style="padding:20px">No conversations yet.</div>'; return; }
   box.innerHTML = d.threads.map(t=>{
@@ -239,15 +248,19 @@ async function loadThreads(){
     const chs = IB_MULTI ? chBadge(t.last_channel||'whatsapp') + ' ' : '';
     /* The name is the sender's own profile name: it goes in an escaped data attribute and is read
        back with dataset — never into an inline handler, where quotes and backslashes could break out. */
-    return `<div class="ib-th ${t.contact_id==ibCur?'active':''}" data-id="${+t.contact_id}" data-name="${esc(whoName(t))}" data-phone="${esc(t.phone_e164)}">
+    /* Several numbers: one conversation per customer and number — the number is under the name. */
+    const ln = t.line !== undefined && t.line !== null ? String(t.line) : null;
+    const on = t.contact_id==ibCur && (ln===null || ln===ibLine);
+    const via = ln !== null ? `<div class="pv ib-via" title="WhatsApp number">${ln ? '☎ ' : ''}${esc(t.line_label||'')}</div>` : '';
+    return `<div class="ib-th ${on?'active':''}" data-id="${+t.contact_id}" data-line="${ln===null?'':esc(ln)}" data-split="${ln===null?0:1}" data-name="${esc(whoName(t))}" data-phone="${esc(t.phone_e164)}">
       <div class="ib-av">${esc(initials(whoName(t)))}</div>
-      <div style="min-width:0"><div class="nm">${chs}${esc(whoName(t))}</div><div class="pv">${pv}</div></div>
+      <div style="min-width:0"><div class="nm">${chs}${esc(whoName(t))}</div>${via}<div class="pv">${pv}</div></div>
       <div class="meta"><span class="tm">${tfmt(t.last_at)}</span>${badge}</div></div>`;
   }).join('');
-  box.onclick = ev => { const th = ev.target.closest('.ib-th'); if (th) openThread(+th.dataset.id, th.dataset.name, th.dataset.phone); };
+  box.onclick = ev => { const th = ev.target.closest('.ib-th'); if (th) openThread(+th.dataset.id, th.dataset.name, th.dataset.phone, th.dataset.split==='1' ? th.dataset.line : null); };
 }
-function openThread(id,name,phone){
-  ibCur=id; ibLast=0; el('ib-body').innerHTML='';
+function openThread(id,name,phone,line){
+  ibCur=id; ibLine=(line===undefined?null:line); ibLast=0; el('ib-body').innerHTML='';
   document.querySelector('.ib-wrap').classList.add('chatting');   // phones: show the chat pane
   el('ib-head').style.display='flex'; el('ib-foot').style.display='block';
   el('ib-hav').textContent=initials(name||phone); el('ib-hname').textContent=name||(phone?'+'+phone:''); el('ib-hphone').textContent=phone?'+'+phone:'';
@@ -257,8 +270,9 @@ function openThread(id,name,phone){
 }
 async function pollThread(){
   if(!ibCur) return;
-  const r = await fetch(IB_URL+IB_SEP+'ajax=thread&contact='+ibCur+'&after='+ibLast); const d = await r.json();
+  const r = await fetch(IB_URL+IB_SEP+'ajax=thread&contact='+ibCur+'&after='+ibLast+(ibLine!==null?'&line='+encodeURIComponent(ibLine):'')); const d = await r.json();
   if(!d.ok) return;
+  if (d.line_label) el('ib-hphone').textContent = (d.phone ? '+'+d.phone+' · ' : '') + 'on ' + d.line_label;
   const body = el('ib-body'); const atBottom = body.scrollHeight-body.scrollTop-body.clientHeight < 80;
   d.messages.forEach(m=>{
     ibLast=Math.max(ibLast,m.id);
@@ -354,12 +368,14 @@ el('ib-form').addEventListener('submit', async e=>{
   e.preventDefault(); const ta=el('ib-text'); const body=ta.value.trim(); if(!body||!ibCur) return;
   const btn=e.target.querySelector('button'); btn.disabled=true;
   const fd=new FormData(); fd.append('ajax','send'); fd.append('csrf_token',IB_CSRF); fd.append('contact',ibCur); fd.append('body',body); fd.append('channel',ibCh||'whatsapp');
+  if (ibLine) fd.append('line', ibLine);
   const r=await fetch(IB_URL,{method:'POST',body:fd}); const d=await r.json();
   btn.disabled=false;
   if(d.ok){ ta.value=''; pollThread(); loadThreads(); }
   else { alert(d.error||'Could not send.'); }
 });
 el('ib-ch').addEventListener('change', e=>{ ibCh=e.target.value; ibChPicked=true; ibLast=Math.max(0,ibLast); pollThread(); });
+if (el('ib-line')) el('ib-line').addEventListener('change', e=>{ ibLineFilter = e.target.value; loadThreads(); });
 document.querySelectorAll('#ib-tabs button').forEach(b=>b.addEventListener('click',()=>{
   document.querySelectorAll('#ib-tabs button').forEach(x=>x.classList.toggle('on',x===b)); ibFilter=b.dataset.ch; loadThreads();
 }));
@@ -534,7 +550,7 @@ el('ib-tpl-send').addEventListener('click', async ()=>{
   const btn = el('ib-tpl-send'); btn.disabled = true; btn.textContent = 'Sending…';
   const fd = new FormData();
   fd.append('ajax','send_template'); fd.append('csrf_token',IB_CSRF);
-  fd.append('contact',ibCur); fd.append('template',ibPick.id);
+  fd.append('contact',ibCur); fd.append('template',ibPick.id); if (ibLine) fd.append('line', ibLine);
   el('ib-tpl-list').querySelectorAll('[data-v]').forEach(i=> fd.append('vars[]', i.value));
   el('ib-tpl-list').querySelectorAll('[data-h]').forEach(i=> fd.append('header_vars[]', i.value));
   const med = el('ib-tpl-list').querySelector('[data-m]');

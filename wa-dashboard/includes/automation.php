@@ -197,6 +197,8 @@ function auto_send(array $client, array &$run, array $step, array $contact, stri
             'wamid' => $res['wamid'] ?? null, 'error' => $res['error_title'] ?? null,
             'error_code' => (string) ($res['error_code'] ?? ''),
             'ref' => (int) $run['id'],
+            // The WhatsApp number it went out on; none when the step went to Messenger / Instagram.
+            'line' => function_exists('channel_route') && channel_route() ? null : wa_line_of($client),
             // Only a template step has one; anything else records 0 and is skipped.
             'template_id' => $kind === 'template'
                 ? (int) ((json_decode((string) ($step['config'] ?? ''), true) ?: [])['template_id'] ?? 0) : 0,
@@ -693,11 +695,22 @@ function auto_collect(array $client, array $run, array $step, array $contact, ar
 }
 
 /* ── trigger matching ── */
-function auto_match_keyword(int $clientId, string $text): ?array
+/**
+ * SQL for "this automation answers messages to this number": one with a "Send from" number set
+ * listens only to that number; one without listens to every number. Numbered ones go first.
+ */
+function auto_line_sql(?string $line): array
+{
+    if ($line === null || !wa_lines_ready()) return ['', '', []];
+    return [" AND (line IS NULL OR line='' OR line=?)", "(line IS NOT NULL AND line<>'') DESC, ", [$line]];
+}
+
+function auto_match_keyword(int $clientId, string $text, ?string $line = null): ?array
 {
     $text = mb_strtolower(trim($text));
     if ($text === '') return null;
-    $flows = db_all("SELECT * FROM flows WHERE client_id=? AND status='active' AND trigger_type='keyword'", [$clientId]);
+    [$lw, $lo, $lp] = auto_line_sql($line);
+    $flows = db_all("SELECT * FROM flows WHERE client_id=? AND status='active' AND trigger_type='keyword'{$lw} ORDER BY {$lo}id", array_merge([$clientId], $lp));
     foreach ($flows as $f) {
         $tc = json_decode((string) $f['trigger_config'], true) ?: [];
         $match = strtolower((string) ($tc['match_type'] ?? 'contains'));
@@ -729,13 +742,13 @@ function auto_match_keyword(int $clientId, string $text): ?array
  * in one campaign is five ids that all want the same flow. A single-value field would force
  * five identical flows.
  */
-function auto_match_ad(int $clientId, string $sourceId): ?array
+function auto_match_ad(int $clientId, string $sourceId, ?string $line = null): ?array
 {
     $sourceId = trim($sourceId);
     if ($sourceId === '') return null;
-
-    $flows = db_all("SELECT * FROM flows WHERE client_id=? AND status='active' AND trigger_type='ad'
-                     ORDER BY (kind='agent') DESC, id", [$clientId]);
+    [$lw, $lo, $lp] = auto_line_sql($line);
+    $flows = db_all("SELECT * FROM flows WHERE client_id=? AND status='active' AND trigger_type='ad'{$lw}
+                     ORDER BY {$lo}(kind='agent') DESC, id", array_merge([$clientId], $lp));
     $any = null;
     foreach ($flows as $f) {
         $tc   = json_decode((string) $f['trigger_config'], true) ?: [];
@@ -751,18 +764,20 @@ function auto_match_ad(int $clientId, string $sourceId): ?array
     return $any;
 }
 
-function auto_welcome_flow(int $clientId): ?array
+function auto_welcome_flow(int $clientId, ?string $line = null): ?array
 {
     // An AI Chat Agent welcome flow takes precedence over a chatbot welcome flow.
-    return db_row("SELECT * FROM flows WHERE client_id=? AND status='active' AND trigger_type='welcome'
-                   ORDER BY (kind='agent') DESC, id LIMIT 1", [$clientId]);
+    [$lw, $lo, $lp] = auto_line_sql($line);
+    return db_row("SELECT * FROM flows WHERE client_id=? AND status='active' AND trigger_type='welcome'{$lw}
+                   ORDER BY {$lo}(kind='agent') DESC, id LIMIT 1", array_merge([$clientId], $lp));
 }
 
 /** Catch-all flow: runs when no keyword matched and welcome doesn't apply. */
-function auto_default_flow(int $clientId): ?array
+function auto_default_flow(int $clientId, ?string $line = null): ?array
 {
-    return db_row("SELECT * FROM flows WHERE client_id=? AND status='active' AND trigger_type='default'
-                   ORDER BY (kind='agent') DESC, id LIMIT 1", [$clientId]);
+    [$lw, $lo, $lp] = auto_line_sql($line);
+    return db_row("SELECT * FROM flows WHERE client_id=? AND status='active' AND trigger_type='default'{$lw}
+                   ORDER BY {$lo}(kind='agent') DESC, id LIMIT 1", array_merge([$clientId], $lp));
 }
 
 /**
@@ -785,6 +800,9 @@ function auto_bot_paused(array $contact): bool
 function auto_start(array $client, array $contact, array $flow, string $inboundText = '', array $seedFields = [],
                     string $channel = 'whatsapp', array $extra = []): void
 {
+    // The number it talks on: the one they wrote to; else the automation's "Send from"; else the
+    // number this person last talked to; else the account's usual.
+    $client = auto_line_client($client, isset($client['__line']) ? null : (((string) ($flow['line'] ?? '')) ?: (((string) ($contact['last_line'] ?? '')) ?: null)));
     $ctx = ['fields' => $seedFields, 'transcript' => []];
     if ($inboundText !== '') auto_log($ctx, 'user', $inboundText);
     if (db_has_column('flow_runs', 'channel')) {
@@ -803,8 +821,22 @@ function auto_start(array $client, array $contact, array $flow, string $inboundT
         );
     }
     db_run("UPDATE flows SET runs_count=runs_count+1 WHERE id=?", [(int) $flow['id']]);
+    if ($channel === 'whatsapp' && wa_lines_ready()) db_run("UPDATE flow_runs SET line=? WHERE id=?", [wa_line_of($client), $runId]);
     $run = db_row("SELECT * FROM flow_runs WHERE id=?", [$runId]);
     automation_run_steps($client, $contact, $run, $ctx);
+}
+
+/**
+ * The client row on a line ($line, else the one it already carries), for automations. A line the
+ * account no longer has falls back to the account's usual number rather than stopping the run.
+ */
+function auto_line_client(array $client, ?string $line): array
+{
+    if (!function_exists('wa_line_client') || !wa_lines_ready()) return $client;
+    $line = $line ?? ($client['__line'] ?? null);
+    // A salesperson's own phone is theirs: automations never speak from it.
+    if ($line === null || $line === '' || $line[0] === 'u') return $client + ['__line' => wa_line_default($client)];
+    return wa_line_client($client, $line) ?? ($client + ['__line' => wa_line_default($client)]);
 }
 
 /* ── inbound (from webhook) ── */
@@ -964,7 +996,7 @@ function auto_inbound_decide(array $client, array $contact, array $message, stri
     if ($text === '') {
         return 'no_text|Nothing to match on: a photo or voice note with no caption';
     }
-    $flow = auto_match_keyword((int) $client['id'], $text);
+    $flow = auto_match_keyword((int) $client['id'], $text, $client['__line'] ?? null);
     $how  = $flow ? 'keyword' : '';
     // A flow can also have WhatsApp keywords as an extra trigger ("also start when…").
     if (!$flow && function_exists('auto_trigger_flow')) {
@@ -982,7 +1014,7 @@ function auto_inbound_decide(array $client, array $contact, array $message, stri
        Only the opening message of a conversation carries a referral, so this rung can only
        ever fire once per conversation. */
     if (!$flow && $adSource !== '') {
-        $flow = auto_match_ad((int) $client['id'], $adSource);
+        $flow = auto_match_ad((int) $client['id'], $adSource, $client['__line'] ?? null);
         if (!$flow && function_exists('auto_trigger_flow')) {
             $flow = auto_trigger_flow((int) $client['id'], ['wa_ad'], fn($k, $c) => empty($c['ad_ids']) || in_array($adSource, (array) $c['ad_ids'], true));
         }
@@ -993,14 +1025,14 @@ function auto_inbound_decide(array $client, array $contact, array $message, stri
         // welcome: first inbound and no prior run for this contact
         $prior = (int) db_val("SELECT COUNT(*) FROM flow_runs WHERE contact_id=?", [(int) $contact['id']]);
         if ($prior === 0) {
-            $flow = auto_welcome_flow((int) $client['id']);
+            $flow = auto_welcome_flow((int) $client['id'], $client['__line'] ?? null);
             if (!$flow && function_exists('auto_trigger_flow')) $flow = auto_trigger_flow((int) $client['id'], ['wa_welcome'], fn() => true);
             if ($flow) $how = 'welcome';
         }
         // Catch-all: nothing matched and they're not new → answer anyway (e.g. an AI agent
         // acting as an always-on FAQ) instead of leaving the message unanswered.
         if (!$flow) {
-            $flow = auto_default_flow((int) $client['id']);
+            $flow = auto_default_flow((int) $client['id'], $client['__line'] ?? null);
             if (!$flow && function_exists('auto_trigger_flow')) $flow = auto_trigger_flow((int) $client['id'], ['wa_any'], fn() => true);
             if ($flow) $how = 'default';
         }
@@ -1029,6 +1061,7 @@ function automation_tick(int $limit = 100): int
         $client  = db_row("SELECT * FROM clients WHERE id=?", [(int) $run['client_id']]);
         $contact = db_row("SELECT * FROM contacts WHERE id=?", [(int) $run['contact_id']]);
         if (!$client || !$contact) { db_run("UPDATE flow_runs SET status='stopped' WHERE id=?", [(int) $run['id']]); continue; }
+        $client = auto_line_client($client, (string) ($run['line'] ?? '') ?: null);   // on the number the run started on
         $run['status'] = 'active';
         $run['wait_until'] = null;
         automation_run_steps($client, $contact, $run, auto_ctx($run));
@@ -1982,20 +2015,24 @@ function automation_send_outreach(int $maxPerRun = 0, int $onlyFlowId = 0): int
     if (!$ids) return 0;
     $ph = implode(',', array_fill(0, count($ids), '?'));
     $runs = db_all(
-        "SELECT r.id, r.flow_id, r.client_id, r.contact_id, r.context, c.phone_e164, c.name AS contact_name
+        "SELECT r.id, r.flow_id, r.client_id, r.contact_id, r.context, c.phone_e164, c.name AS contact_name, COALESCE(r.line, (SELECT f2.line FROM flows f2 WHERE f2.id=r.flow_id)) run_line
            FROM flow_runs r JOIN contacts c ON c.id = r.contact_id
           WHERE r.id IN ($ph)
           ORDER BY r.id ASC", $ids
     );
     if (!$runs) return 0;
 
+    // Grouped by account AND the number each lead is messaged from (the qualifier's "Send from").
     $byClient = [];
-    foreach ($runs as $r) $byClient[(int) $r['client_id']][] = $r;
+    foreach ($runs as $r) $byClient[(int) $r['client_id'] . '|' . (string) ($r['run_line'] ?? '')][] = $r;
 
     $sent = 0;
-    foreach ($byClient as $cid => $cruns) {
+    foreach ($byClient as $key => $cruns) {
+        [$cid, $line] = explode('|', $key, 2);
+        $cid = (int) $cid;
         $client = db_row("SELECT * FROM clients WHERE id=?", [$cid]);
         if (!$client || ($client['status'] ?? '') !== 'active') continue;
+        $client = auto_line_client($client, $line !== '' ? $line : null);
 
         // Personal numbers share ONE paced slot across every module, and campaigns have
         // already taken their share this run — send only what is left, or nothing while
@@ -2108,7 +2145,7 @@ function automation_send_outreach(int $maxPerRun = 0, int $onlyFlowId = 0): int
                     db_run("UPDATE flow_runs SET status='waiting_input', current_step_id=?, updated_at=NOW() WHERE id=?", [$m['stepId'], $runId]);
                     db_run("INSERT INTO flow_messages (flow_id,step_id,run_id,client_id,contact_id,wa_message_id,status,created_at) VALUES (?,?,?,?,?,?, 'sent', NOW())",
                         [$m['flow_id'], $m['stepId'], $runId, $cid, $m['contact_id'], $rr['wamid'] ?? null]);
-                    if (function_exists('msg_log')) msg_log($cid, $m['contact_id'], 'out', $logTxt, ['type' => $logTyp, 'source' => 'qualifier', 'status' => 'sent', 'wamid' => $rr['wamid'] ?? null, 'ref' => (int) $runId, 'template_id' => (int) ($it['tpl']['template_id'] ?? 0)]);
+                    if (function_exists('msg_log')) msg_log($cid, $m['contact_id'], 'out', $logTxt, ['type' => $logTyp, 'source' => 'qualifier', 'status' => 'sent', 'wamid' => $rr['wamid'] ?? null, 'ref' => (int) $runId, 'line' => wa_line_of($client), 'template_id' => (int) ($it['tpl']['template_id'] ?? 0)]);
                     $sent++;
                 } else {
                     credits_adjust($cid, 1, 'automation_refund', null);
@@ -2123,7 +2160,7 @@ function automation_send_outreach(int $maxPerRun = 0, int $onlyFlowId = 0): int
                     db_run("INSERT INTO flow_messages (flow_id,step_id,run_id,client_id,contact_id,wa_message_id,status,error_code,error_title,created_at) VALUES (?,?,?,?,?,?, 'failed', ?, ?, NOW())",
                         [$m['flow_id'], $m['stepId'], $runId, $cid, $m['contact_id'], $rr['wamid'] ?? null,
                          $ecode !== '' ? substr($ecode, 0, 32) : null, substr($err, 0, 255)]);
-                    if (function_exists('msg_log')) msg_log($cid, $m['contact_id'], 'out', $logTxt, ['type' => $logTyp, 'source' => 'qualifier', 'status' => 'failed', 'error' => $err, 'error_code' => $ecode, 'ref' => (int) $runId, 'template_id' => (int) ($it['tpl']['template_id'] ?? 0)]);
+                    if (function_exists('msg_log')) msg_log($cid, $m['contact_id'], 'out', $logTxt, ['type' => $logTyp, 'source' => 'qualifier', 'status' => 'failed', 'error' => $err, 'error_code' => $ecode, 'ref' => (int) $runId, 'line' => wa_line_of($client), 'template_id' => (int) ($it['tpl']['template_id'] ?? 0)]);
                 }
             }
         }

@@ -8,51 +8,61 @@ $err = ''; $syncMsg = '';
 // page is informational there rather than an error about missing Meta credentials.
 $PERSONAL = channel_is_personal($CLIENT);
 
-/* ── Sync templates from the client's WABA ── */
+/* ── Sync templates from the client's WABA ──
+   And from the WhatsApp Business Account of every extra Business API number in another one
+   (Settings → WhatsApp numbers): their templates are kept with that account's id (waba_id). */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'sync') {
     verify_csrf();
-    if ($PERSONAL) {
-        $err = 'Your account sends from your own WhatsApp number, which has no approved templates to sync.';
-    } elseif (!client_ready($CLIENT) || !$CLIENT['waba_id']) {
-        $err = 'Your WhatsApp account is not fully configured yet (WABA ID / token missing). Contact Gildana.';
+    require_once __DIR__ . '/../includes/sending.php';
+    $sources = [];                                             // waba id => client row to read it with ('' = main)
+    if (!$PERSONAL && client_ready($CLIENT) && $CLIENT['waba_id']) $sources[''] = $CLIENT;
+    if (wa_lines_ready()) {
+        foreach (wa_lines($CLIENT) as $k => $l) {
+            if ($k[0] !== 'n' || $l['kind'] !== 'cloud' || $l['waba'] === '' || $l['waba'] === (string) $CLIENT['waba_id'] || isset($sources[$l['waba']])) continue;
+            if ($lc = wa_line_client($CLIENT, $k)) $sources[$l['waba']] = $lc;
+        }
+    }
+    if (!$sources) {
+        $err = $PERSONAL ? 'Your account sends from your own WhatsApp number, which has no approved templates to sync.'
+                         : 'Your WhatsApp account is not fully configured yet (WABA ID / token missing). Contact Gildana.';
     } else {
-        $res = wa_fetch_templates($CLIENT);
-        if (!$res['ok']) {
-            $err = 'Could not load templates: ' . $res['error'];
-        } else {
-            $upsert = db()->prepare(
-                "INSERT INTO templates (client_id, wa_name, language, category, status, components, body_text, variable_count, synced_at)
-                 VALUES (?,?,?,?,?,?,?,?,NOW())
-                 ON DUPLICATE KEY UPDATE category=VALUES(category), status=VALUES(status),
-                    components=VALUES(components), body_text=VALUES(body_text),
-                    variable_count=VALUES(variable_count), synced_at=NOW()"
-            );
-            $seen = [];
+        $seen = []; $found = 0; $errs = [];
+        foreach ($sources as $waba => $src) {
+            $res = wa_fetch_templates($src);
+            if (!$res['ok']) { $errs[] = ($waba === '' ? 'Main account' : 'Account ' . $waba) . ': ' . $res['error']; continue; }
+            // The main account's templates win a name clash; another account's only fill gaps.
+            $upsert = db()->prepare($waba === ''
+                ? "INSERT INTO templates (client_id, wa_name, language, category, status, components, body_text, variable_count, waba_id, synced_at)
+                   VALUES (?,?,?,?,?,?,?,?,NULL,NOW())
+                   ON DUPLICATE KEY UPDATE category=VALUES(category), status=VALUES(status), components=VALUES(components),
+                      body_text=VALUES(body_text), variable_count=VALUES(variable_count), waba_id=NULL, synced_at=NOW()"
+                : "INSERT INTO templates (client_id, wa_name, language, category, status, components, body_text, variable_count, waba_id, synced_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,NOW())
+                   ON DUPLICATE KEY UPDATE synced_at=IF(waba_id <=> VALUES(waba_id), NOW(), synced_at),
+                      status=IF(waba_id <=> VALUES(waba_id), VALUES(status), status)");
             foreach ($res['templates'] as $t) {
                 $name = (string) ($t['name'] ?? '');
                 $lang = (string) ($t['language'] ?? 'en');
                 if ($name === '') continue;
                 $components = $t['components'] ?? [];
                 $bodyInfo   = wa_template_body(is_array($components) ? $components : []);
-                $upsert->execute([
-                    $cid, $name, $lang,
-                    (string) ($t['category'] ?? ''),
-                    strtoupper((string) ($t['status'] ?? '')),
-                    json_encode($components, JSON_UNESCAPED_UNICODE),
-                    $bodyInfo['body'],
-                    $bodyInfo['vars'],
-                ]);
+                $vals = [$cid, $name, $lang, (string) ($t['category'] ?? ''), strtoupper((string) ($t['status'] ?? '')),
+                         json_encode($components, JSON_UNESCAPED_UNICODE), $bodyInfo['body'], $bodyInfo['vars']];
+                if ($waba !== '') $vals[] = $waba;
+                $upsert->execute($vals);
                 $seen[] = $name . '|' . $lang;
+                $found++;
             }
-            // Remove templates that no longer exist on Meta's side.
-            if ($seen) {
+        }
+        if ($errs && !$seen) {
+            $err = 'Could not load templates: ' . implode(' · ', $errs);
+        } else {
+            // Remove templates that no longer exist on Meta's side (in any of the accounts read).
+            if ($seen && !$errs) {
                 $ph = implode(',', array_fill(0, count($seen), '?'));
-                db_run(
-                    "DELETE FROM templates WHERE client_id=? AND CONCAT(wa_name,'|',language) NOT IN ($ph)",
-                    array_merge([$cid], $seen)
-                );
+                db_run("DELETE FROM templates WHERE client_id=? AND CONCAT(wa_name,'|',language) NOT IN ($ph)", array_merge([$cid], $seen));
             }
-            flash('Templates synced — ' . count($res['templates']) . ' found.');
+            flash('Templates synced — ' . $found . ' found.' . ($errs ? ' Not read: ' . implode(' · ', $errs) : ''), $errs ? 'error' : 'success');
             redirect('templates.php');
         }
     }

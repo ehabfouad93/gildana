@@ -496,4 +496,14 @@ return [
     'Connect WooCommerce' => 'ربط WooCommerce', 'Consumer key' => 'مفتاح المستهلك (Consumer key)', 'Consumer secret' => 'سر المستهلك (Consumer secret)',
     'Orders' => 'الطلبات', 'Order completed / shipped (with tracking link if any)' => 'اكتمل الطلب / تم الشحن (مع رابط التتبع إن وُجد)',
     'Order left unpaid (reminder with the payment link)' => 'طلب لم يُدفع (تذكير برابط الدفع)', 'Unpaid orders paid after a reminder' => 'طلبات دُفعت بعد التذكير',
+    /* ── Several WhatsApp numbers ── */
+    'WhatsApp numbers' => 'أرقام واتساب', 'Number' => 'الرقم', 'Type' => 'النوع', 'Main' => 'رئيسي', 'Business API' => 'واتساب بيزنس API',
+    'Linked phone' => 'هاتف مربوط', 'Not connected' => 'غير متصل', 'Rename' => 'إعادة تسمية', 'Remove' => 'حذف', 'Link phone' => 'ربط الهاتف', 'Re-link' => 'إعادة الربط',
+    '+ Add a Business API number' => '+ إضافة رقم واتساب بيزنس API', '+ Link another phone' => '+ ربط هاتف آخر', 'Add number' => 'إضافة الرقم', 'Add and link' => 'إضافة وربط',
+    'Phone Number ID' => 'معرّف رقم الهاتف (Phone Number ID)', 'Link a phone' => 'ربط هاتف', 'Close' => 'إغلاق',
+    'Send from' => 'الإرسال من', 'All WhatsApp numbers' => 'كل أرقام واتساب', 'Business API number' => 'رقم واتساب بيزنس API', 'Company phone' => 'هاتف الشركة',
+    'Removed number' => 'رقم محذوف', 'Send automatic messages from' => 'إرسال الرسائل التلقائية من', 'Send WhatsApp messages from' => 'إرسال رسائل واتساب من',
+    'Any number — replies from the one they wrote to' => 'أي رقم — الرد من الرقم الذي راسلوه', 'Extra WhatsApp numbers the client may add' => 'عدد أرقام واتساب الإضافية المسموح بها للعميل',
+    'Any of the account\'s numbers (chooses when sending)' => 'أي رقم من أرقام الحساب (يختار عند الإرسال)', 'Only the main Business API number' => 'رقم واتساب بيزنس الرئيسي فقط',
+    'Only the company\'s main phone' => 'هاتف الشركة الرئيسي فقط', 'Their own phone' => 'هاتفه الشخصي', 'Cannot send' => 'لا يمكنه الإرسال',
 ];

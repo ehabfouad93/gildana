@@ -73,7 +73,7 @@ function team_phone_from_post(array $client): ?string
 function team_send_via_from_post(): ?string
 {
     $v = (string) ($_POST['send_via'] ?? '');
-    return $v !== '' && isset(send_via_labels()[$v]) ? $v : null;
+    return $v !== '' && isset(send_via_labels($GLOBALS['CLIENT'] ?? null)[$v]) ? $v : null;
 }
 
 $err = '';
@@ -172,7 +172,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
             <?= $custom ? '<span class="pill blue" style="margin-inline-start:4px">custom</span>' : '' ?></td>
           <td style="font-size:12.5px"><?php
             $sv = (string) ($p['send_via'] ?? '');
-            echo e(send_via_labels()[$sv] ?? '—');
+            echo e(send_via_labels($CLIENT)[$sv] ?? '—');
             if ($sv === 'own') {
                 $pc = user_channel((int) $p['id']);
                 echo ($pc && $pc['status'] === 'connected')
@@ -252,7 +252,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 
     <div class="field"><span class="lbl">Sends messages from</span>
       <select name="send_via" id="t-send">
-        <?php foreach (send_via_labels() as $k => $lbl): ?><option value="<?= e($k) ?>"><?= e($lbl) ?></option><?php endforeach; ?>
+        <?php foreach (send_via_labels($CLIENT) as $k => $lbl): ?><option value="<?= e($k) ?>"><?= e($lbl) ?></option><?php endforeach; ?>
       </select>
       <span class="text-muted" style="font-size:11.5px">"Their own phone" — they link it themselves from My WhatsApp.
         It can be banned by WhatsApp like any personal number.</span></div>
