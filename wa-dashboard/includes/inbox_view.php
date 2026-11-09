@@ -31,6 +31,7 @@ $IB_CHANNELS = isset($CLIENT) && function_exists('client_channels')
   .ib-tabs button.on{background:var(--brand,#7C3AED);border-color:var(--brand,#7C3AED);color:#fff}
   .ib-chb{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:16px;padding:0 4px;border-radius:5px;font-size:9.5px;font-weight:700;color:#fff;letter-spacing:.02em;vertical-align:1px}
   .ib-chb.sms{background:#64748B}.ib-chb.whatsapp{background:#25D366}.ib-chb.messenger{background:#0866FF}.ib-chb.instagram{background:linear-gradient(45deg,#F58529,#DD2A7B 55%,#8134AF)}
+  .ib-chsel[hidden]{display:none!important}
   .ib-chsel{border:1px solid var(--line,rgba(var(--ink-rgb,13,19,33),.12));border-radius:8px;padding:6px 8px;font-size:12.5px;background:var(--surface,#fff);color:inherit;align-self:center}
   .ib-addlead{white-space:nowrap}
   .ib-badge{background:var(--brand,#7C3AED);color:#fff;border-radius:10px;font-size:11px;padding:1px 7px;font-weight:600}
@@ -162,6 +163,7 @@ $IB_CHANNELS = isset($CLIENT) && function_exists('client_channels')
     </div>
     <div class="ib-body" id="ib-body"><div class="ib-empty">Select a conversation to view messages.</div></div>
     <div class="ib-foot" id="ib-foot" style="display:none">
+      <select id="ib-from" class="ib-chsel" aria-label="Send from" title="Send from" hidden style="margin:0 0 6px auto;display:block;max-width:100%"></select>
       <form id="ib-form"><select id="ib-ch" class="ib-chsel" aria-label="Reply on" hidden></select><textarea id="ib-text" rows="1" placeholder="Type a reply…"></textarea><button class="btn btn-primary" type="submit">Send</button></form>
       <div class="ib-note" id="ib-nosend" hidden></div>
       <div class="ib-note" id="ib-closed" style="display:none">
@@ -223,7 +225,7 @@ const IB_UPLOAD = <?= json_encode($IB_UPLOAD) ?>;
 const IB_SEP = <?= json_encode($IB_SEP) ?>;
 const IB_CSRF = <?= json_encode(csrf_token()) ?>;
 const IB_MULTI = <?= count($IB_CHANNELS) > 1 ? 'true' : 'false' ?>;
-let ibCur = 0, ibLast = 0, ibOpen = false, ibCh = '', ibChPicked = false, ibFilter = '', ibLine = null, ibLineFilter = '', ibSplit = false;
+let ibCur = 0, ibLast = 0, ibOpen = false, ibCh = '', ibChPicked = false, ibFilter = '', ibLine = null, ibLineFilter = '', ibSplit = false, ibFrom = null, ibFromPicked = false, ibFromList = [];
 const IB_CH_SHORT = {whatsapp:'WA', messenger:'M', instagram:'IG', sms:'SMS'}, IB_CH_NAME = {whatsapp:'WhatsApp', messenger:'Messenger', instagram:'Instagram', sms:'SMS'};
 const chBadge = c => `<span class="ib-chb ${c}" title="${IB_CH_NAME[c]||c}">${IB_CH_SHORT[c]||'?'}</span>`;
 /* Who they are when there is no number yet: their Instagram handle, or the channel they wrote on. */
@@ -260,7 +262,7 @@ async function loadThreads(){
   box.onclick = ev => { const th = ev.target.closest('.ib-th'); if (th) openThread(+th.dataset.id, th.dataset.name, th.dataset.phone, th.dataset.split==='1' ? th.dataset.line : null); };
 }
 function openThread(id,name,phone,line){
-  ibCur=id; ibLine=(line===undefined?null:line); ibLast=0; el('ib-body').innerHTML='';
+  ibCur=id; ibLine=(line===undefined?null:line); ibFrom=null; ibFromPicked=false; ibFromList=[]; ibLast=0; el('ib-body').innerHTML='';
   document.querySelector('.ib-wrap').classList.add('chatting');   // phones: show the chat pane
   el('ib-head').style.display='flex'; el('ib-foot').style.display='block';
   el('ib-hav').textContent=initials(name||phone); el('ib-hname').textContent=name||(phone?'+'+phone:''); el('ib-hphone').textContent=phone?'+'+phone:'';
@@ -325,6 +327,13 @@ async function pollThread(){
   el('ib-optin').hidden = !d.can_ask_optin;
   ibOpen = d.windows && (ibCh in d.windows) ? !!d.windows[ibCh] : !!d.window_open;
   const social = ibCh === 'messenger' || ibCh === 'instagram';
+  /* Send from: this person's WhatsApp numbers. A linked phone has no 24-hour window. */
+  ibFromList = d.wa_from || [];
+  const fs = el('ib-from');
+  if (!ibFromPicked || !ibFromList.some(f => f.key === ibFrom)) ibFrom = d.wa_line || (ibFromList[0] && ibFromList[0].key) || null;
+  fs.innerHTML = ibFromList.map(f => `<option value="${esc(f.key)}" ${f.key===ibFrom?'selected':''}>From ${esc(f.label)}${f.kind==='personal'?'':(f.open?'':' — 24h closed')}</option>`).join('');
+  fs.hidden = social || ibFromList.length < 2;
+  if (!social && ibFromList.length > 1) { const f = ibFromList.find(x => x.key === ibFrom); if (f) { ibOpen = !!f.open; d.wa_can_send = true; } }
   if (!social) { d.can_send = d.wa_can_send !== undefined ? d.wa_can_send : d.can_send; d.send_error = d.wa_send_error !== undefined ? d.wa_send_error : d.send_error; }
   else d.can_send = true;
   const own = el('ib-owner');
@@ -368,12 +377,17 @@ el('ib-form').addEventListener('submit', async e=>{
   e.preventDefault(); const ta=el('ib-text'); const body=ta.value.trim(); if(!body||!ibCur) return;
   const btn=e.target.querySelector('button'); btn.disabled=true;
   const fd=new FormData(); fd.append('ajax','send'); fd.append('csrf_token',IB_CSRF); fd.append('contact',ibCur); fd.append('body',body); fd.append('channel',ibCh||'whatsapp');
-  if (ibLine) fd.append('line', ibLine);
+  if (ibFrom && ibCh !== 'messenger' && ibCh !== 'instagram') fd.append('line', ibFrom); else if (ibLine) fd.append('line', ibLine);
   const r=await fetch(IB_URL,{method:'POST',body:fd}); const d=await r.json();
   btn.disabled=false;
-  if(d.ok){ ta.value=''; pollThread(); loadThreads(); }
+  if(d.ok){ ta.value='';
+    // Several numbers: sent from another number (a phone) — it is in that number's conversation now.
+    if (ibSplit && ibLine !== null && ibFrom && ibFrom !== ibLine) { ibLine = ibFrom; ibFromPicked = false; ibLast = 0; el('ib-body').innerHTML = ''; }
+    pollThread(); loadThreads(); }
   else { alert(d.error||'Could not send.'); }
 });
+el('ib-from').addEventListener('change', e=>{ ibFrom=e.target.value; ibFromPicked=true; const f=ibFromList.find(x=>x.key===ibFrom);
+  if (f) { ibOpen=!!f.open; el('ib-form').style.display = ibOpen ? 'flex' : 'none'; el('ib-closed').style.display = ibOpen ? 'none' : 'block'; } });
 el('ib-ch').addEventListener('change', e=>{ ibCh=e.target.value; ibChPicked=true; ibLast=Math.max(0,ibLast); pollThread(); });
 if (el('ib-line')) el('ib-line').addEventListener('change', e=>{ ibLineFilter = e.target.value; loadThreads(); });
 document.querySelectorAll('#ib-tabs button').forEach(b=>b.addEventListener('click',()=>{
@@ -550,7 +564,7 @@ el('ib-tpl-send').addEventListener('click', async ()=>{
   const btn = el('ib-tpl-send'); btn.disabled = true; btn.textContent = 'Sending…';
   const fd = new FormData();
   fd.append('ajax','send_template'); fd.append('csrf_token',IB_CSRF);
-  fd.append('contact',ibCur); fd.append('template',ibPick.id); if (ibLine) fd.append('line', ibLine);
+  fd.append('contact',ibCur); fd.append('template',ibPick.id); if (ibLine) fd.append('line', ibLine); else if (ibFrom) fd.append('line', ibFrom);
   el('ib-tpl-list').querySelectorAll('[data-v]').forEach(i=> fd.append('vars[]', i.value));
   el('ib-tpl-list').querySelectorAll('[data-h]').forEach(i=> fd.append('header_vars[]', i.value));
   const med = el('ib-tpl-list').querySelector('[data-m]');

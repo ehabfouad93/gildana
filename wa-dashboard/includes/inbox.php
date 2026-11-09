@@ -435,7 +435,31 @@ function inbox_handle_ajax(array $client): void
         inbox_mark_read($cid, $contactId, $line);
         // Every channel this person can be answered on, the one they last wrote on, and its 24-hour window.
         require_once __DIR__ . '/social.php';
-        $s = sender_for($client, sending_user(), $line !== null && $line !== '' ? $line : null, $contact);
+        /* Which of this person's numbers the reply goes from. A linked phone (company or own) has no
+           24-hour rule, so when the Business API window is closed and they may send from a phone,
+           the phone is chosen — and they can switch in the reply box ("From"). */
+        $fromLines = [];
+        if ($line !== '' && function_exists('wa_lines_for_user') && wa_lines_ready() && !empty($contact['phone_e164'])) {
+            foreach (wa_lines_for_user($client, sending_user()) as $k => $l) {
+                if (!$l['ready']) continue;
+                // In one number's conversation: that number, or a phone (which can always write).
+                if ($line !== null && $k !== $line && $l['kind'] !== 'personal') continue;
+                $lc = wa_line_client($client, $k);
+                if (!$lc) continue;
+                $fromLines[] = ['key' => $k, 'label' => $l['label'] . ($l['phone'] !== '' ? ' (' . $l['phone'] . ')' : ''), 'kind' => $l['kind'],
+                                'open' => $l['kind'] === 'personal' || inbox_window_open($contact, $lc)];
+            }
+        }
+        $want = null;
+        if ($fromLines) {
+            $byKey = array_column($fromLines, null, 'key');
+            $last = (string) ($contact['last_line'] ?? '');
+            if (isset($byKey[$last]) && $byKey[$last]['open']) $want = $last;                       // where they last talked, if it can reply
+            elseif ($line !== null && isset($byKey[$line]) && $byKey[$line]['open']) $want = $line;   // this conversation's number
+            else foreach ($fromLines as $fl) if ($fl['open']) { $want = $fl['key']; break; }        // else a number that can (a phone)
+            $want ??= $line;
+        } elseif ($line !== null && $line !== '') $want = $line;
+        $s = sender_for($client, sending_user(), $want, $contact);
         $reach = array_filter(social_reach($contact), fn($v, $ch) => client_has_channel($client, $ch), ARRAY_FILTER_USE_BOTH);
         if ($line !== null) $reach = array_filter($reach, fn($v, $ch) => ($ch === 'whatsapp') === ($line !== ''), ARRAY_FILTER_USE_BOTH);
         $lastIn = db_has_column('messages', 'channel')
@@ -451,6 +475,7 @@ function inbox_handle_ajax(array $client): void
             'window_open' => $windows[$reply] ?? inbox_window_open($contact, $s['ok'] ? $s['client'] : $client),
             'can_send'    => $reply !== 'whatsapp' || $s['ok'], 'send_error' => $reply !== 'whatsapp' || $s['ok'] ? '' : (string) $s['error'],
             'wa_can_send' => $s['ok'], 'wa_send_error' => $s['ok'] ? '' : (string) $s['error'],
+            'wa_from' => count($fromLines) > 1 ? $fromLines : [], 'wa_line' => $s['line'] ?? null,
             'channels' => array_keys($reach), 'reply_channel' => $reply, 'windows' => $windows,
             'ig_username' => (string) ($contact['ig_username'] ?? ''),
             'in_crm' => $contact['stage_id'] !== null,
