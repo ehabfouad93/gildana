@@ -516,4 +516,5 @@ return [
     'Not connected — Admins only' => 'غير متصل — للمسؤولين فقط', 'Connected' => 'متصل',
     'Only specific numbers' => 'أرقام محددة فقط', 'The same numbers they send from' => 'نفس الأرقام التي يرسل منها',
     'Which numbers\' conversations appear in their Inbox. A number that is not connected is shown to Admins only. Messenger and Instagram are not affected.' => 'محادثات أي أرقام تظهر في صندوق الوارد الخاص به. الرقم غير المتصل يظهر للمسؤولين فقط. لا يؤثر ذلك على ماسنجر وإنستجرام.',
+    '+ Create template' => '+ إنشاء قالب', 'Create template' => 'إنشاء قالب', 'Edit template' => 'تعديل القالب', 'Submit to Meta for review' => 'إرسال إلى ميتا للمراجعة', 'Send changes to Meta' => 'إرسال التعديلات إلى ميتا', 'Back to templates' => 'العودة إلى القوالب', 'Carousel cards' => 'بطاقات الكاروسيل', 'Offer ends' => 'ينتهي العرض في', 'Limited-time offer' => 'عرض لفترة محدودة', 'Meta reviews every template — usually minutes, at most a day.' => 'تراجع ميتا كل قالب — عادةً خلال دقائق، وبحد أقصى يوم.', 'Variables show as {{1}}; customers see the real values.' => 'تظهر المتغيرات هكذا {{1}}؛ ويرى العملاء القيم الحقيقية.',
 ];

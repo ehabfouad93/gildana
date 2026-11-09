@@ -149,7 +149,7 @@ function wa_fetch_templates(array $client): array
 
     $templates = [];
     $url = wa_graph_base() . '/' . rawurlencode($waba)
-         . '/message_templates?fields=name,status,category,language,components&limit=100';
+         . '/message_templates?fields=id,name,status,category,language,components,rejected_reason&limit=100';
 
     // Follow paging up to a sane cap.
     for ($page = 0; $page < 20 && $url !== ''; $page++) {
@@ -207,6 +207,7 @@ function wa_template_header_example(array $components): string
 {
     foreach ($components as $c) {
         if (strtoupper((string) ($c['type'] ?? '')) !== 'HEADER') continue;
+        if (!empty($c['_media'])) return (string) $c['_media'];        // Revenect's own copy (template made here)
         $h = $c['example']['header_handle'] ?? ($c['example']['header_url'] ?? null);
         if (is_array($h)) $h = $h[0] ?? '';
         return trim((string) $h);
@@ -225,7 +226,23 @@ function wa_template_header_example(array $components): string
  */
 function wa_template_spec(array $components): array
 {
-    $spec = ['header' => ['format' => '', 'text_vars' => 0], 'body_vars' => 0, 'buttons' => []];
+    $spec = ['header' => ['format' => '', 'text_vars' => 0], 'body_vars' => 0, 'buttons' => [], 'cards' => [], 'lto' => null];
+    $buttons = function (array $list): array {
+        $o = [];
+        foreach ($list as $idx => $b) {
+            $bt  = strtoupper((string) ($b['type'] ?? ''));
+            $dyn = ($bt === 'URL' && strpos((string) ($b['url'] ?? ''), '{{') !== false) || $bt === 'COPY_CODE';
+            // What Meta was shown when it approved the template: the default when nothing else is given.
+            $ex = $b['example'] ?? '';
+            if (is_array($ex)) $ex = (string) ($ex[0] ?? '');
+            if ($bt === 'URL' && $ex !== '') {
+                $pre = preg_replace('/\{\{\s*1\s*\}\}$/', '', (string) ($b['url'] ?? ''));
+                $ex = str_starts_with($ex, $pre) ? rawurldecode(substr($ex, strlen($pre))) : '';
+            }
+            $o[] = ['type' => $bt, 'index' => (int) $idx, 'dynamic' => $dyn, 'text' => (string) ($b['text'] ?? ''), 'example' => (string) $ex];
+        }
+        return $o;
+    };
     foreach ($components as $c) {
         $type = strtoupper((string) ($c['type'] ?? ''));
         if ($type === 'HEADER') {
@@ -234,14 +251,38 @@ function wa_template_spec(array $components): array
             preg_match_all('/\{\{\s*(\d+)\s*\}\}/', (string) ($c['text'] ?? ''), $m);
             $spec['body_vars'] = empty($m[1]) ? 0 : max(array_map('intval', $m[1]));
         } elseif ($type === 'BUTTONS') {
-            foreach ((array) ($c['buttons'] ?? []) as $idx => $b) {
-                $bt  = strtoupper((string) ($b['type'] ?? ''));
-                $dyn = ($bt === 'URL' && strpos((string) ($b['url'] ?? ''), '{{') !== false) || $bt === 'COPY_CODE';
-                $spec['buttons'][] = ['type' => $bt, 'index' => (int) $idx, 'dynamic' => $dyn, 'text' => (string) ($b['text'] ?? '')];
+            $spec['buttons'] = $buttons((array) ($c['buttons'] ?? []));
+        } elseif ($type === 'LIMITED_TIME_OFFER') {
+            $spec['lto'] = ['has_expiration' => !empty($c['limited_time_offer']['has_expiration']), 'text' => (string) ($c['limited_time_offer']['text'] ?? '')];
+        } elseif ($type === 'CAROUSEL') {
+            // Swipeable cards: each has its own picture or video, text and buttons — all sent per card.
+            foreach ((array) ($c['cards'] ?? []) as $ci => $cd) {
+                $card = ['index' => (int) $ci, 'format' => '', 'media' => '', 'body_vars' => 0, 'samples' => [], 'buttons' => [], 'text' => ''];
+                foreach ((array) ($cd['components'] ?? []) as $cc) {
+                    $ct = strtoupper((string) ($cc['type'] ?? ''));
+                    if ($ct === 'HEADER') { $card['format'] = strtoupper((string) ($cc['format'] ?? 'IMAGE')); $card['media'] = wa_component_media($cc); }
+                    elseif ($ct === 'BODY') {
+                        $card['text'] = (string) ($cc['text'] ?? '');
+                        preg_match_all('/\{\{\s*(\d+)\s*\}\}/', $card['text'], $m);
+                        $card['body_vars'] = empty($m[1]) ? 0 : max(array_map('intval', $m[1]));
+                        $card['samples'] = array_values((array) ($cc['example']['body_text'][0] ?? []));
+                    } elseif ($ct === 'BUTTONS') $card['buttons'] = $buttons((array) ($cc['buttons'] ?? []));
+                }
+                $spec['cards'][] = $card;
             }
         }
     }
     return $spec;
+}
+
+/** The file to send in a header: Revenect's own copy of the sample (_media), else Meta's sample link. */
+function wa_component_media(array $c): string
+{
+    if (!empty($c['_media'])) return (string) $c['_media'];
+    $h = $c['example']['header_handle'] ?? ($c['example']['header_url'] ?? null);
+    if (is_array($h)) $h = $h[0] ?? '';
+    $h = trim((string) $h);
+    return preg_match('#^https://#i', $h) ? $h : '';
 }
 
 /* ─────────────────────────────────────────────
@@ -431,6 +472,31 @@ function wa_apply_media_id(array $components, ?string $mediaId): array
 }
 
 /**
+ * Carousel cards rendered with links (campaigns render ahead of time): send each card's picture
+ * or video by a media id instead, uploaded once and reused (wa_resolve_media caches it), so Meta
+ * does not fetch every card from our server for every recipient.
+ */
+function wa_apply_card_media_ids(array $client, array $components): array
+{
+    foreach ($components as $ci => $comp) {
+        if (strtolower((string) ($comp['type'] ?? '')) !== 'carousel') continue;
+        foreach ((array) ($comp['cards'] ?? []) as $k => $card) {
+            foreach ((array) ($card['components'] ?? []) as $j => $cc) {
+                if (strtolower((string) ($cc['type'] ?? '')) !== 'header') continue;
+                foreach ((array) ($cc['parameters'] ?? []) as $pi => $p) {
+                    $t = strtolower((string) ($p['type'] ?? ''));
+                    $link = (string) ($p[$t]['link'] ?? '');
+                    if ($link === '' || !in_array($t, ['image', 'video'], true)) continue;
+                    $id = wa_resolve_media($client, $link);
+                    if ($id !== null) $components[$ci]['cards'][$k]['components'][$j]['parameters'][$pi][$t] = ['id' => $id];
+                }
+            }
+        }
+    }
+    return $components;
+}
+
+/**
  * Is this send failure worth one retry?
  *
  * Only genuine hiccups — a media fetch/upload glitch, a rate limit, a 5xx or a dropped
@@ -572,7 +638,7 @@ function wa_error_explain(string $code, string $title = ''): array
 function wa_template_has_media(array $components): bool
 {
     $spec = wa_template_spec($components);
-    return in_array(strtoupper((string) $spec['header']['format']), ['IMAGE', 'VIDEO', 'DOCUMENT'], true);
+    return !empty($spec['cards']) || in_array(strtoupper((string) $spec['header']['format']), ['IMAGE', 'VIDEO', 'DOCUMENT'], true);
 }
 
 /**
@@ -610,7 +676,8 @@ function wa_build_components(array $tplComponents, array $cfg, array $contact, a
     // ── HEADER ──
     $hf = strtoupper((string) $spec['header']['format']);
     if (in_array($hf, ['IMAGE', 'VIDEO', 'DOCUMENT'], true)) {
-        $url = trim((string) ($cfg['header_media'] ?? ''));
+        $url = trim((string) ($cfg['header_media'] ?? '')) ?: wa_template_header_example($tplComponents);
+        if ($url !== '' && !preg_match('#^https?://#i', $url)) $url = '';      // a bare upload handle is not a file to send
         if ($url !== '') {
             $k = strtolower($hf);
             // Reuse a Meta media id when we can; fall back to the raw link otherwise.
@@ -632,6 +699,14 @@ function wa_build_components(array $tplComponents, array $cfg, array $contact, a
         $out[] = ['type' => 'header', 'parameters' => $params];
     }
 
+    // ── LIMITED-TIME OFFER: when the offer ends (the countdown) ──
+    if (!empty($spec['lto']['has_expiration'])) {
+        $end = trim((string) ($cfg['lto_expires'] ?? ''));
+        $ts = $end !== '' && strtotime($end) ? strtotime($end) : time() + 86400;      // not set: a day from sending
+        $out[] = ['type' => 'limited_time_offer', 'parameters' => [['type' => 'limited_time_offer',
+                  'limited_time_offer' => ['expiration_time_ms' => $ts * 1000]]]];
+    }
+
     // ── BODY ──
     if ((int) $spec['body_vars'] > 0) {
         $params = [];
@@ -641,13 +716,51 @@ function wa_build_components(array $tplComponents, array $cfg, array $contact, a
         $out[] = ['type' => 'body', 'parameters' => $params];
     }
 
+    // ── CAROUSEL: every card's picture or video, its variables and its buttons ──
+    if (!empty($spec['cards'])) {
+        $cards = [];
+        foreach ($spec['cards'] as $card) {
+            $ci = (int) $card['index'];
+            $over = (array) (((array) ($cfg['cards'] ?? []))[(string) $ci] ?? ((array) ($cfg['cards'] ?? []))[$ci] ?? []);
+            $cc = [];
+            $k = strtolower($card['format'] ?: 'image');
+            $url = trim((string) ($over['media'] ?? '')) ?: $card['media'];
+            if ($url !== '') {
+                $mediaId = !empty($client) ? wa_resolve_media($client, $url) : null;
+                $cc[] = ['type' => 'header', 'parameters' => [['type' => $k, $k => $mediaId !== null ? ['id' => $mediaId] : ['link' => $url]]]];
+            }
+            if ((int) $card['body_vars'] > 0) {
+                $params = [];
+                for ($i = 1; $i <= (int) $card['body_vars']; $i++) {
+                    // The card's own setting, else the message's {{n}}, else the sample Meta approved.
+                    $sv = $pick($over['vars'] ?? [], $i) ?: $pick($cfg['vars'] ?? [], $i);
+                    $val = $sv ? $resolver($sv, $contact) : '';
+                    $params[] = ['type' => 'text', 'text' => $val !== '' && $val !== '-' ? $val : ((string) ($card['samples'][$i - 1] ?? '') ?: '-')];
+                }
+                $cc[] = ['type' => 'body', 'parameters' => $params];
+            }
+            foreach ($card['buttons'] as $b) {
+                $idx = (int) $b['index'];
+                if ($b['type'] === 'QUICK_REPLY') {
+                    $cc[] = ['type' => 'button', 'sub_type' => 'quick_reply', 'index' => (string) $idx,
+                             'parameters' => [['type' => 'payload', 'payload' => mb_substr($b['text'] ?: 'card' . ($ci + 1), 0, 128)]]];
+                } elseif ($b['type'] === 'URL' && $b['dynamic']) {
+                    $val = trim((string) (((array) ($over['buttons'] ?? []))[(string) $idx] ?? '')) ?: ($b['example'] ?: '-');
+                    $cc[] = ['type' => 'button', 'sub_type' => 'url', 'index' => (string) $idx, 'parameters' => [['type' => 'text', 'text' => $val]]];
+                }
+            }
+            $cards[] = ['card_index' => $ci, 'components' => $cc];
+        }
+        $out[] = ['type' => 'carousel', 'cards' => $cards];
+    }
+
     // ── BUTTONS (only dynamic ones take a parameter) ──
     foreach ((array) $spec['buttons'] as $b) {
         if (empty($b['dynamic'])) continue;
         $idx = (int) $b['index'];
         $bag = (array) ($cfg['buttons'] ?? []);
         $val = trim((string) ($bag[(string) $idx] ?? $bag[$idx] ?? ''));
-        if ($val === '') $val = '-';
+        if ($val === '') $val = (string) ($b['example'] ?? '') ?: '-';       // the sample Meta approved
         if ($b['type'] === 'URL') {
             $out[] = ['type' => 'button', 'sub_type' => 'url', 'index' => (string) $idx,
                       'parameters' => [['type' => 'text', 'text' => $val]]];

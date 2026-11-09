@@ -139,6 +139,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
         $bi = (int) $b['index'];
         $varMap['buttons'][(string) $bi] = trim((string) ($_POST['btn_value'][$bi] ?? ''));
     }
+    // A carousel: each card's picture or video and its link, when the campaign changes them.
+    foreach ((array) $spec['cards'] as $card) {
+        $ci = (int) $card['index'];
+        $cm = trim((string) ($_POST['card_media'][$ci] ?? ''));
+        $row = [];
+        if ($cm !== '' && $cm !== $card['media']) {
+            if (!preg_match('#^https://#i', $cm) && !preg_match('#/uploads/' . $cid . '/#', $cm)) $err = $err ?: 'Card ' . ($ci + 1) . ': use an https:// link or upload the file.';
+            $row['media'] = $cm;
+        }
+        foreach ($card['buttons'] as $cb) {
+            if (!$cb['dynamic']) continue;
+            $v = trim((string) ($_POST['card_btn'][$ci][(int) $cb['index']] ?? ''));
+            if ($v !== '') $row['buttons'][(string) $cb['index']] = $v;
+        }
+        if ($row) $varMap['cards'][(string) $ci] = $row;
+    }
+    // A limited-time offer with a countdown: when it ends.
+    if (!empty($spec['lto']['has_expiration'])) {
+        $le = trim((string) ($_POST['lto_expires'] ?? ''));
+        if ($le === '' || !strtotime($le)) $err = $err ?: 'Set when the offer ends.';
+        elseif (strtotime($le) <= time()) $err = $err ?: 'The offer end time is in the past.';
+        else $varMap['lto_expires'] = date('Y-m-d H:i:s', strtotime($le));
+    }
 
     // A personal campaign's image lives in the same slot as a template's header media, so the
     // report and the worker read it from one place on either channel.
@@ -403,6 +426,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
   </div>
 </form>
 
+<script src="../assets/tpl_preview.js?v=1"></script>
 <script>
 const BALANCE = <?= (int) $CLIENT['credits_balance'] ?>;
 const CSRF = <?= json_encode(csrf_token()) ?>;
@@ -411,6 +435,7 @@ const SPECS = <?= json_encode(array_reduce($templates, function ($acc, $t) {
     $comp = json_decode((string) $t['components'], true) ?: [];
     $s = wa_template_spec($comp);
     $s['header_example'] = wa_template_header_example($comp);
+    $s['components'] = $comp;                     // for the preview
     $acc[(int) $t['id']] = $s;
     return $acc;
 }, [])) ?>;
@@ -423,7 +448,9 @@ function onTemplate(){
   const opt = document.querySelector('#template_id option:checked');
   const body = opt?.dataset.body || '';
   const prev = document.getElementById('tpl-preview');
-  if (opt && opt.value){ prev.style.display='block'; document.getElementById('tpl-preview-body').textContent = body || '(no body text)'; }
+  if (opt && opt.value){ prev.style.display='block'; const sp = SPECS[opt.value];
+    const pb = document.getElementById('tpl-preview-body');
+    if (window.tplPreview && sp && sp.components) { pb.style.whiteSpace='normal'; pb.style.padding='0'; pb.innerHTML = tplPreview(sp.components); } else pb.textContent = body || '(no body text)'; }
   else prev.style.display='none';
 
   const spec = SPECS[opt?.value] || null;
@@ -483,13 +510,50 @@ function onTemplate(){
     dynBtns.forEach(b=>{
       const isCode = b.type==='COPY_CODE';
       h += `<label style="display:block;margin-bottom:10px"><span class="lbl">${eatt(b.text||('Button '+(b.index+1)))} — ${isCode?'coupon code':'URL suffix'}</span>
-        <input type="text" name="btn_value[${b.index}]" placeholder="${isCode?'e.g. EID20':'e.g. summer-sale'}"></label>`;
+        <input type="text" name="btn_value[${b.index}]" value="${eatt(b.example||'')}" placeholder="${isCode?'e.g. EID20':'e.g. summer-sale'}"></label>`;
     });
     bw.insertAdjacentHTML('beforeend', sect('Dynamic buttons', h));
   }
 
+  // ── LIMITED-TIME OFFER: when it ends ──
+  if (spec.lto && spec.lto.has_expiration) {
+    any = true;
+    const d = new Date(Date.now() + 86400000); d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+    bw.insertAdjacentHTML('beforeend', sect('Offer ends',
+      `<input type="datetime-local" name="lto_expires" required value="${d.toISOString().slice(0,16)}" style="max-width:260px">
+       <div class="hint">Customers see a countdown to this time; after it the code is shown as expired.</div>`));
+  }
+
+  // ── CAROUSEL: each card's picture or video and link ──
+  if ((spec.cards||[]).length) {
+    any = true;
+    let h = '<div class="hint" style="margin-bottom:8px">Each card sends the picture approved with the template unless you change it here. Card variables use the message variables above.</div>';
+    spec.cards.forEach(c => {
+      const kind = (c.format||'IMAGE').toLowerCase();
+      h += `<div style="border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:8px">
+        <div class="lbl" style="margin-bottom:6px">Card ${c.index+1}${c.text ? ' — ' + eatt(c.text.slice(0,50)) : ''}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <input type="text" id="cm-${c.index}" name="card_media[${c.index}]" value="${eatt(c.media||'')}" placeholder="https://… or click Upload" style="flex:1;min-width:220px">
+          <input type="file" id="cf-${c.index}" style="display:none" accept="${kind==='video'?'.mp4':'.jpg,.jpeg,.png'}" onchange="cardUpload(${c.index}, this)">
+          <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('cf-${c.index}').click()">Upload ${kind==='video'?'video':'picture'}</button>
+          <span id="cs-${c.index}" class="text-muted" style="font-size:12px"></span></div>
+        ${(c.buttons||[]).filter(b=>b.dynamic).map(b=>`<label style="display:block;margin-top:8px"><span class="lbl">${eatt(b.text||'Link')} — end of the link</span>
+          <input type="text" name="card_btn[${c.index}][${b.index}]" value="${eatt(b.example||'')}"></label>`).join('')}
+      </div>`;
+    });
+    bw.insertAdjacentHTML('beforeend', sect('Carousel cards', h));
+  }
+
   card.style.display = any ? 'block' : 'none';
   bindUpload();
+}
+async function cardUpload(i, f){
+  if(!f.files || !f.files[0]) return;
+  const st=document.getElementById('cs-'+i); st.textContent='Uploading…';
+  const fd=new FormData(); fd.append('csrf_token',CSRF); fd.append('media',f.files[0]);
+  try{ const d=await (await fetch('upload_media.php',{method:'POST',body:fd})).json();
+    if(d.ok){ document.getElementById('cm-'+i).value=d.url; st.textContent='✓ Uploaded'; } else st.textContent='⚠ '+(d.error||'Upload failed'); }
+  catch(e){ st.textContent='⚠ Upload failed'; }
 }
 function sect(title, inner){
   return `<div class="card" style="background:var(--paper);border:0;padding:14px 16px;margin-bottom:12px">
@@ -616,6 +680,8 @@ const PREFILL = <?= json_encode($copy['fields'] ?? null, JSON_UNESCAPED_UNICODE)
   put('input[name="header_loc_name"]', loc.name);
   put('input[name="header_address"]', loc.address);
   Object.entries(PREFILL.buttons || {}).forEach(([i, v]) => put(`input[name="btn_value[${i}]"]`, v));
+  Object.entries(PREFILL.cards || {}).forEach(([i, c]) => { put(`#cm-${i}`, c.media); Object.entries(c.buttons || {}).forEach(([j, v]) => put(`input[name="card_btn[${i}][${j}]"]`, v)); });
+  if (PREFILL.lto_expires) put('input[name="lto_expires"]', String(PREFILL.lto_expires).replace(' ', 'T').slice(0, 16));
 
   onList();                                      // show the audience size straight away
 })();

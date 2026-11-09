@@ -88,7 +88,7 @@
 |---|---|
 | Tenancy & users | `clients`, `users`, `user_channels`, `login_attempts`, `plans`, `usage_periods` |
 | Credits & billing | `credit_transactions`, `message_charges`, `wa_rates`, `ai_rates`, `ai_usage` |
-| Contacts & messaging | `contacts` (`last_line`), `contact_lists`, `contact_list_members`, `messages` (`line`), `templates` (`waba_id`), `media_cache`, `webhook_events`, `inbound_log`, `inbox_reads` |
+| Contacts & messaging | `contacts` (`last_line`), `contact_lists`, `contact_list_members`, `messages` (`line`), `templates` (`waba_id`, `meta_id`, `rejected_reason`), `media_cache`, `webhook_events`, `inbound_log`, `inbox_reads` |
 | WhatsApp numbers | `wa_numbers` (extra Business API numbers and linked phones per account; limit `clients.max_numbers`), `user_channels` (salespeople's own phones) |
 | Campaigns | `campaigns`, `campaign_messages` (queue + delivery log), `send_attempts`, `wa_ads` |
 | Automations / qualifier / agent | `flows` (`kind`: bot, qualifier, agent), `flow_steps`, `flow_triggers`, `flow_runs`, `flow_step_events`, `flow_messages`, `flow_collected`, `flow_exports`, `flow_templates` |
@@ -132,8 +132,13 @@ Facebook Page and Instagram comments grouped by post; filters; public reply, one
 ### 4.5 Contacts & Lists — `client/contacts.php`, `client/lists.php`, `includes/contacts.php`, `includes/import.php`
 Contacts (phone in E.164 via `normalize_phone()`, Messenger PSID / Instagram SID, attributes, tags, opt-in, SMS opt-out). STOP / إلغاء / توقف → opted out. Lists with search-and-add and CSV/Excel import.
 
-### 4.6 Templates — `client/templates.php`, `includes/whatsapp.php`
-Sync from the WABA; parse variables, header media, buttons (`wa_template_spec()`); only `APPROVED` templates are sendable.
+### 4.6 Templates — `client/templates.php`, `client/template_new.php`, `includes/template_builder.php`, `includes/whatsapp.php`
+Sync from the WABA; parse variables, header media, buttons, carousel cards and limited-time offers (`wa_template_spec()`); only `APPROVED` templates are sendable.
+- **Create template** (client users who may write): Standard (header none / text / image / video / document / location, body with `{{n}}` variables and samples, footer, up to 10 buttons: quick reply, website with optional `{{1}}` suffix, call, copy offer code), **Carousel** (message + 2–10 cards, image or video, text, 1–2 buttons, same buttons on every card), **Limited-time offer** (offer line, optional countdown, copy code + website) and **Authentication** (copy code, one-tap or zero-tap autofill; security note; expiry). Marketing / Utility / Authentication categories; any of the account's WABAs (`tb_sources()`).
+- `tb_build()` checks Meta's rules before anything is sent (name, lengths, sequential variables not at the start or end, samples, button counts and grouping, card consistency) and builds the payload. Sample media is uploaded with the Resumable Upload API (`wa_upload_sample()`: `/{app-id}/uploads` then the session, `OAuth` header; app id from `clients.app_id`, `GET /app`, or the platform Meta app) and only from the account's own `/uploads/<client>/` folder. Submitted with `POST /{waba}/message_templates`; Meta's `error_user_title` / `error_user_msg` is shown when it refuses.
+- Edit (`POST /{template-id}`, back to review; an approved template keeps its category), Copy (a new template from another) and Delete (`DELETE /{waba}/message_templates?name=&hsm_id=`). `templates.meta_id` and `rejected_reason` come from the sync (migration 071).
+- Revenect keeps its own copy of each sample file in the stored components (`_media`, kept across syncs by `tb_keep_media()`), so a header or card sends that file by default; Meta's sample link is the fallback for templates made in WhatsApp Manager.
+- Sending: `wa_build_components()` adds the carousel (each card's media by id, card variables from the card's setting, else the message's `{{n}}`, else Meta's sample; quick-reply payloads; link suffixes), the limited-time offer's `expiration_time_ms` (campaign's "Offer ends", else a day from sending) and defaults for copy codes and link suffixes from Meta's samples. Campaigns can change each card's picture and link; the worker sends card media by id (`wa_apply_card_media_ids()`). Automations, the Lead Qualifier, CRM messages and the Inbox send these templates with their defaults.
 
 ### 4.7 Campaigns — `client/campaigns.php`, `campaign_new.php`, `campaign_social.php`, `report.php`, `failed.php`, `includes/campaign.php`, `includes/social_campaigns.php`
 - WhatsApp: template + variable map + audience (list, CRM filter, file) → one `campaign_messages` row per recipient; schedule; credit check.

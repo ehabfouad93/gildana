@@ -294,6 +294,7 @@ try {
             $comps = json_decode((string) $m['rendered_components'], true) ?: [];
             if (!isset($comps['text'])) {
                 $comps = wa_apply_media_id($comps, $tpl['media_id'] ?? null);   // no-op without an id
+                $comps = wa_apply_card_media_ids($client, $comps);    // carousel cards: by id too
             }
             $items[(int) $m['id']] = [
                 'to' => (string) $m['phone_e164'],
