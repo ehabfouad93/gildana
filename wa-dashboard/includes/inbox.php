@@ -240,16 +240,22 @@ function inbox_from_sql(int $clientId, string $from, bool $replied): array
         : [" AND EXISTS (SELECT 1 FROM flow_runs fx WHERE fx.flow_id=? AND fx.contact_id=c.id)", [$id]];
 }
 
-/** What the "From" filter offers: the latest campaigns and the account's automations. */
+/**
+ * What the "From" filter offers: the latest campaigns and the account's automations, each with a
+ * second line that tells apart things with the same name (when it was sent, what kind it is).
+ * [campaigns => [c<id> => [label, sub]], flows => [f<id> => [label, sub]]]
+ */
 function inbox_from_options(int $clientId): array
 {
     $out = ['campaigns' => [], 'flows' => []];
     try {
-        foreach (db_all("SELECT id, name, created_at FROM campaigns WHERE client_id=? AND COALESCE(sent_count,0) > 0 ORDER BY id DESC LIMIT 40", [$clientId]) as $c) {
-            $out['campaigns']['c' . $c['id']] = $c['name'] . ' · ' . date('j M', strtotime((string) $c['created_at']));
+        foreach (db_all("SELECT id, name, created_at, sent_count FROM campaigns WHERE client_id=? AND COALESCE(sent_count,0) > 0 ORDER BY id DESC LIMIT 60", [$clientId]) as $c) {
+            $out['campaigns']['c' . $c['id']] = ['label' => (string) $c['name'], 'sub' => date('j M Y', strtotime((string) $c['created_at'])) . ' · ' . number_format((int) $c['sent_count']) . ' sent'];
         }
-        foreach (db_all("SELECT id, name, kind FROM flows WHERE client_id=? AND kind IN ('bot','qualifier') ORDER BY name LIMIT 80", [$clientId]) as $f) {
-            $out['flows']['f' . $f['id']] = $f['name'] . ($f['kind'] === 'qualifier' ? ' (Lead Qualifier)' : '');
+        foreach (db_all("SELECT f.id, f.name, f.kind, f.status, f.created_at, (SELECT COUNT(*) FROM flow_runs r WHERE r.flow_id=f.id) runs
+                           FROM flows f WHERE f.client_id=? AND f.kind IN ('bot','qualifier') ORDER BY (f.status='active') DESC, f.id DESC LIMIT 100", [$clientId]) as $f) {
+            $out['flows']['f' . $f['id']] = ['label' => (string) $f['name'],
+                'sub' => ($f['kind'] === 'qualifier' ? 'Lead Qualifier' : 'Automation') . ' · ' . ($f['status'] === 'active' ? 'on' : 'off') . ' · ' . number_format((int) $f['runs']) . ' people · made ' . date('j M Y', strtotime((string) $f['created_at']))];
         }
     } catch (Throwable $e) {}
     return $out;

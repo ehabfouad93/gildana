@@ -147,6 +147,7 @@ One row per inbound message that answers something: `kind` reply / button / stop
 - WhatsApp reports only quick-reply taps; website and call button taps are not reported to anyone.
 - Campaign report (`client/report.php`): Replied tile and filter, buttons tapped, what people answered (links to the Inbox), a Reply / action column, and the answers in the CSV.
 - Automation report (`client/automation_report.php`): Step by step (reached, went on, still here, sent · read, top answers; `?at=<step>` lists the people at a step), runs with where each person is, what was captured and the conversation; the CSV has the answers and a column per captured field.
+- Inbox Filter panel (`includes/inbox_view.php`): one Filter button beside the search opens a panel with its own search over numbers, campaigns and automations (each with a second line: kind, date, how many), long lists cut to the first five with "Show all", "Only people who replied", Clear all; what is on shows as removable chips. The choices are held in hidden selects (`#ib-line`, `#ib-from-src`) and `#ib-replied`.
 - Inbox "From" filter (`inbox_from_sql()`): the people of one campaign (`from=c<id>`) or automation (`from=f<id>`), optionally only those who replied (`replied=1`).
 - Contacts: Edit (name, number, tags, opt-in, saved details = `attributes`); the number is not editable by someone the account hides numbers from.
 
