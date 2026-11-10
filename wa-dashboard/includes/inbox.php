@@ -13,6 +13,7 @@ require_once __DIR__ . '/credits.php';
 require_once __DIR__ . '/crm.php';
 require_once __DIR__ . '/sending.php';
 require_once __DIR__ . '/inbox_media.php';     // pictures, voice notes and files people send
+require_once __DIR__ . '/replies.php';         // which campaign or automation step an answer belongs to
 
 /** Record one message. Returns the row id. $opts: type, wamid, status, error, source.
  *  Never throws — logging must not break sending if the `messages` table is missing
@@ -217,13 +218,51 @@ function inbox_person(array &$r): void
     unset($r['wa_jid']);
 }
 
+/**
+ * The Inbox's "From" filter: only the people a campaign was sent to (c<id>) or who went through an
+ * automation (f<id>) — and, with $replied, only those who answered it. SQL on the contact `c`.
+ * @return array{0:string, 1:array}
+ */
+function inbox_from_sql(int $clientId, string $from, bool $replied): array
+{
+    if (!preg_match('/^([cf])(\d+)$/', $from, $m)) return ['', []];
+    $id = (int) $m[2];
+    $ok = function_exists('replies_ready') && replies_ready();
+    if ($m[1] === 'c') {
+        if (!db_val("SELECT 1 FROM campaigns WHERE id=? AND client_id=?", [$id, $clientId])) return [' AND 0', []];
+        return $replied && $ok
+            ? [" AND EXISTS (SELECT 1 FROM reply_events re WHERE re.campaign_id=? AND re.contact_id=c.id)", [$id]]
+            : [" AND EXISTS (SELECT 1 FROM campaign_messages fx WHERE fx.campaign_id=? AND fx.contact_id=c.id AND fx.sent_at IS NOT NULL)", [$id]];
+    }
+    if (!db_val("SELECT 1 FROM flows WHERE id=? AND client_id=?", [$id, $clientId])) return [' AND 0', []];
+    return $replied && $ok
+        ? [" AND EXISTS (SELECT 1 FROM reply_events re WHERE re.flow_id=? AND re.contact_id=c.id)", [$id]]
+        : [" AND EXISTS (SELECT 1 FROM flow_runs fx WHERE fx.flow_id=? AND fx.contact_id=c.id)", [$id]];
+}
+
+/** What the "From" filter offers: the latest campaigns and the account's automations. */
+function inbox_from_options(int $clientId): array
+{
+    $out = ['campaigns' => [], 'flows' => []];
+    try {
+        foreach (db_all("SELECT id, name, created_at FROM campaigns WHERE client_id=? AND COALESCE(sent_count,0) > 0 ORDER BY id DESC LIMIT 40", [$clientId]) as $c) {
+            $out['campaigns']['c' . $c['id']] = $c['name'] . ' · ' . date('j M', strtotime((string) $c['created_at']));
+        }
+        foreach (db_all("SELECT id, name, kind FROM flows WHERE client_id=? AND kind IN ('bot','qualifier') ORDER BY name LIMIT 80", [$clientId]) as $f) {
+            $out['flows']['f' . $f['id']] = $f['name'] . ($f['kind'] === 'qualifier' ? ' (Lead Qualifier)' : '');
+        }
+    } catch (Throwable $e) {}
+    return $out;
+}
+
 /** Thread list for a client: newest conversation first, with unread counts. */
-function inbox_threads(int $clientId, string $q = '', int $limit = 200, string $channel = '', string $lineFilter = ''): array
+function inbox_threads(int $clientId, string $q = '', int $limit = 200, string $channel = '', string $lineFilter = '', string $from = '', bool $replied = false): array
 {
     $client = db_row("SELECT * FROM clients WHERE id=?", [$clientId]) ?: ['id' => $clientId];
-    if (inbox_split($client)) return inbox_threads_split($client, $q, $limit, $channel, $lineFilter);
+    if (inbox_split($client)) return inbox_threads_split($client, $q, $limit, $channel, $lineFilter, $from, $replied);
     $params = [$clientId];
     $search = '';
+    [$fSql, $fP] = inbox_from_sql($clientId, $from, $replied);
     $social = db_has_column('contacts', 'fb_psid');
     if ($q !== '') {
         $search = " AND (c.name LIKE ? OR c.phone_e164 LIKE ?" . ($social ? " OR c.ig_username LIKE ?" : '') . ")";
@@ -234,6 +273,7 @@ function inbox_threads(int $clientId, string $q = '', int $limit = 200, string $
         $search .= " AND EXISTS (SELECT 1 FROM messages xc WHERE xc.client_id=c.client_id AND xc.contact_id=c.id AND xc.channel=?)";
         $params[] = $channel;
     }
+    $search .= $fSql; $params = array_merge($params, $fP);
     $sx = $social ? ', c.fb_psid IS NOT NULL has_fb, c.ig_sid IS NOT NULL has_ig, c.ig_username' : '';
     $mx = $social ? ', m.channel last_channel' : '';
     // A salesperson sees the conversations of their own leads, and nobody else's.
@@ -284,10 +324,12 @@ function inbox_threads(int $clientId, string $q = '', int $limit = 200, string $
  * The thread list when the account has several numbers: one row per customer AND number.
  * Messenger / Instagram / SMS messages (no line) make a thread of their own ('').
  */
-function inbox_threads_split(array $client, string $q, int $limit, string $channel, string $lineFilter): array
+function inbox_threads_split(array $client, string $q, int $limit, string $channel, string $lineFilter, string $from = '', bool $replied = false): array
 {
     $clientId = (int) $client['id'];
     $where = ''; $p = [];
+    [$fSql, $fP] = inbox_from_sql($clientId, $from, $replied);
+    $where .= $fSql; $p = array_merge($p, $fP);
     if ($q !== '') { $where .= " AND (c.name LIKE ? OR c.phone_e164 LIKE ? OR c.ig_username LIKE ?)"; array_push($p, "%$q%", "%$q%", "%$q%"); }
     if (in_array($channel, ['messenger', 'instagram'], true)) { $where .= " AND lm.ln=''"; }
     elseif ($channel === 'whatsapp') { $where .= " AND lm.ln<>''"; }
@@ -565,7 +607,8 @@ function inbox_handle_ajax(array $client): void
     if ($a === '') return;
 
     if ($a === 'threads') {
-        json_out(['ok' => true, 'threads' => inbox_threads($cid, trim((string) ($_GET['q'] ?? '')), 200, (string) ($_GET['ch'] ?? ''), (string) ($_GET['line'] ?? '')),
+        json_out(['ok' => true, 'threads' => inbox_threads($cid, trim((string) ($_GET['q'] ?? '')), 200, (string) ($_GET['ch'] ?? ''), (string) ($_GET['line'] ?? ''),
+                                                           (string) ($_GET['from'] ?? ''), !empty($_GET['replied'])),
                   'split' => inbox_split($client), 'sync' => inbox_sync_progress($client)]);
     }
     /* Sync: bring in the linked phones' chats again (the one picked in the number filter, or all

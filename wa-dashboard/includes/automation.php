@@ -921,6 +921,8 @@ function auto_inbound_decide(array $client, array $contact, array $message, stri
         auto_log($ctx, 'user', $text !== '' ? $text : $buttonId);
         $step = auto_step((int) $run['current_step_id']);
         if (!$step) { $run['status'] = 'stopped'; auto_save_run($run, $ctx); return 'flow_broken|The step this conversation was waiting on no longer exists'; }
+        // What they answered at this step, for the automation's report (includes/replies.php).
+        if (function_exists('reply_record_step')) reply_record_step($run, (int) $step['id'], $text !== '' ? $text : $buttonId, $buttonId !== '');
         $cfg  = auto_cfg($step);
         $type = (string) $step['type'];
         $next = $step['next_step_id'];
@@ -942,7 +944,8 @@ function auto_inbound_decide(array $client, array $contact, array $message, stri
 
         if ($type === 'question') {
             $saveAs = trim((string) ($cfg['save_as'] ?? ''));
-            if ($saveAs !== '') $ctx['fields'][$saveAs] = $text;
+            // Kept for the rest of the conversation, and on the contact (so it is there afterwards too).
+            if ($saveAs !== '') { $ctx['fields'][$saveAs] = $text; if ($text !== '') auto_set_contact_attr($contact, $saveAs, mb_substr($text, 0, 500)); }
         } elseif ($type === 'comment_dm') {
             // The answer to a private reply: kept, and the conversation carries on at the next step.
             $saveAs = trim((string) ($cfg['save_as'] ?? '')) ?: 'dm_reply';
@@ -965,6 +968,9 @@ function auto_inbound_decide(array $client, array $contact, array $message, stri
             if ($idx >= 0 && isset($btns[$idx])) {
                 $run['score'] = (int) $run['score'] + (int) ($btns[$idx]['points'] ?? 0);
                 $next = $btns[$idx]['next_step_id'] ?? $next;
+                // "Save their choice as": the button they tapped, kept like a question's answer.
+                $saveAs = trim((string) ($cfg['save_as'] ?? ''));
+                if ($saveAs !== '') { $ctx['fields'][$saveAs] = (string) ($btns[$idx]['title'] ?? ''); auto_set_contact_attr($contact, $saveAs, (string) ($btns[$idx]['title'] ?? '')); }
             }
         } elseif ($type === 'ai_branch') {
             $branches = (array) ($cfg['branches'] ?? []);

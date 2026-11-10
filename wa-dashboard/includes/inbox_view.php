@@ -145,6 +145,19 @@ $IB_CHANNELS = isset($CLIENT) && function_exists('client_channels')
     </select>
     <div id="ib-line-st" style="font-size:12px;margin-top:6px" hidden></div></div>
     <?php endif; ?>
+    <?php /* From: the people of one campaign or one automation — and, ticked, only those who answered it. */
+      $IB_FROM = isset($CLIENT) && function_exists('inbox_from_options') ? inbox_from_options((int) $CLIENT['id']) : ['campaigns' => [], 'flows' => []];
+      $IB_FROM_NOW = preg_match('/^[cf]\d+$/', (string) ($_GET['from'] ?? '')) ? (string) $_GET['from'] : ''; ?>
+    <?php if ($IB_FROM['campaigns'] || $IB_FROM['flows']): ?>
+    <div class="ib-search" style="padding-bottom:0;display:flex;gap:8px;align-items:center">
+      <select id="ib-from-src" aria-label="Campaign or automation" style="flex:1;min-width:0;padding:7px 9px;border:1px solid var(--line);border-radius:8px;font-size:13px;background:var(--surface);color:inherit">
+        <option value="">All conversations</option>
+        <?php if ($IB_FROM['campaigns']): ?><optgroup label="Campaign"><?php foreach ($IB_FROM['campaigns'] as $k => $l): ?><option value="<?= e($k) ?>" <?= $k === $IB_FROM_NOW ? 'selected' : '' ?>><?= e($l) ?></option><?php endforeach; ?></optgroup><?php endif; ?>
+        <?php if ($IB_FROM['flows']): ?><optgroup label="Automation"><?php foreach ($IB_FROM['flows'] as $k => $l): ?><option value="<?= e($k) ?>" <?= $k === $IB_FROM_NOW ? 'selected' : '' ?>><?= e($l) ?></option><?php endforeach; ?></optgroup><?php endif; ?>
+      </select>
+      <label id="ib-replied-wrap" style="font-size:12.5px;white-space:nowrap;display:flex;gap:5px;align-items:center" <?= $IB_FROM_NOW === '' ? 'hidden' : '' ?>><input type="checkbox" id="ib-replied" <?= !empty($_GET['replied']) ? 'checked' : '' ?>> Replied</label>
+    </div>
+    <?php endif; ?>
     <?php $IB_SYNC = isset($CLIENT) && function_exists('inbox_sync_lines') && inbox_sync_lines($CLIENT) && (!function_exists('can_write') || can_write()); ?>
     <div class="ib-search" style="display:flex;gap:6px"><input type="text" id="ib-q" placeholder="Search name or number…" style="flex:1;min-width:0">
       <?php if ($IB_SYNC): ?><button type="button" id="ib-sync" class="btn btn-ghost btn-sm" style="white-space:nowrap" title="Bring in your linked phone's chats again — past messages and the real numbers WhatsApp has since revealed">&#8635; Sync</button><?php endif; ?></div>
@@ -262,11 +275,13 @@ const tick = s => s==='read'?'✓✓':s==='delivered'?'✓✓':s==='sent'?'✓'
 
 async function loadThreads(){
   const q = encodeURIComponent(el('ib-q').value||'');
-  const r = await fetch(IB_URL+IB_SEP+'ajax=threads&q='+q+'&ch='+encodeURIComponent(ibFilter)+'&line='+encodeURIComponent(ibLineFilter)); const d = await r.json();
+  const fs = el('ib-from-src') ? el('ib-from-src').value : '';
+  const fr = fs && el('ib-replied') && el('ib-replied').checked ? '&replied=1' : '';
+  const r = await fetch(IB_URL+IB_SEP+'ajax=threads&q='+q+'&ch='+encodeURIComponent(ibFilter)+'&line='+encodeURIComponent(ibLineFilter)+(fs?'&from='+encodeURIComponent(fs):'')+fr); const d = await r.json();
   if(!d.ok) return;
   ibSplit = !!d.split; ibSyncShow(d.sync);
   const box = el('ib-threads');
-  if(!d.threads.length){ box.innerHTML='<div class="ib-empty" style="padding:20px">No conversations yet.</div>'; return; }
+  if(!d.threads.length){ box.innerHTML='<div class="ib-empty" style="padding:20px">'+(fs ? (fr ? 'Nobody has answered this yet.' : 'No conversations from this yet.') : 'No conversations yet.')+'</div>'; return; }
   box.innerHTML = d.threads.map(t=>{
     const pv = (t.last_dir==='out'?'↩ ':'') + esc((t.last_body||'').slice(0,40));
     const badge = t.unread>0 ? `<span class="ib-badge">${t.unread}</span>` : '';
@@ -417,6 +432,10 @@ el('ib-form').addEventListener('submit', async e=>{
 el('ib-from').addEventListener('change', e=>{ ibFrom=e.target.value; ibFromPicked=true; const f=ibFromList.find(x=>x.key===ibFrom);
   if (f) { ibOpen=!!f.open; el('ib-form').style.display = ibOpen ? 'flex' : 'none'; el('ib-closed').style.display = ibOpen ? 'none' : 'block'; } });
 el('ib-ch').addEventListener('change', e=>{ ibCh=e.target.value; ibChPicked=true; ibLast=Math.max(0,ibLast); pollThread(); });
+if (el('ib-from-src')) {
+  el('ib-from-src').addEventListener('change', ()=>{ el('ib-replied-wrap').hidden = !el('ib-from-src').value; loadThreads(); });
+  el('ib-replied').addEventListener('change', loadThreads);
+}
 /* Picking a number says whether it is working: connected, not connected, or removed. */
 function ibLineState(){
   const st = el('ib-line-st'); if (!st) return;

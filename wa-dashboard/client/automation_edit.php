@@ -233,7 +233,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save'
                     foreach ((array) ($c['buttons'] ?? []) as $bi => $b) {
                         $btns[] = ['title' => (string) ($b['title'] ?? ''), 'points' => (int) ($b['points'] ?? 0), 'next_step_id' => $R($out['b' . $bi] ?? null)];
                     }
-                    $cfg = ['body' => (string) ($c['body'] ?? ''), 'buttons' => $btns];
+                    $cfg = ['body' => (string) ($c['body'] ?? ''), 'buttons' => $btns, 'save_as' => (string) ($c['save_as'] ?? '')];
                     break;
                 case 'ai_branch':
                     $brs = [];
@@ -423,7 +423,7 @@ function automation_graph_for_editor(int $id): array
                 $node['outputs']['next'] = $tid($s['next_step_id']); break;
             case 'sheet_export': $node['config'] = ['sheet_id' => $c['sheet_id'] ?? '', 'sheet_name' => $c['sheet_name'] ?? '', 'sheet_tab' => $c['sheet_tab'] ?? '', 'fields' => $c['fields'] ?? ['date','phone','name','last_reply','score','grade']]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
             case 'buttons':
-                $node['config'] = ['body' => $c['body'] ?? '', 'buttons' => array_map(fn($b) => ['title' => $b['title'] ?? '', 'points' => (int) ($b['points'] ?? 0)], (array) ($c['buttons'] ?? []))];
+                $node['config'] = ['body' => $c['body'] ?? '', 'save_as' => $c['save_as'] ?? '', 'buttons' => array_map(fn($b) => ['title' => $b['title'] ?? '', 'points' => (int) ($b['points'] ?? 0)], (array) ($c['buttons'] ?? []))];
                 foreach ((array) ($c['buttons'] ?? []) as $bi => $b) $node['outputs']['b' . $bi] = $tid($b['next_step_id'] ?? null);
                 break;
             case 'ai_branch':
@@ -1559,7 +1559,7 @@ function cfgForm(n){ const c=n.config;
         + ['date','phone','name','last_reply','score','grade','tags'].map(k=>`<label style="display:flex;gap:6px;font-weight:normal;align-items:center"><input type="checkbox" class="sxf" value="${k}" ${f.includes(k)?'checked':''} style="width:auto">${k}</label>`).join('')
         + `<div class="hint">Written in this order. The header row is created automatically if the tab is empty.</div>`; }
     case 'template': return `<label><span class="lbl">Template</span><select id="tpl-sel" onchange="onTplChange(this.value)">${'<option value="0">— choose —</option>'+TEMPLATES.map(t=>`<option value="${t.id}" ${t.id==c.template_id?'selected':''}>${esc(t.label)}</option>`).join('')}</select></label><div id="tpl-fields"></div>`;
-    case 'question': return `<label><span class="lbl">Question</span><textarea data-k="body" rows="2">${esc(c.body)}</textarea></label><label><span class="lbl">Save answer as</span><input data-k="save_as" value="${esc(c.save_as)}" placeholder="e.g. budget"></label>`;
+    case 'question': return `<label><span class="lbl">Question</span><textarea data-k="body" rows="2">${esc(c.body)}</textarea></label><label><span class="lbl">Save answer as</span><input data-k="save_as" value="${esc(c.save_as)}" placeholder="e.g. budget"></label><div class="muted" style="font-size:11.5px;margin-top:4px">The answer is kept on the contact under this name, shows in this automation's report and export, and can be used later as {{budget}}.</div>`;
     case 'ai_score': return `<label><span class="lbl">Scoring criterion</span><textarea data-k="criterion" rows="3">${esc(c.criterion)}</textarea></label><label><span class="lbl">Max points</span><input type="number" data-k="max_points" value="${c.max_points}"></label>`;
     case 'score': return `<label><span class="lbl">Points to add</span><input type="number" data-k="points" value="${c.points}"></label>`;
     case 'wait': { let s=c.seconds||3600,u='m',v=Math.round(s/60); if(s%86400===0){u='d';v=s/86400;}else if(s%3600===0){u='h';v=s/3600;} return `<div class="grid2"><label><span class="lbl">Wait</span><input type="number" id="wv" value="${v}" min="1"></label><label><span class="lbl">Unit</span><select id="wu"><option value="m" ${u==='m'?'selected':''}>Minutes</option><option value="h" ${u==='h'?'selected':''}>Hours</option><option value="d" ${u==='d'?'selected':''}>Days</option></select></label></div><div class="hint">After 24h only template steps can send.</div>`; }
@@ -1645,7 +1645,7 @@ function cfgForm(n){ const c=n.config;
     }
     case 'notify': return `<label><span class="lbl">Message (emailed to Gildana)</span><textarea data-k="message" rows="2">${esc(c.message)}</textarea></label>`;
     case 'collect': { const f=c.fields||[]; return `<label><span class="lbl">Sheet name</span><input data-k="sheet_name" value="${esc(c.sheet_name)}"></label><div class="lbl mt10">Capture fields</div>`+['phone','name','last_reply','score','grade','tags'].map(k=>`<label style="display:flex;gap:6px;font-weight:normal;align-items:center"><input type="checkbox" class="cf" value="${k}" ${f.includes(k)?'checked':''} style="width:auto">${k}</label>`).join(''); }
-    case 'buttons': return `<label><span class="lbl">Message</span><textarea data-k="body" rows="2">${esc(c.body)}</textarea></label><div class="lbl mt10">Buttons (max 3) — wire each on the canvas</div><div id="rows">${(c.buttons||[]).map((b,i)=>btnRow(b,i)).join('')}</div><button type="button" class="btn-link" onclick="addRow('buttons')">+ button</button>`;
+    case 'buttons': return `<label><span class="lbl">Message</span><textarea data-k="body" rows="2">${esc(c.body)}</textarea></label><div class="lbl mt10">Buttons (max 3) — wire each on the canvas</div><div id="rows">${(c.buttons||[]).map((b,i)=>btnRow(b,i)).join('')}</div><button type="button" class="btn-link" onclick="addRow('buttons')">+ button</button><label class="mt10" style="display:block"><span class="lbl">Save their choice as (optional)</span><input data-k="save_as" value="${esc(c.save_as||'')}" placeholder="e.g. interest"></label>`;
     case 'ai_chat': return `
       <label><span class="lbl">Knowledge base <span class="text-muted">(the AI answers ONLY from this)</span></span><textarea data-k="knowledge" rows="7" placeholder="Company, products, prices, offers, working hours, FAQs…">${esc(c.knowledge)}</textarea></label>
       <label><span class="lbl">Instructions <span class="text-muted">(language, dialect, tone)</span></span><textarea data-k="instructions" rows="3" placeholder="مثال: رد دايماً باللهجة المصرية العامية. كن مختصر ومهذب.">${esc(c.instructions)}</textarea></label>

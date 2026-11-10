@@ -262,10 +262,12 @@ foreach (($data['entry'] ?? []) as $entry) {
                 [$mRef, $mMime, $mName, $mCaption] = inbox_media_from_cloud($in);
                 if ($text === '' && $mCaption !== '') $text = $mCaption;
                 $logBody = $text !== '' ? $text : '[' . $mtype . ']';
-                msg_log($cid, (int) $contact['id'], 'in', $logBody, [
+                $inMsgId = msg_log($cid, (int) $contact['id'], 'in', $logBody, [
                     'type' => $mtype, 'source' => 'inbound', 'wamid' => (string) ($in['id'] ?? '') ?: null,
                     'media_ref' => $mRef, 'media_mime' => $mMime, 'media_name' => $mName, 'line' => wa_line_of($client),
                 ]);
+                // Which campaign this answers (a tapped button names the message it belongs to) — for the reports.
+                reply_track($cid, (int) $contact['id'], (int) $inMsgId, $mtype, $text, (string) ($in['context']['id'] ?? ''));
 
                 // Flag the client for a push. This is one cheap UPSERT — the actual
                 // HTTPS pushes happen in the background worker, because Meta retries a

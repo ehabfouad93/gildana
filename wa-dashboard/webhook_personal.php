@@ -231,11 +231,12 @@ function pw_handle_inbound(array $client, array $in): void
         else crm_assign($client, (int) $contact['id'], $ownerOfPhone);
     }
 
-    msg_log($cid, (int) $contact['id'], 'in', $text !== '' ? $text : '[' . $type . ']', [
+    $inMsgId = msg_log($cid, (int) $contact['id'], 'in', $text !== '' ? $text : '[' . $type . ']', [
         'type' => $type, 'source' => 'inbound', 'wamid' => $in['wamid'] !== '' ? $in['wamid'] : null,
         'via' => $ownerOfPhone > 0 ? 'own' : 'company_personal', 'line' => wa_line_of($client),
         'media_ref' => $in['media'][0] ?? null, 'media_mime' => $in['media'][1] ?? null, 'media_name' => $in['media'][2] ?? null,
     ]);
+    reply_track($cid, (int) $contact['id'], (int) $inMsgId, $type, $text);      // a campaign's reply, for its report
 
     // Flag for a push; the worker sends it (a slow webhook gets retried).
     push_queue_client($cid);

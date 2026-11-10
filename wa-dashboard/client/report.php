@@ -3,6 +3,7 @@ declare(strict_types=1);
 require __DIR__ . '/_init.php';
 require_once __DIR__ . '/../includes/charts.php';
 require_once __DIR__ . '/../includes/sms.php';   // sms_error_explain for SMS campaigns
+require_once __DIR__ . '/../includes/inbox.php'; // replies.php: who answered the campaign
 
 $cid = (int) $CLIENT['id'];
 $id  = (int) ($_GET['id'] ?? 0);
@@ -18,16 +19,21 @@ if (!$camp) { http_response_code(404); exit('Campaign not found.'); }
 if (($_GET['export'] ?? '') === '1') {
     $exF = ['sent' => "status IN ('sent','delivered','read')", 'delivered' => "status IN ('delivered','read')", 'read' => "status='read'",
             'unread' => "status IN ('sent','delivered')", 'failed' => "status IN ('failed','dead','review')", 'queued' => "status IN ('queued','sending')"][(string) ($_GET['status'] ?? '')] ?? '1=1';
+    $rx = replies_ready();
+    if (($_GET['status'] ?? '') === 'replied' && $rx) $exF = "EXISTS (SELECT 1 FROM reply_events r WHERE r.campaign_message_id=campaign_messages.id)";
+    // What each person answered: every reply and tapped button, oldest first.
+    $rcol = $rx ? ", (SELECT GROUP_CONCAT(CONCAT(IF(r.kind='button','[button] ',''), r.body) ORDER BY r.id SEPARATOR ' | ') FROM reply_events r WHERE r.campaign_message_id=campaign_messages.id) reply,
+                    (SELECT MIN(r.created_at) FROM reply_events r WHERE r.campaign_message_id=campaign_messages.id) replied_at" : ", NULL reply, NULL replied_at";
     $rows = db_all("SELECT COALESCE(phone_e164, (SELECT COALESCE(NULLIF(k.name,''), CONCAT('@', k.ig_username)) FROM contacts k WHERE k.id=contact_id)) phone_e164,
-                           status,wa_message_id,error_title,sent_at,delivered_at,read_at FROM campaign_messages WHERE campaign_id=? AND $exF ORDER BY id", [$id]);
+                           status,wa_message_id,error_title,sent_at,delivered_at,read_at{$rcol} FROM campaign_messages WHERE campaign_id=? AND $exF ORDER BY id", [$id]);
     header('Content-Type: text/csv; charset=UTF-8');
     header('Content-Disposition: attachment; filename="campaign-' . $id . '-' . date('Y-m-d') . '.csv"');
     echo "\xEF\xBB\xBF";
-    echo "phone,status,wa_message_id,error,sent_at,delivered_at,read_at\n";
+    echo "phone,status,wa_message_id,error,sent_at,delivered_at,read_at,replied_at,reply\n";
     foreach ($rows as $r) {
         echo implode(',', array_map('csv_cell', [
             (string) $r['phone_e164'], (string) $r['status'], (string) $r['wa_message_id'], (string) $r['error_title'],
-            (string) $r['sent_at'], (string) $r['delivered_at'], (string) $r['read_at'],
+            (string) $r['sent_at'], (string) $r['delivered_at'], (string) $r['read_at'], (string) $r['replied_at'], (string) $r['reply'],
         ])) . "\n";
     }
     exit;
@@ -60,9 +66,18 @@ $where = "campaign_id=?"; $params = [$id];
 // Failed = failed for good (including given up after retries, or never confirmed).
 $filterSql = ['sent' => "status IN ('sent','delivered','read')", 'delivered' => "status IN ('delivered','read')", 'read' => "status='read'",
               'unread' => "status IN ('sent','delivered')", 'failed' => "status IN ('failed','dead','review')", 'queued' => "status IN ('queued','sending')"];
+$RX = replies_ready();
+if ($RX) $filterSql['replied'] = "EXISTS (SELECT 1 FROM reply_events r WHERE r.campaign_message_id=campaign_messages.id)";
 if (isset($filterSql[$statusFilter])) $where .= " AND " . $filterSql[$statusFilter];
+/* Replies and actions: who answered this campaign, which buttons they tapped, who opted out. */
+$rep = $RX ? (db_row("SELECT COUNT(DISTINCT contact_id) people, COUNT(DISTINCT IF(kind='button', contact_id, NULL)) tapped, COUNT(DISTINCT IF(kind='stop', contact_id, NULL)) stopped,
+                             COUNT(*) total FROM reply_events WHERE campaign_id=?", [$id]) ?: []) : [];
+$repButtons = $RX ? db_all("SELECT body, COUNT(*) n, COUNT(DISTINCT contact_id) people FROM reply_events WHERE campaign_id=? AND kind='button' GROUP BY body ORDER BY n DESC LIMIT 12", [$id]) : [];
+$repLatest = $RX ? db_all("SELECT r.*, c.name, c.phone_e164 FROM reply_events r JOIN contacts c ON c.id=r.contact_id WHERE r.campaign_id=? ORDER BY r.id DESC LIMIT 30", [$id]) : [];
 $msgTotal = (int) db_val("SELECT COUNT(*) FROM campaign_messages WHERE $where", $params);
-$messages = db_all("SELECT campaign_messages.*, (SELECT COALESCE(NULLIF(k.name,''), CONCAT('@', k.ig_username)) FROM contacts k WHERE k.id=campaign_messages.contact_id) AS who
+$messages = db_all("SELECT campaign_messages.*, (SELECT COALESCE(NULLIF(k.name,''), CONCAT('@', k.ig_username)) FROM contacts k WHERE k.id=campaign_messages.contact_id) AS who"
+                     . ($RX ? ", (SELECT CONCAT(r.kind, '|', r.body) FROM reply_events r WHERE r.campaign_message_id=campaign_messages.id ORDER BY r.id DESC LIMIT 1) AS last_reply,
+                                 (SELECT COUNT(*) FROM reply_events r WHERE r.campaign_message_id=campaign_messages.id) AS reply_n" : ", NULL AS last_reply, 0 AS reply_n") . "
                        FROM campaign_messages WHERE $where ORDER BY id DESC LIMIT $per OFFSET $off", $params);
 $social = in_array((string) ($camp['channel'] ?? 'whatsapp'), ['messenger', 'instagram'], true);
 $pages = (int) max(1, ceil($msgTotal / $per));
@@ -93,12 +108,13 @@ client_header('Report · ' . $camp['name'], 'campaigns', $CLIENT);
   <a class="stat-tile" href="report.php?id=<?= $id ?>&status=delivered"><span class="lbl">Delivered</span><span class="val" id="s-delivered"><?= $counts['delivered'] ?></span><span class="sub" id="p-delivered"><?= $pct($counts['delivered'], $counts['sent']) ?> of sent</span></a>
   <a class="stat-tile" href="report.php?id=<?= $id ?>&status=read"><span class="lbl">Read</span><span class="val accent" id="s-read"><?= $counts['read'] ?></span><span class="sub" id="p-read"><?= $pct($counts['read'], $counts['sent']) ?> of sent</span></a>
   <a class="stat-tile" href="report.php?id=<?= $id ?>&status=unread"><span class="lbl">Unread</span><span class="val" id="s-unread"><?= $counts['unread'] ?></span><span class="sub" id="p-unread"><?= $pct($counts['unread'], $counts['sent']) ?> of sent</span></a>
+  <?php if ($RX): ?><a class="stat-tile" href="report.php?id=<?= $id ?>&status=replied"><span class="lbl">Replied</span><span class="val accent" id="s-replied"><?= (int) ($rep['people'] ?? 0) ?></span><span class="sub"><?= $pct((int) ($rep['people'] ?? 0), $counts['sent']) ?> of sent<?= (int) ($rep['tapped'] ?? 0) ? ' · ' . (int) $rep['tapped'] . ' tapped a button' : '' ?></span></a><?php endif; ?>
   <a class="stat-tile" href="report.php?id=<?= $id ?>&status=failed"><span class="lbl">Failed</span><span class="val danger" id="s-failed"><?= $counts['failed'] ?></span><span class="sub" id="p-failed"><?= $pct($counts['failed'], $counts['total']) ?> of all</span></a>
 </div>
 
 <?php
 /* How the campaign landed: who it reached step by step, and how fast it was read. */
-$replied = (int) db_val("SELECT COUNT(DISTINCT cm.contact_id) FROM campaign_messages cm WHERE cm.campaign_id=? AND cm.sent_at IS NOT NULL
+$replied = $RX ? (int) ($rep['people'] ?? 0) : (int) db_val("SELECT COUNT(DISTINCT cm.contact_id) FROM campaign_messages cm WHERE cm.campaign_id=? AND cm.sent_at IS NOT NULL
                           AND EXISTS (SELECT 1 FROM messages i WHERE i.contact_id=cm.contact_id AND i.direction='in'
                                         AND i.created_at BETWEEN cm.sent_at AND cm.sent_at + INTERVAL 3 DAY)", [$id]);
 $t0 = db_val("SELECT MIN(sent_at) FROM campaign_messages WHERE campaign_id=?", [$id]);
@@ -115,7 +131,7 @@ if ($t0 && $counts['read']) {
   <?php $isSms = ($camp['channel'] ?? '') === 'sms'; ?>
   <?= viz_card('Who it reached', viz_funnel(array_values(array_filter([['Recipients', $counts['total']], ['Sent', $counts['sent']], ['Delivered', $counts['delivered']],
         $isSms ? null : ['Read', $counts['read']], ['Replied', $replied]])), ['empty' => 'Nothing sent yet.']),
-      'Replied = people who wrote back within 3 days of their message.', 'camp-funnel') ?>
+      'Replied = people who answered this campaign: tapped one of its buttons or wrote back while it was the last thing they received (within 3 days).', 'camp-funnel') ?>
   <?php if (!$isSms): ?>
   <?= viz_card('How fast it was read', $readCurve
         ? viz_trend(array_keys($readCurve), [['label' => 'Read so far', 'values' => array_values($readCurve), 'slot' => 1]],
@@ -128,6 +144,32 @@ if ($t0 && $counts['read']) {
   <?= viz_card('Delivery', '<p class="text-muted" style="font-size:13px">SMS has no read receipts. Delivered is reported by the SMS provider where it supports delivery reports; otherwise messages stay at Sent.</p>', '', 'camp-sms-note') ?>
   <?php endif; ?>
 </div>
+
+<?php if ($RX && !$isSms): ?>
+<div class="viz-grid2" style="margin-bottom:16px" id="camp-replies">
+  <div class="card" style="margin:0">
+    <h2>Buttons tapped</h2>
+    <?php if (!$repButtons): ?><div class="viz-empty">No button taps yet.</div>
+    <?php else: ?><?= viz_bars(array_map(fn($b) => ['label' => (string) $b['body'], 'n' => (int) $b['people']], $repButtons), [['n', 'People', 1]]) ?><?php endif; ?>
+    <p class="viz-note">Quick-reply buttons only: WhatsApp does not tell anyone when a website or call button is tapped.<?= (int) ($rep['stopped'] ?? 0) ? ' <strong>' . (int) $rep['stopped'] . '</strong> asked to stop (opted out).' : '' ?></p>
+  </div>
+  <div class="card" style="margin:0">
+    <h2>What people answered <span class="text-muted" style="font-size:12px;font-weight:400"><?= number_format((int) ($rep['total'] ?? 0)) ?> answer<?= (int) ($rep['total'] ?? 0) === 1 ? '' : 's' ?> from <?= number_format((int) ($rep['people'] ?? 0)) ?> people</span></h2>
+    <?php if (!$repLatest): ?><div class="viz-empty">No replies yet.</div>
+    <?php else: ?><div style="max-height:260px;overflow:auto">
+      <?php foreach ($repLatest as $r): ?>
+        <div style="display:flex;gap:10px;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--line);font-size:13px">
+          <div style="min-width:0"><a href="inbox.php?contact=<?= (int) $r['contact_id'] ?>"><strong><?= e((string) $r['name'] ?: ('+' . $r['phone_e164'])) ?></strong></a>
+            <?php if ($r['kind'] === 'button'): ?><span class="pill blue" style="margin-inline-start:4px">button</span><?php elseif ($r['kind'] === 'stop'): ?><span class="pill red" style="margin-inline-start:4px">opted out</span><?php endif; ?>
+            <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><?= e((string) $r['body']) ?></div></div>
+          <span class="text-muted" style="white-space:nowrap;font-size:12px"><?= e(date('d M H:i', strtotime((string) $r['created_at']))) ?></span>
+        </div>
+      <?php endforeach; ?></div>
+      <p class="viz-note"><a href="report.php?id=<?= $id ?>&status=replied">Everyone who replied</a> · <a href="inbox.php?from=c<?= $id ?>&replied=1">Open them in the Inbox</a></p>
+    <?php endif; ?>
+  </div>
+</div>
+<?php endif; ?>
 
 <?php
 /* Why did messages fail? Group the top reasons so "0 sent / N failed" is never a mystery. */
@@ -159,7 +201,7 @@ if ($failReasons): ?>
   <div style="padding:14px 18px" class="row-between">
     <div style="display:flex;gap:6px;flex-wrap:wrap">
       <?php
-      $filters = ['' => 'All', 'sent' => 'Sent', 'delivered' => 'Delivered', 'read' => 'Read', 'unread' => 'Unread', 'failed' => 'Failed', 'queued' => 'Pending'];
+      $filters = ['' => 'All', 'sent' => 'Sent', 'delivered' => 'Delivered', 'read' => 'Read', 'unread' => 'Unread'] + ($RX ? ['replied' => 'Replied'] : []) + ['failed' => 'Failed', 'queued' => 'Pending'];
       foreach ($filters as $val => $lbl):
         $on = ($val === $statusFilter || ($val === '' && $statusFilter === ''));
       ?>
@@ -170,9 +212,9 @@ if ($failReasons): ?>
   </div>
   <div class="table-wrap">
     <table class="data">
-      <thead><tr><th><?= $social ? 'Person' : 'Phone' ?></th><th>Status</th><th>Sent</th><th>Delivered</th><th>Read</th><th>Error</th></tr></thead>
+      <thead><tr><th><?= $social ? 'Person' : 'Phone' ?></th><th>Status</th><th>Sent</th><th>Delivered</th><th>Read</th><th>Reply / action</th><th>Error</th></tr></thead>
       <tbody>
-      <?php if (!$messages): ?><tr><td colspan="6"><div class="empty">No messages<?= $statusFilter ? ' with this status' : '' ?>.</div></td></tr><?php endif; ?>
+      <?php if (!$messages): ?><tr><td colspan="7"><div class="empty">No messages<?= $statusFilter ? ' with this status' : '' ?>.</div></td></tr><?php endif; ?>
       <?php foreach ($messages as $m): ?>
         <tr>
           <td class="<?= $social ? '' : 'mono' ?>"><?= $social ? e((string) ($m['who'] ?? '—')) : '+' . e((string) $m['phone_e164']) ?></td>
@@ -180,6 +222,9 @@ if ($failReasons): ?>
           <td class="text-muted"><?= $m['sent_at'] ? e(date('d M H:i', strtotime((string) $m['sent_at']))) : '—' ?></td>
           <td class="text-muted"><?= $m['delivered_at'] ? e(date('d M H:i', strtotime((string) $m['delivered_at']))) : '—' ?></td>
           <td class="text-muted"><?= $m['read_at'] ? e(date('d M H:i', strtotime((string) $m['read_at']))) : '—' ?></td>
+          <td style="font-size:12.5px;max-width:260px"><?php if (!empty($m['last_reply'])): [$rk, $rb] = explode('|', (string) $m['last_reply'], 2) + ['', '']; ?>
+            <a href="inbox.php?contact=<?= (int) $m['contact_id'] ?>" title="Open the conversation"><?= $rk === 'button' ? '<span class="pill blue">button</span> ' : ($rk === 'stop' ? '<span class="pill red">opted out</span> ' : '') ?><?= e(mb_strimwidth($rb, 0, 60, '…')) ?></a><?= (int) $m['reply_n'] > 1 ? ' <span class="text-muted">+' . ((int) $m['reply_n'] - 1) . '</span>' : '' ?>
+          <?php else: ?><span class="text-muted">—</span><?php endif; ?></td>
           <td class="text-muted" style="font-size:12px"><?= e((string) ($m['error_title'] ?? '')) ?></td>
         </tr>
       <?php endforeach; ?>

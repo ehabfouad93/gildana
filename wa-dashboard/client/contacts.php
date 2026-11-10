@@ -34,9 +34,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['ajax'])) {
     verify_csrf();
     $a = (string) ($_POST['action'] ?? '');
     // The single-contact actions take an id straight from the request: check it is theirs.
-    if (in_array($a, ['delete_contact', 'toggle_optout'], true)) {
+    if (in_array($a, ['delete_contact', 'toggle_optout', 'get_contact', 'edit_contact'], true)) {
         $mine = db_row("SELECT * FROM contacts WHERE id=? AND client_id=?", [(int) ($_POST['id'] ?? 0), $cid]);
         if (!$mine || !crm_can_see($mine)) json_out(['ok' => false]);
+    }
+    /* ── Edit one contact: name, number, tags, opt-in and its saved details (attributes) ── */
+    $phoneLocked = function_exists('crm_phone_hidden') && crm_phone_hidden();      // numbers hidden from this person: not theirs to change
+    if ($a === 'get_contact') {
+        $attrs = json_decode((string) ($mine['attributes'] ?? ''), true);
+        json_out(['ok' => true, 'contact' => [
+            'id' => (int) $mine['id'], 'name' => (string) $mine['name'], 'tags' => (string) $mine['tags'], 'opt_in' => $mine['opt_in_status'] !== 'out',
+            'phone' => $phoneLocked ? '' : (string) $mine['phone_e164'], 'phone_locked' => $phoneLocked,
+            'attributes' => is_array($attrs) ? array_map(fn($k, $v) => ['k' => (string) $k, 'v' => is_scalar($v) ? (string) $v : json_encode($v, JSON_UNESCAPED_UNICODE)], array_keys($attrs), $attrs) : [],
+        ]]);
+    }
+    if ($a === 'edit_contact') {
+        if (!can_write()) json_out(['ok' => false, 'error' => 'You can only look at this account.']);
+        $id = (int) $mine['id'];
+        $set = ['name=?', 'tags=?']; $vals = [mb_substr(trim((string) ($_POST['name'] ?? '')), 0, 150), tags_join(tags_split((string) ($_POST['tags'] ?? '')))];
+        if (!$phoneLocked && trim((string) ($_POST['phone'] ?? '')) !== '') {
+            $phone = normalize_phone((string) $_POST['phone'], $country);
+            if ($phone === '') json_out(['ok' => false, 'error' => 'That phone number does not look right. Include the country code.']);
+            if ($phone !== (string) $mine['phone_e164']) {
+                if (db_val("SELECT 1 FROM contacts WHERE client_id=? AND phone_e164=? AND id<>?", [$cid, $phone, $id])) json_out(['ok' => false, 'error' => 'Another contact already has that number.']);
+                $set[] = 'phone_e164=?'; $vals[] = $phone;
+            }
+        }
+        // Saved details: name / value pairs — what automations captured, or anything typed here.
+        $attrs = [];
+        foreach ((array) ($_POST['attr_k'] ?? []) as $i => $k) {
+            $k = mb_substr(trim((string) $k), 0, 60); $v = mb_substr(trim((string) ($_POST['attr_v'][$i] ?? '')), 0, 500);
+            if ($k !== '' && $v !== '' && count($attrs) < 40) $attrs[$k] = $v;
+        }
+        $set[] = 'attributes=?'; $vals[] = $attrs ? json_encode($attrs, JSON_UNESCAPED_UNICODE) : null;
+        $out = empty($_POST['opt_in']);
+        if ($out !== ($mine['opt_in_status'] === 'out')) { $set[] = 'opt_in_status=?'; $vals[] = $out ? 'out' : 'in'; $set[] = 'opted_out_at=' . ($out ? 'NOW()' : 'NULL'); }
+        $vals[] = $id; $vals[] = $cid;
+        db_run("UPDATE contacts SET " . implode(', ', $set) . " WHERE id=? AND client_id=?", $vals);
+        if (function_exists('crm_audit')) crm_audit($cid, (int) ($PERM_USER['id'] ?? 0) ?: null, 'edit', $id, 'contact', 1);
+        json_out(['ok' => true]);
     }
     if ($a === 'delete_contact') {
         $ok = db_run("DELETE FROM contacts WHERE id=? AND client_id=?", [(int) ($_POST['id'] ?? 0), $cid]) > 0;
@@ -278,6 +314,7 @@ if ($importSummary): ?>
           <td class="text-muted"><?= e((string) $c['source']) ?></td>
           <td class="text-muted"><?= e(date('d M Y', strtotime((string) $c['created_at']))) ?></td>
           <td style="text-align: end;white-space:nowrap">
+            <?php if (can_write()): ?><button class="btn-link" onclick="editContact(<?= (int) $c['id'] ?>)">Edit</button><?php endif; ?>
             <button class="btn-link" onclick="toggleOptout(<?= (int) $c['id'] ?>,this)"><?= $c['opt_in_status'] === 'out' ? 'Opt in' : 'Opt out' ?></button>
             <button class="icon-btn" title="Delete" onclick="delContact(<?= (int) $c['id'] ?>)">&#x2715;</button>
           </td>
@@ -309,6 +346,28 @@ if ($importSummary): ?>
     <div class="modal-actions">
       <button type="button" class="btn btn-ghost" onclick="document.getElementById('m-add').classList.remove('open')">Cancel</button>
       <button type="submit" class="btn btn-primary">Save Contact</button>
+    </div>
+  </form>
+</div>
+
+<!-- Edit contact modal -->
+<div class="modal-back" id="m-edit">
+  <form class="modal" onsubmit="return saveContact(event)">
+    <h2>Edit contact</h2>
+    <input type="hidden" id="e-id">
+    <div class="field"><span class="lbl">Name</span><input type="text" id="e-name" maxlength="150"></div>
+    <div class="field" id="e-phone-wrap"><span class="lbl">Phone number</span><input type="text" id="e-phone" placeholder="+20 100 123 4567">
+      <div class="hint">Include the country code. Changing it moves this person's conversation to the new number.</div></div>
+    <div class="field"><span class="lbl">Tags</span><input type="text" id="e-tags" list="all-tags" placeholder="hot, new-cairo"><div class="hint">Separate with commas.</div></div>
+    <label class="mod-all" style="display:flex;gap:8px;align-items:center;margin-bottom:12px"><input type="checkbox" id="e-optin"> Agreed to receive messages (opted in)</label>
+    <div class="field"><span class="lbl">Saved details</span>
+      <div id="e-attrs"></div>
+      <button type="button" class="btn-link" onclick="attrRow('','')">+ Add a detail</button>
+      <div class="hint">Anything worth remembering — city, budget, interest. Automations save answers here ("Save answer as"), and campaigns can use them as variables.</div></div>
+    <div class="alert error" id="e-err" hidden></div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" onclick="document.getElementById('m-edit').classList.remove('open')">Cancel</button>
+      <button type="submit" class="btn btn-primary" id="e-save">Save</button>
     </div>
   </form>
 </div>
@@ -478,6 +537,36 @@ async function bulkDelete(){
   if(!confirm(scopeText() + '\n\nDelete them permanently? This cannot be undone.')) return;
   const d = await post({action:'bulk_delete', ...selectionPayload()});
   if(d.ok){ showToast(d.msg); setTimeout(()=>location.reload(), 700); } else showToast(d.error||'Could not delete.', true);
+}
+/* Edit one contact. */
+function attrRow(k, v){
+  const d = document.createElement('div'); d.style.cssText = 'display:grid;grid-template-columns:1fr 1.6fr auto;gap:6px;margin-bottom:6px';
+  d.innerHTML = '<input class="ea-k" placeholder="Name (e.g. city)" maxlength="60"><input class="ea-v" placeholder="Value" maxlength="500"><button type="button" class="icon-btn" title="Remove">&#x2715;</button>';
+  d.querySelector('.ea-k').value = k; d.querySelector('.ea-v').value = v;
+  d.querySelector('button').onclick = () => d.remove();
+  document.getElementById('e-attrs').appendChild(d);
+}
+async function editContact(id){
+  const d = await post({action:'get_contact', id});
+  if (!d.ok) return;
+  const c = d.contact, g = x => document.getElementById(x);
+  g('e-id').value = c.id; g('e-name').value = c.name; g('e-tags').value = c.tags || ''; g('e-optin').checked = !!c.opt_in;
+  g('e-phone').value = c.phone ? '+' + c.phone : ''; g('e-phone-wrap').hidden = !!c.phone_locked;
+  g('e-attrs').innerHTML = ''; (c.attributes || []).forEach(a => attrRow(a.k, a.v));
+  g('e-err').hidden = true; g('m-edit').classList.add('open'); g('e-name').focus();
+}
+async function saveContact(ev){
+  ev.preventDefault();
+  const g = x => document.getElementById(x);
+  const fd = new FormData(); fd.append('ajax','1'); fd.append('csrf_token', CSRF); fd.append('action','edit_contact'); fd.append('id', g('e-id').value);
+  fd.append('name', g('e-name').value); fd.append('tags', g('e-tags').value); if (!g('e-phone-wrap').hidden) fd.append('phone', g('e-phone').value);
+  if (g('e-optin').checked) fd.append('opt_in', '1');
+  document.querySelectorAll('#e-attrs > div').forEach(r => { fd.append('attr_k[]', r.querySelector('.ea-k').value); fd.append('attr_v[]', r.querySelector('.ea-v').value); });
+  g('e-save').disabled = true;
+  let d; try { d = await (await fetch('contacts.php', {method:'POST', body:fd})).json(); } catch (e) { d = {ok:false, error:'Could not save. Try again.'}; }
+  g('e-save').disabled = false;
+  if (!d.ok) { g('e-err').textContent = d.error || 'Could not save.'; g('e-err').hidden = false; return false; }
+  location.reload(); return false;
 }
 async function delContact(id){
   if(!confirm('Delete this contact?')) return;

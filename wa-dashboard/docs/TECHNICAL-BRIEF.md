@@ -140,6 +140,16 @@ Sync from the WABA; parse variables, header media, buttons, carousel cards and l
 - Revenect keeps its own copy of each sample file in the stored components (`_media`, kept across syncs by `tb_keep_media()`), so a header or card sends that file by default; Meta's sample link is the fallback for templates made in WhatsApp Manager.
 - Sending: `wa_build_components()` adds the carousel (each card's media by id, card variables from the card's setting, else the message's `{{n}}`, else Meta's sample; quick-reply payloads; link suffixes), the limited-time offer's `expiration_time_ms` (campaign's "Offer ends", else a day from sending) and defaults for copy codes and link suffixes from Meta's samples. Campaigns can change each card's picture and link; the worker sends card media by id (`wa_apply_card_media_ids()`). Automations, the Lead Qualifier, CRM messages and the Inbox send these templates with their defaults.
 
+### 4.6a Replies and actions — `includes/replies.php`, table `reply_events` (migration 072)
+One row per inbound message that answers something: `kind` reply / button / stop, what was written or tapped, and the campaign message or automation step it answers.
+- Campaigns (`reply_track()`, called by `webhook.php` and `webhook_personal.php` right after the inbound message is stored): by WhatsApp's `context.id` (a tapped template button or a quoted reply names the message it answers); otherwise the answer belongs to the campaign only when the campaign's message is the newest outgoing one to that person and under 3 days old. Campaigns of the last 90 days are back-filled by the migration with the 3-day rule.
+- Automations (`reply_record_step()`, from `automation_handle_inbound()`): the answer is kept on the step that was waiting for it. Question steps ("Save answer as") and Buttons steps ("Save their choice as") also write the answer to the contact's `attributes`.
+- WhatsApp reports only quick-reply taps; website and call button taps are not reported to anyone.
+- Campaign report (`client/report.php`): Replied tile and filter, buttons tapped, what people answered (links to the Inbox), a Reply / action column, and the answers in the CSV.
+- Automation report (`client/automation_report.php`): Step by step (reached, went on, still here, sent · read, top answers; `?at=<step>` lists the people at a step), runs with where each person is, what was captured and the conversation; the CSV has the answers and a column per captured field.
+- Inbox "From" filter (`inbox_from_sql()`): the people of one campaign (`from=c<id>`) or automation (`from=f<id>`), optionally only those who replied (`replied=1`).
+- Contacts: Edit (name, number, tags, opt-in, saved details = `attributes`); the number is not editable by someone the account hides numbers from.
+
 ### 4.7 Campaigns — `client/campaigns.php`, `campaign_new.php`, `campaign_social.php`, `report.php`, `failed.php`, `includes/campaign.php`, `includes/social_campaigns.php`
 - WhatsApp: template + variable map + audience (list, CRM filter, file) → one `campaign_messages` row per recipient; schedule; credit check.
 - Messenger/Instagram: 24-hour audience or Marketing Messages opt-ins.
