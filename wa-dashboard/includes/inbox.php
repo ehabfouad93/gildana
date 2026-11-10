@@ -332,6 +332,50 @@ function inbox_threads_split(array $client, string $q, int $limit, string $chann
     return $rows;
 }
 
+/**
+ * A sent template for the thread: the template's parts with the words that were actually sent in
+ * place of the body, and each card's sample values in place of its variables. NULL when the
+ * template is only text (the plain bubble already says everything).
+ */
+function inbox_template_view(array $components, string $sentBody): ?array
+{
+    $out = []; $rich = false;
+    $fill = function (string $text, array $samples): string {
+        return (string) preg_replace_callback('/\{\{\s*(\d+)\s*\}\}/', fn($m) => (string) ($samples[(int) $m[1] - 1] ?? $m[0]), $text);
+    };
+    $media = function (array $c): array {
+        $h = ['type' => 'HEADER', 'format' => strtoupper((string) ($c['format'] ?? 'TEXT'))];
+        if ($h['format'] === 'TEXT') $h['text'] = (string) ($c['text'] ?? '');
+        else $h['_media'] = function_exists('wa_component_media') ? wa_component_media($c) : '';
+        return $h;
+    };
+    $buttons = fn(array $c): array => ['type' => 'BUTTONS', 'buttons' => array_map(
+        fn($b) => ['type' => strtoupper((string) ($b['type'] ?? '')), 'text' => (string) ($b['text'] ?? '')], array_values((array) ($c['buttons'] ?? [])))];
+    foreach ($components as $c) {
+        $t = strtoupper((string) ($c['type'] ?? ''));
+        if ($t === 'HEADER') { $out[] = $media($c); $rich = $rich || strtoupper((string) ($c['format'] ?? 'TEXT')) !== 'TEXT'; }
+        elseif ($t === 'BODY') $out[] = ['type' => 'BODY', 'text' => $sentBody !== '' ? $sentBody : (string) ($c['text'] ?? '')];
+        elseif ($t === 'FOOTER' && isset($c['text'])) $out[] = ['type' => 'FOOTER', 'text' => (string) $c['text']];
+        elseif ($t === 'BUTTONS') { $out[] = $buttons($c); $rich = true; }
+        elseif ($t === 'LIMITED_TIME_OFFER') { $out[] = ['type' => $t, 'limited_time_offer' => ['text' => (string) ($c['limited_time_offer']['text'] ?? '')]]; $rich = true; }
+        elseif ($t === 'CAROUSEL') {
+            $cards = [];
+            foreach ((array) ($c['cards'] ?? []) as $cd) {
+                $cc = [];
+                foreach ((array) ($cd['components'] ?? []) as $x) {
+                    $xt = strtoupper((string) ($x['type'] ?? ''));
+                    if ($xt === 'HEADER') $cc[] = $media($x);
+                    elseif ($xt === 'BODY') $cc[] = ['type' => 'BODY', 'text' => $fill((string) ($x['text'] ?? ''), (array) ($x['example']['body_text'][0] ?? []))];
+                    elseif ($xt === 'BUTTONS') $cc[] = $buttons($x);
+                }
+                $cards[] = ['components' => $cc];
+            }
+            $out[] = ['type' => 'CAROUSEL', 'cards' => $cards]; $rich = true;
+        }
+    }
+    return $rich ? $out : null;
+}
+
 /** Messages in a thread after $afterId (ascending). */
 function inbox_thread(int $clientId, int $contactId, int $afterId = 0, int $limit = 400, ?string $line = null): array
 {
@@ -377,6 +421,20 @@ function inbox_thread(int $clientId, int $contactId, int $afterId = 0, int $limi
     /* A picture, voice note, video or file: what it is and where the Inbox gets it. The body
        stays "[audio]" in the database; the thread shows a player instead. */
     $hasPhone = null;
+    /* A template message: show what the customer got — its picture or video, buttons, footer and
+       carousel cards — not only the words. Built from the template as it is now. */
+    $tplCache = [];
+    foreach ($rows as &$r) {
+        $tid = (int) ($r['template_id'] ?? 0);
+        if ($tid > 0 && ($r['direction'] ?? '') === 'out') {
+            if (!array_key_exists($tid, $tplCache)) {
+                $tc = db_val("SELECT components FROM templates WHERE id=? AND client_id=?", [$tid, $clientId]);
+                $tplCache[$tid] = $tc ? (json_decode((string) $tc, true) ?: []) : [];
+            }
+            if ($tplCache[$tid] && ($view = inbox_template_view($tplCache[$tid], (string) $r['body']))) $r['tpl'] = $view;
+        }
+    }
+    unset($r);
     foreach ($rows as &$r) {
         $kind = in_array($r['type'] ?? '', ['image', 'audio', 'voice', 'video', 'document', 'sticker'], true) ? ($r['type'] === 'voice' ? 'audio' : $r['type']) : null;
         if ($kind) {

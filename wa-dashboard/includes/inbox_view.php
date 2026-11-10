@@ -215,6 +215,15 @@ $IB_CHANNELS = isset($CLIENT) && function_exists('client_channels')
   </form>
 </dialog>
 
+<script src="../assets/tpl_preview.js?v=2"></script>
+<style>
+/* A sent template inside the thread: the preview's own bubble, without its backdrop. */
+.ib-has-tpl{max-width:min(560px,92%)}
+.ib-tpl .tp-wrap{background:transparent;padding:0}
+.ib-tpl .tp-msg{max-width:300px}
+.ib-tpl .tp-bub{box-shadow:none;border:1px solid rgba(0,0,0,.08)}
+.ib-tpl .tp-cards{max-width:100%}
+</style>
 <script>
 /* A picture, voice note, video or file someone sent: shown and played right in the thread.
    Fetched through media.php, which checks this person may see the conversation. */
@@ -328,7 +337,10 @@ async function pollThread(){
       const where = again + alt;
       errLine = `<span class="st failed" style="display:block">⚠ ${label}</span>${hint}${where}`;
     }
-    div.innerHTML=mediaHtml(m)+(m.body?`<span class="ib-caption">${esc(m.body)}</span>`:'')+st+errLine;
+    // A template with a picture, buttons or cards is drawn as the customer got it.
+    const inner = (m.tpl && window.tplPreview) ? `<div class="ib-tpl">${tplPreview(m.tpl)}</div>` : mediaHtml(m)+(m.body?`<span class="ib-caption">${esc(m.body)}</span>`:'');
+    if (m.tpl && window.tplPreview) div.classList.add('ib-has-tpl');
+    div.innerHTML=inner+st+errLine;
     body.appendChild(div);
   });
   if(d.messages.length && atBottom) body.scrollTop=body.scrollHeight;
