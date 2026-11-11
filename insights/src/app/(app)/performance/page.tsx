@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Chart } from "@/components/chart";
 import { lineOption } from "@/components/charts";
+import { BreakdownSync } from "@/components/breakdown-sync";
 import { Filters } from "@/components/filters";
 import { KpiGrid, METRIC_LABEL, type MetricKey } from "@/components/kpi";
 import { PageHeader } from "@/components/shell";
@@ -56,6 +57,7 @@ export default async function Performance({ searchParams }: { searchParams: Prom
               <Link key={d} href={qs(c.sp, { dim: d })} className={`pill ${d === dim ? "bg-accent text-white" : "bg-bg text-muted hover:text-ink"}`}>{DIM_LABEL[d]}</Link>
             ))}
           </div>
+          <BreakdownSync accountIds={scope.accountIds} module="performance" path="/performance" />
           <DataTable search={false} currency={scope.currency} initialSort={dim === "hour" ? "bucket" : "spend"}
             cols={[{ key: "bucket", label: DIM_LABEL[dim] }, ...METRIC_COLS]} rows={bd.map((r) => ({ ...mrow(r.m), bucket: r.value }))} />
         </div>

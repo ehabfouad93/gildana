@@ -8,6 +8,7 @@ import { KpiGrid, fmtMetric } from "@/components/kpi";
 import { PageHeader } from "@/components/shell";
 import { DataTable } from "@/components/table";
 import { METRIC_COLS, SOURCE_LABEL } from "@/components/table-types";
+import { BreakdownSync } from "@/components/breakdown-sync";
 import { CurrencySwitch, currencyMode } from "@/components/currency-switch";
 import { db } from "@/lib/db";
 import { convert, fxTable, fxUpdatedAt } from "@/lib/fx";
@@ -92,7 +93,7 @@ export default async function CampaignPage({ params, searchParams }: { params: P
 
         {tab === "adsets" && <AdSetsTab />}
         {tab === "ads" && <AdsTab />}
-        {tab === "breakdowns" && <BreakdownsTab />}
+        {tab === "breakdowns" && <><BreakdownSync accountIds={[campaign.accountId]} module="campaigns" path={`/campaigns/${id}`} /><BreakdownsTab /></>}
         {tab === "targeting" && <TargetingTab />}
         {tab === "leads" && <LeadsTab />}
         {tab === "keywords" && <KeywordsTab />}

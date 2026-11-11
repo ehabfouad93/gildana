@@ -72,6 +72,51 @@ export async function syncNow(accountId: string): Promise<number> {
   return waiting.count + running;
 }
 
+/**
+ * "Sync breakdowns now": a full refresh (stats + age, gender, country,
+ * placement… breakdowns) of the last 28 days, ahead of everything else. A full
+ * job already waiting is just moved to the front; the platform's rate-limit
+ * pause is still respected. Returns how many accounts got a new job.
+ */
+export async function syncBreakdownsNow(accountIds: string[]): Promise<number> {
+  const today = ymd(new Date());
+  const r = lastNDays(28);
+  let added = 0;
+  for (const accountId of accountIds) {
+    const full = { accountId, kind: { not: "live" }, toDate: { gte: toDate(addDays(today, -1)) } };
+    if (await db.syncRun.count({ where: { ...full, status: "RUNNING" } })) continue;
+    const waiting = await db.syncRun.updateMany({ where: { ...full, status: "QUEUED" }, data: { priority: 10 } });
+    if (waiting.count) {
+      await db.syncRun.updateMany({ where: { ...full, status: "QUEUED", NOT: { runAfter: { gt: new Date() }, error: { contains: THROTTLED } } }, data: { runAfter: new Date() } });
+      continue;
+    }
+    // Starts no sooner than any rate-limit pause the account is in.
+    const pause = await db.syncRun.findFirst({ where: { accountId, status: "QUEUED", runAfter: { gt: new Date() }, error: { contains: THROTTLED } }, select: { runAfter: true } });
+    await db.syncRun.create({ data: { accountId, kind: "stats", fromDate: toDate(r.from), toDate: toDate(today), priority: 10, ...(pause ? { runAfter: pause.runAfter } : {}) } });
+    added++;
+  }
+  return added;
+}
+
+/** Breakdown freshness for a set of accounts: oldest full refresh, and whether one is running or waiting. */
+export async function breakdownStatus(accountIds: string[]) {
+  if (!accountIds.length) return { updatedAt: null as Date | null, running: false, queued: false, pausedUntil: null as Date | null };
+  const yesterday = toDate(addDays(ymd(new Date()), -1));
+  const [acc, jobs] = await Promise.all([
+    db.adAccount.findMany({ where: { id: { in: accountIds } }, select: { lastFullSyncAt: true } }),
+    db.syncRun.findMany({ where: { accountId: { in: accountIds }, kind: { not: "live" }, status: { in: ["QUEUED", "RUNNING"] }, toDate: { gte: yesterday } }, select: { status: true, runAfter: true, error: true } }),
+  ]);
+  const times = acc.map((a) => a.lastFullSyncAt?.getTime() ?? 0);
+  const oldest = times.length ? Math.min(...times) : 0;
+  const paused = jobs.filter((j) => j.status === "QUEUED" && j.error.includes(THROTTLED) && j.runAfter > new Date()).map((j) => j.runAfter.getTime());
+  return {
+    updatedAt: oldest ? new Date(oldest) : null,
+    running: jobs.some((j) => j.status === "RUNNING"),
+    queued: jobs.some((j) => j.status === "QUEUED"),
+    pausedUntil: paused.length ? new Date(Math.max(...paused)) : null,
+  };
+}
+
 /** Minutes between automatic "today + yesterday" refreshes (LIVE_SYNC_MINUTES, default 15). */
 export const liveMinutes = () => Math.max(5, Number(process.env.LIVE_SYNC_MINUTES) || 15);
 

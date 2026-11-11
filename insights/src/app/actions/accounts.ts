@@ -3,8 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { enqueueInitialSync, syncAll, syncNow } from "@/lib/jobs";
-import { accessWhere, canEdit, canSeeCompany, requireModule, type Viewer } from "@/lib/tenancy";
+import { enqueueInitialSync, syncAll, syncBreakdownsNow, syncNow } from "@/lib/jobs";
+import { accessWhere, canEdit, canSeeCompany, requireModule, scopedAccountIds, type Viewer } from "@/lib/tenancy";
 import type { ModuleKey } from "@/lib/modules";
 
 /** The signed-in editor's client — every mutation below is checked against it. */
@@ -143,4 +143,17 @@ export async function bulkAccountsAction(form: FormData) {
   }
   revalidatePath("/connections");
   revalidatePath("/welcome");
+}
+
+/**
+ * "Sync breakdowns now" on a campaign's Breakdowns tab, Performance or Audiences.
+ * Anyone who can open the page may ask; only accounts they can see are queued.
+ */
+export async function syncBreakdownsAction(form: FormData) {
+  const m = (["audiences", "performance"] as const).find((x) => x === form.get("module")) ?? "campaigns";
+  const v = await requireModule(m);
+  const asked = form.getAll("accountId").map(String).slice(0, 300);
+  const ids = asked.length ? await scopedAccountIds(v.clientId, { access: v.access, accountIds: asked }) : [];
+  await syncBreakdownsNow(ids);
+  revalidatePath(String(form.get("path") || "/audiences"));
 }

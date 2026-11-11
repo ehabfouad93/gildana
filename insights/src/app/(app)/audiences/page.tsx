@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { BreakdownSync } from "@/components/breakdown-sync";
 import { Filters } from "@/components/filters";
 import { PageHeader } from "@/components/shell";
 import { DataTable } from "@/components/table";
@@ -32,6 +33,7 @@ export default async function Audiences({ searchParams }: { searchParams: Promis
       <PageHeader title={t.audiences} sub="Which targeting choices deliver the cheapest results, across every campaign">
         <Filters t={t} freshness={c.freshness} accounts={c.accounts} companies={c.companies} companyId={c.companyId} platform={c.platform} range={range} days={c.one("days")} extra={{ g }} />
       </PageHeader>
+      <BreakdownSync accountIds={c.scope.accountIds} module="audiences" path="/audiences" />
       <div className="mb-4 flex flex-wrap gap-1">
         {Object.entries(GROUPS).map(([k, v]) => (
           <Link key={k} href={qs(c.sp, { g: k })} className={`pill !px-3 !py-1.5 ${k === g ? "bg-accent text-white" : "bg-panel text-muted hover:text-ink"}`}>{v.label}</Link>
