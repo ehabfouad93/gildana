@@ -9,7 +9,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   const v = await getViewer();
   if (!v?.clientId) return new Response("Unauthorized", { status: 401 });
   const ad = await db.ad.findUnique({ where: { id }, include: { account: { include: { connection: true } } } });
-  if (!ad || !(await scopedAccountIds(v.clientId, { allowedCompanyIds: v.companyIds })).includes(ad.accountId)) return new Response("Not found", { status: 404 });
+  if (!ad || !(await scopedAccountIds(v.clientId, { access: v.access })).includes(ad.accountId)) return new Response("Not found", { status: 404 });
   if (ad.platform !== "META" || ad.account.connection.isDemo) return new Response("No live preview for this ad", { status: 404 });
 
   const format = new URL(req.url).searchParams.get("format") ?? "MOBILE_FEED_STANDARD";

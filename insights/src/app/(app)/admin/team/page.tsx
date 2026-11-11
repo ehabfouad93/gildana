@@ -18,8 +18,7 @@ export default async function StaffPage() {
       <PageHeader title="Gildana team" sub="Admins and account managers. Account managers see only the clients you assign them." />
       <div className="card">
         <UserManager
-          users={toManagedUsers(users, "client")} clientId={null} meId={v.id}
-          roles={GILDANA_ROLE_OPTIONS} scopes={clients} scopeNoun="Clients" scopedRoles={["STAFF"]}
+          users={toManagedUsers(users)} clientId={null} meId={v.id} roles={GILDANA_ROLE_OPTIONS} clients={clients}
         />
       </div>
     </>

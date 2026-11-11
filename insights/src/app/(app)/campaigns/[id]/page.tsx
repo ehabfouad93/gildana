@@ -29,7 +29,7 @@ const TABS = [
 
 export default async function CampaignPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<SP> }) {
   const { id } = await params;
-  const c = await pageContext(searchParams);
+  const c = await pageContext(searchParams, "campaigns");
   const { scope, range, prev, t } = c;
 
   const campaign = await db.campaign.findUnique({ where: { id }, include: { account: { include: { company: true, connection: { select: { isDemo: true } } } } } });

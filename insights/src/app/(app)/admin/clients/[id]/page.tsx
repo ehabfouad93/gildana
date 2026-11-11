@@ -6,7 +6,7 @@ import { WorkspaceSettings } from "@/components/workspace-settings";
 import { db } from "@/lib/db";
 import { PLATFORM_META } from "@/lib/platforms";
 import { CLIENT_ROLE_OPTIONS, canManageClient, requireGildana } from "@/lib/tenancy";
-import { toManagedUsers } from "@/lib/team";
+import { teamPickers, toManagedUsers } from "@/lib/team";
 
 export const metadata = { title: "Client" };
 
@@ -19,6 +19,7 @@ export default async function ClientAdmin({ params }: { params: Promise<{ id: st
     include: { users: { orderBy: [{ role: "asc" }, { email: "asc" }] }, companies: { orderBy: { name: "asc" }, include: { accounts: { select: { platform: true } } } } },
   });
   if (!c) notFound();
+  const pickers = await teamPickers(c.id);
   const managers = await db.user.findMany({ where: { role: "STAFF", clientIds: { has: c.id } }, select: { name: true, email: true } });
 
   return (
@@ -47,10 +48,9 @@ export default async function ClientAdmin({ params }: { params: Promise<{ id: st
 
         <div className="card lg:col-span-2">
           <h2 className="mb-1 font-semibold">Users</h2>
-          <p className="mb-3 text-xs text-muted">Owners manage the team and settings; managers can change things; viewers only look. Limit managers and viewers to some companies under Edit.</p>
+          <p className="mb-3 text-xs text-muted">Owners manage the team and settings; managers can change things; viewers only look. Under Edit, choose the sections and ad accounts each manager or viewer gets.</p>
           <UserManager
-            users={toManagedUsers(c.users, "company")} clientId={c.id} meId={v.id}
-            roles={CLIENT_ROLE_OPTIONS} scopes={c.companies.map((co) => ({ id: co.id, name: co.name }))} scopeNoun="Companies" scopedRoles={["CLIENT", "VIEWER"]}
+            users={toManagedUsers(c.users)} clientId={c.id} meId={v.id} roles={CLIENT_ROLE_OPTIONS} {...pickers}
           />
         </div>
 

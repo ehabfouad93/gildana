@@ -6,23 +6,23 @@ import { shareInfo } from "@/lib/share-info";
 import { db } from "@/lib/db";
 import type { SP } from "@/lib/page";
 import { PLATFORMS, PLATFORM_META } from "@/lib/platforms";
-import { canEdit, companyWhere, requireWorkspace } from "@/lib/tenancy";
+import { accessWhere, canEdit, companyWhere, requireModule } from "@/lib/tenancy";
 import { demoEnabled, liveConnector } from "@/platforms";
 
 export const metadata = { title: "Ad accounts" };
 
 export default async function Connections({ searchParams }: { searchParams: Promise<SP> }) {
   const sp = await searchParams;
-  const v = await requireWorkspace();
+  const v = await requireModule("connections");
   const edit = canEdit(v);
   // Users limited to some companies see only those companies' accounts and can't reorganise them.
-  const limited = v.companyIds.length > 0;
+  const limited = !!v.access;
   const organise = edit && !limited;
   const [companies, conns] = await Promise.all([
     db.company.findMany({ where: { clientId: v.clientId, ...companyWhere(v) }, orderBy: { name: "asc" } }),
     db.adConnection.findMany({
       where: { clientId: v.clientId }, orderBy: { createdAt: "asc" },
-      include: { accounts: { where: limited ? { companyId: { in: v.companyIds } } : {}, orderBy: { name: "asc" }, include: { syncRuns: { orderBy: { createdAt: "desc" }, take: 1 } } } },
+      include: { accounts: { where: accessWhere(v.access), orderBy: { name: "asc" }, include: { syncRuns: { orderBy: { createdAt: "desc" }, take: 1 } } } },
     }),
   ]);
   const share = shareInfo();

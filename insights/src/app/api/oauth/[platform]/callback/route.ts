@@ -49,7 +49,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ platform
     else {
       // Everything starts syncing straight away; obvious company matches are filled in.
       const created = await db.adAccount.findMany({ where: { connectionId: conn.id }, select: { id: true } });
-      await autoAssign(st.clientId, created.map((a) => a.id), v!.companyIds);
+      await autoAssign(st.clientId, created.map((a) => a.id), v!.access?.companyIds ?? []);
       for (const a of created) await enqueueInitialSync(a.id);
     }
     return back(`connected=${conn.id}`);

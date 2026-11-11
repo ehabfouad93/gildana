@@ -1,13 +1,13 @@
 import { chromium, type Browser } from "playwright-core";
 import { db } from "@/lib/db";
-import { getViewer } from "@/lib/tenancy";
+import { canUse, getViewer, visibleCompanies } from "@/lib/tenancy";
 import { siteForClient } from "@/lib/web";
 
 const WIDTH: Record<string, number> = { desktop: 1440, tablet: 820, mobile: 390 };
 
 async function access(id: string) {
   const v = await getViewer();
-  return v?.clientId ? siteForClient(v.clientId, id, v.companyIds) : null;
+  return v?.clientId && canUse(v, "sites") ? siteForClient(v.clientId, id, visibleCompanies(v)) : null;
 }
 
 /** The stored screenshot behind a heatmap. */

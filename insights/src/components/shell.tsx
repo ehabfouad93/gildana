@@ -3,8 +3,16 @@ import { exitWorkspaceAction } from "@/app/actions/admin";
 import { logoutAction, setLangAction } from "@/app/actions/auth";
 import { db } from "@/lib/db";
 import { getDict, getLang } from "@/lib/i18n";
-import { ROLE_LABEL, canManageTeam, getViewer } from "@/lib/tenancy";
+import { MODULES, type ModuleKey } from "@/lib/modules";
+import { ROLE_LABEL, canManageTeam, canUse, getViewer } from "@/lib/tenancy";
 import { NavLink } from "./nav-link";
+
+type Dict = Awaited<ReturnType<typeof getDict>>;
+const NAV_LABEL: Record<ModuleKey, (t: Dict) => string> = {
+  overview: (t) => t.overview, spend: (t) => t.spend, performance: (t) => t.performance, campaigns: (t) => t.campaigns,
+  audiences: (t) => t.audiences, google: (t) => t.google, sites: (t) => t.sites, reports: (t) => t.reports,
+  connections: (t) => t.connections, companies: (t) => t.companies,
+};
 
 export async function Shell({ children }: { children: React.ReactNode }) {
   const v = await getViewer();
@@ -26,17 +34,9 @@ export async function Shell({ children }: { children: React.ReactNode }) {
               {client.logoUrl && <img src={client.logoUrl} alt="" className="h-5 w-5 rounded bg-white object-contain" />}
               <span className="truncate">{client.name}</span>
             </div>
-            {!client.onboardedAt && v?.role !== "VIEWER" && <NavLink href="/welcome">★ Get started</NavLink>}
-            <NavLink href="/overview">{t.overview}</NavLink>
-            <NavLink href="/spend">{t.spend}</NavLink>
-            <NavLink href="/performance">{t.performance}</NavLink>
-            <NavLink href="/campaigns">{t.campaigns}</NavLink>
-            <NavLink href="/audiences">{t.audiences}</NavLink>
-            <NavLink href="/google">{t.google}</NavLink>
-            <NavLink href="/sites">{t.sites}</NavLink>
-            <NavLink href="/reports">{t.reports}</NavLink>
-            <NavLink href="/connections">{t.connections}</NavLink>
-            <NavLink href="/companies">{t.companies}</NavLink>
+            {!client.onboardedAt && v && v.role !== "VIEWER" && !v.access && !v.modules.length && <NavLink href="/welcome">★ Get started</NavLink>}
+            {/* Only the sections this user was given. */}
+            {MODULES.filter((m) => !v || canUse(v, m.key)).map((m) => <NavLink key={m.key} href={m.path}>{NAV_LABEL[m.key](t)}</NavLink>)}
             {v && canManageTeam(v) && <NavLink href="/team">Team</NavLink>}
             {v && canManageTeam(v) && <NavLink href="/settings">Settings</NavLink>}
           </nav>

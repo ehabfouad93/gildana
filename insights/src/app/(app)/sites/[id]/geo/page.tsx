@@ -5,7 +5,7 @@ import { SiteNav } from "@/components/site-nav";
 import { claudeEnabled } from "@/lib/claude";
 import { db } from "@/lib/db";
 import type { GeoCheck } from "@/lib/geo";
-import { canEdit, requireWorkspace } from "@/lib/tenancy";
+import { canEdit, requireModule, visibleCompanies } from "@/lib/tenancy";
 import { siteForClient, webBy } from "@/lib/web";
 import { lastNDays } from "@/lib/dates";
 
@@ -17,8 +17,8 @@ const TONE = { pass: "text-good", warn: "text-amber-600", fail: "text-bad" } as 
 
 export default async function Geo({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const v = await requireWorkspace();
-  const site = await siteForClient(v.clientId, id, v.companyIds);
+  const v = await requireModule("sites");
+  const site = await siteForClient(v.clientId, id, visibleCompanies(v));
   if (!site) notFound();
   const edit = canEdit(v);
   const [latest, done, prompts, aiTraffic] = await Promise.all([

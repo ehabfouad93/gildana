@@ -4,33 +4,32 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { enqueueInitialSync, syncAll, syncNow } from "@/lib/jobs";
-import { canEdit, requireWorkspace } from "@/lib/tenancy";
+import { accessWhere, canEdit, canSeeCompany, requireModule, type Viewer } from "@/lib/tenancy";
+import type { ModuleKey } from "@/lib/modules";
 
 /** The signed-in editor's client — every mutation below is checked against it. */
-async function editor() {
-  const v = await requireWorkspace();
+async function editor(m: ModuleKey = "connections") {
+  const v = await requireModule(m);
   if (!canEdit(v)) throw new Error("Read-only user");
   return v;
 }
 
 /** Changes that affect the whole workspace: not for users limited to some companies. */
-async function organiser() {
-  const v = await editor();
-  if (v.companyIds.length) throw new Error("Only users with access to every company can do this — ask an owner.");
+async function organiser(m: ModuleKey = "connections") {
+  const v = await editor(m);
+  if (v.access) throw new Error("Only users with access to every ad account can do this — ask an owner.");
   return v;
 }
 
 /** Limits a query to the companies a user may touch. */
-const inAllowed = (companyIds: string[]) => (companyIds.length ? { companyId: { in: companyIds } } : {});
-
-async function ownAccount(v: { clientId: string; companyIds: string[] }, accountId: string) {
-  const a = await db.adAccount.findFirst({ where: { id: accountId, connection: { clientId: v.clientId }, ...inAllowed(v.companyIds) } });
+async function ownAccount(v: Viewer & { clientId: string }, accountId: string) {
+  const a = await db.adAccount.findFirst({ where: { id: accountId, connection: { clientId: v.clientId }, ...accessWhere(v.access) } });
   if (!a) throw new Error("Account not found");
   return a;
 }
 
-async function ownCompany(v: { clientId: string; companyIds: string[] }, companyId: string) {
-  if (v.companyIds.length && !v.companyIds.includes(companyId)) throw new Error("Company not found");
+async function ownCompany(v: Viewer & { clientId: string }, companyId: string) {
+  if (!canSeeCompany(v, companyId)) throw new Error("Company not found");
   if (!(await db.company.findFirst({ where: { id: companyId, clientId: v.clientId } }))) throw new Error("Company not found");
 }
 
@@ -51,8 +50,8 @@ export async function assignAccountAction(form: FormData) {
 
 export async function syncAllAction() {
   const v = await editor();
-  if (v.companyIds.length) {
-    const accounts = await db.adAccount.findMany({ where: { enabled: true, connection: { clientId: v.clientId, status: "active" }, ...inAllowed(v.companyIds) }, select: { id: true } });
+  if (v.access) {
+    const accounts = await db.adAccount.findMany({ where: { enabled: true, connection: { clientId: v.clientId, status: "active" }, ...accessWhere(v.access) }, select: { id: true } });
     for (const a of accounts) await syncNow(a.id);
   } else await syncAll(v.clientId);
   revalidatePath("/connections");
@@ -84,7 +83,7 @@ export async function removeConnectionAction(form: FormData) {
 const companySchema = z.object({ name: z.string().trim().min(1).max(160), website: z.string().trim().max(255).optional().default(""), industry: z.string().trim().max(120).optional().default("") });
 
 export async function createCompanyAction(form: FormData) {
-  const v = await organiser();
+  const v = await organiser("companies");
   const d = companySchema.parse({ name: form.get("name"), website: form.get("website") ?? "", industry: form.get("industry") ?? "" });
   await db.company.create({ data: { clientId: v.clientId, ...d } });
   revalidatePath("/companies");
@@ -92,24 +91,24 @@ export async function createCompanyAction(form: FormData) {
 }
 
 export async function updateCompanyAction(form: FormData) {
-  const v = await editor();
+  const v = await editor("companies");
   const d = companySchema.parse({ name: form.get("name"), website: form.get("website") ?? "", industry: form.get("industry") ?? "" });
   const id = String(form.get("id"));
-  if (v.companyIds.length && !v.companyIds.includes(id)) throw new Error("Company not found");
+  if (!canSeeCompany(v, id)) throw new Error("Company not found");
   await db.company.updateMany({ where: { id, clientId: v.clientId }, data: d });
   revalidatePath("/companies");
   revalidatePath("/welcome");
 }
 
 export async function deleteCompanyAction(form: FormData) {
-  const v = await organiser();
+  const v = await organiser("companies");
   await db.company.deleteMany({ where: { id: String(form.get("id")), clientId: v.clientId } });
   revalidatePath("/companies");
   revalidatePath("/welcome");
 }
 
 export async function setBudgetAction(form: FormData) {
-  const v = await editor();
+  const v = await editor("companies");
   const companyId = String(form.get("companyId"));
   await ownCompany(v, companyId);
   const amount = Number(form.get("amount"));
@@ -129,9 +128,9 @@ export async function bulkAccountsAction(form: FormData) {
   const v = await editor();
   const ids = form.getAll("ids").map(String);
   if (!ids.length) return;
-  const accounts = await db.adAccount.findMany({ where: { id: { in: ids }, connection: { clientId: v.clientId }, ...inAllowed(v.companyIds) } });
+  const accounts = await db.adAccount.findMany({ where: { id: { in: ids }, connection: { clientId: v.clientId }, ...accessWhere(v.access) } });
   const op = String(form.get("op"));
-  if (op !== "sync" && v.companyIds.length) throw new Error("Only users with access to every company can do this — ask an owner.");
+  if (op !== "sync" && v.access) throw new Error("Only users with access to every ad account can do this — ask an owner.");
   if (op === "assign") {
     const companyId = String(form.get("companyId") || "");
     if (companyId) await ownCompany(v, companyId);

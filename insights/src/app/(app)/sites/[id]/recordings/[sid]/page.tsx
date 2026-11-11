@@ -2,15 +2,15 @@ import { notFound } from "next/navigation";
 import { ReplayPlayer } from "@/components/replay-player";
 import { SiteNav } from "@/components/site-nav";
 import { db } from "@/lib/db";
-import { requireWorkspace } from "@/lib/tenancy";
+import { requireModule, visibleCompanies } from "@/lib/tenancy";
 import { siteForClient } from "@/lib/web";
 
 export const metadata = { title: "Session" };
 
 export default async function SessionView({ params }: { params: Promise<{ id: string; sid: string }> }) {
   const { id, sid } = await params;
-  const v = await requireWorkspace();
-  const site = await siteForClient(v.clientId, id, v.companyIds);
+  const v = await requireModule("sites");
+  const site = await siteForClient(v.clientId, id, visibleCompanies(v));
   if (!site) notFound();
   const s = await db.trackSession.findUnique({ where: { id: `${id}:${decodeURIComponent(sid)}` }, include: { views: { orderBy: { ts: "asc" } }, evs: { orderBy: { ts: "asc" }, take: 500 } } });
   if (!s) notFound();

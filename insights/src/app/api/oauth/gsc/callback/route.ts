@@ -4,7 +4,7 @@ import { db } from "@/lib/db";
 import { encrypt } from "@/lib/crypto";
 import { gscPickProperty, gscToken } from "@/lib/gsc";
 import { redirectUri, verifyState } from "@/lib/oauth";
-import { getViewer } from "@/lib/tenancy";
+import { getViewer, visibleCompanies } from "@/lib/tenancy";
 import { siteForClient } from "@/lib/web";
 import { publicUrl } from "@/lib/app-url";
 
@@ -16,7 +16,7 @@ export async function GET(req: Request) {
   jar.delete("gi_oauth");
   const v = await getViewer();
   const siteId = st?.platform.startsWith("GSC:") ? st.platform.slice(4) : "";
-  const site = v?.clientId && st && st.nonce === nonce && st.clientId === v.clientId ? await siteForClient(v.clientId, siteId, v.companyIds) : null;
+  const site = v?.clientId && st && st.nonce === nonce && st.clientId === v.clientId ? await siteForClient(v.clientId, siteId, visibleCompanies(v)) : null;
   if (!site) return NextResponse.redirect(publicUrl("/sites", req));
   try {
     const t = await gscToken({ grant_type: "authorization_code", code: url.searchParams.get("code") ?? "", redirect_uri: redirectUri("gsc") });

@@ -121,7 +121,7 @@ Clients never handle API keys. Gildana sets each platform up **once**, then ever
 | Manager | Client | Connect ad accounts, companies, sites, reports |
 | Viewer | Client | Read-only |
 
-Managers and viewers can be limited to some companies (Edit → Companies); they then see only those companies' accounts, sites, budgets and reports, and can't reorganise accounts or companies. Users can be deleted from Admin → Clients → client, Admin → Gildana team, or the client's own Team page. Nobody can delete or demote themselves, a workspace's last owner, or the last Gildana admin. Signing up creates an Owner.
+For each manager or viewer, Team → Edit sets **which sections they can open** (Overview, Spend, Performance, Campaigns, Audiences, Google, Websites, Reports, Ad accounts, Companies) and **which ad accounts they see**: all, whole companies (including accounts added later) and/or single ad accounts. Everything they open — reports, campaigns, breakdowns, websites, budgets, share links — follows that grant, and limited users can't reorganise accounts or companies. Users can be deleted from Admin → Clients → client, Admin → Gildana team, or the client's own Team page. Nobody can delete or demote themselves, a workspace's last owner, or the last Gildana admin. Signing up creates an Owner.
 
 ## Passwords
 

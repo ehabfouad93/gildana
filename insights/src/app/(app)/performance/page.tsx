@@ -18,7 +18,7 @@ const CHART_METRICS: MetricKey[] = ["spend", "impressions", "clicks", "ctr", "cp
 const DIMS = ["age", "gender", "country", "device", "placement", "hour"];
 
 export default async function Performance({ searchParams }: { searchParams: Promise<SP> }) {
-  const c = await pageContext(searchParams);
+  const c = await pageContext(searchParams, "performance");
   const { scope, range, prev, t } = c;
   const metric = (CHART_METRICS.includes(c.one("metric") as MetricKey) ? c.one("metric") : "cpl") as MetricKey;
   const dim = DIMS.includes(c.one("dim")) ? c.one("dim") : "age";

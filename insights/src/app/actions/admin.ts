@@ -9,6 +9,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { randomToken } from "@/lib/crypto";
 import { mailEnabled, sendMail } from "@/lib/mail";
+import { MODULE_KEYS } from "@/lib/modules";
 import { createResetToken, passwordProblem } from "@/lib/password-reset";
 import { WORKSPACE_COOKIE, canManageClient, requireAdmin, requireGildana, requireViewer, type Viewer } from "@/lib/tenancy";
 
@@ -149,10 +150,11 @@ export async function addUserAction(_: Result, form: FormData): Promise<Result> 
     const problem = passwordProblem(password);
     if (problem) return fail(problem);
   }
-  const companyIds = clientId && d.data.role !== "OWNER" ? await validCompanies(clientId, form.getAll("access").map(String)) : [];
+  const grant = clientId ? await clientGrant(clientId, d.data.role, form) : { companyIds: [], accountIds: [], modules: [] };
+  if (typeof grant === "string") return fail(grant);
   const clientIds = !clientId && d.data.role === "STAFF" ? await validClients(form.getAll("access").map(String)) : [];
   const user = await db.user.create({
-    data: { email: d.data.email, name: d.data.name, role: d.data.role, clientId, companyIds, clientIds, passwordHash: await bcrypt.hash(password || randomToken(24), 12) },
+    data: { email: d.data.email, name: d.data.name, role: d.data.role, clientId, ...grant, clientIds, passwordHash: await bcrypt.hash(password || randomToken(24), 12) },
   });
   refresh(clientId);
   if (password) return ok(`${user.email} added — they can sign in now.`);
@@ -203,6 +205,31 @@ async function validCompanies(clientId: string, ids: string[]): Promise<string[]
   return (await db.company.findMany({ where: { clientId, id: { in: ids } }, select: { id: true } })).map((c) => c.id);
 }
 
+/**
+ * What a client user may see and open, from the Team form: all ad accounts or
+ * ticked companies / single accounts, and all sections or ticked ones.
+ * Owners always get everything. Returns an error message when nothing is ticked.
+ */
+async function clientGrant(clientId: string, role: Role, form: FormData): Promise<{ companyIds: string[]; accountIds: string[]; modules: string[] } | string> {
+  if (role === "OWNER") return { companyIds: [], accountIds: [], modules: [] };
+  let companyIds: string[] = [];
+  let accountIds: string[] = [];
+  if (form.get("accessMode") === "some") {
+    companyIds = await validCompanies(clientId, form.getAll("access").map(String));
+    // Accounts inside a ticked company are already covered.
+    const picked = await db.adAccount.findMany({ where: { id: { in: form.getAll("accounts").map(String) }, connection: { clientId } }, select: { id: true, companyId: true } });
+    accountIds = picked.filter((a) => !a.companyId || !companyIds.includes(a.companyId)).map((a) => a.id);
+    if (!companyIds.length && !accountIds.length) return "Tick at least one company or ad account, or choose “All ad accounts”.";
+  }
+  let modules: string[] = [];
+  if (form.get("modulesMode") === "some") {
+    modules = form.getAll("modules").map(String).filter((m) => MODULE_KEYS.includes(m));
+    if (!modules.length) return "Tick at least one section, or choose “All sections”.";
+    if (modules.length === MODULE_KEYS.length) modules = [];
+  }
+  return { companyIds, accountIds, modules };
+}
+
 async function validClients(ids: string[]): Promise<string[]> {
   if (!ids.length) return [];
   return (await db.client.findMany({ where: { id: { in: ids } }, select: { id: true } })).map((c) => c.id);
@@ -220,12 +247,14 @@ export async function updateUserAction(_: Result, form: FormData): Promise<Resul
   const active = form.has("activeField") ? form.get("active") === "on" : u.active;
   if (u.id === v.id && (role !== u.role || !active)) return fail("You can't change your own role or switch yourself off.");
   if ((role !== u.role || !active) && (await wouldOrphan(u))) return fail((await wouldOrphan(u))!);
+  const grant = u.clientId ? await clientGrant(u.clientId, role, form) : null;
+  if (typeof grant === "string") return fail(grant);
 
   await db.user.update({
     where: { id: u.id },
     data: {
       name: String(form.get("name") ?? u.name).trim().slice(0, 120), role, active,
-      ...(u.clientId ? { companyIds: role === "OWNER" ? [] : await validCompanies(u.clientId, form.getAll("access").map(String)) } : {}),
+      ...(grant ?? {}),
       ...(!u.clientId && v.isAdmin ? { clientIds: role === "STAFF" ? await validClients(form.getAll("access").map(String)) : [] } : {}),
     },
   });

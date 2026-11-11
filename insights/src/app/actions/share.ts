@@ -6,7 +6,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { randomToken } from "@/lib/crypto";
 import { platformFromSlug } from "@/lib/platforms";
-import { canEdit, requireWorkspace, scopedAccountIds } from "@/lib/tenancy";
+import { canEdit, companyIdWhere, requireModule, scopedAccountIds, shareWhere } from "@/lib/tenancy";
 
 const schema = z.object({
   title: z.string().trim().max(160),
@@ -22,18 +22,18 @@ const schema = z.object({
 });
 
 export async function createShareAction(form: FormData) {
-  const v = await requireWorkspace();
+  const v = await requireModule("reports");
   if (!canEdit(v)) throw new Error("Read-only user");
   const d = schema.parse(Object.fromEntries(form));
-  const limited = v.companyIds;
-  let companyId = d.companyId && (!limited.length || limited.includes(d.companyId)) && (await db.company.findFirst({ where: { id: d.companyId, clientId: v.clientId } })) ? d.companyId : null;
-  // A user limited to some companies can only share one of them.
-  if (limited.length && !companyId) {
-    if (limited.length > 1) throw new Error("Pick one of your companies for this report");
-    companyId = limited[0];
-  }
-  const allowedAccounts = await scopedAccountIds(v.clientId, { allowedCompanyIds: limited });
+  // A limited user may share a campaign they can see, or a company they were given whole.
+  const whole = v.access?.companyIds ?? null;
+  let companyId = d.companyId && (!whole || whole.includes(d.companyId)) && (await db.company.findFirst({ where: { id: d.companyId, clientId: v.clientId } })) ? d.companyId : null;
+  const allowedAccounts = await scopedAccountIds(v.clientId, { access: v.access });
   const campaignId = d.campaignId && (await db.campaign.findFirst({ where: { id: d.campaignId, accountId: { in: allowedAccounts } } })) ? d.campaignId : null;
+  if (whole && !companyId && !campaignId) {
+    if (whole.length !== 1) throw new Error("Pick one of your companies or campaigns for this report");
+    companyId = whole[0];
+  }
   const platform = d.platform ? platformFromSlug(d.platform) : null;
   if (d.rangeMode === "fixed" && (!d.from || !d.to || d.from > d.to)) throw new Error("Pick a valid date range");
 
@@ -53,8 +53,8 @@ export async function createShareAction(form: FormData) {
 }
 
 export async function revokeShareAction(form: FormData) {
-  const v = await requireWorkspace();
+  const v = await requireModule("reports");
   if (!canEdit(v)) throw new Error("Read-only user");
-  await db.shareLink.deleteMany({ where: { id: String(form.get("id")), clientId: v.clientId, ...(v.companyIds.length ? { companyId: { in: v.companyIds } } : {}) } });
+  await db.shareLink.deleteMany({ where: { id: String(form.get("id")), ...(await shareWhere(v)) } });
   revalidatePath("/reports");
 }

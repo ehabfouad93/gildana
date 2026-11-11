@@ -6,19 +6,20 @@ import { lastNDays } from "@/lib/dates";
 import type { SP } from "@/lib/page";
 import { PLATFORMS, PLATFORM_META } from "@/lib/platforms";
 import { shareRange } from "@/lib/share";
-import { canEdit, companyWhere, requireWorkspace, scopedAccountIds } from "@/lib/tenancy";
+import { canEdit, requireModule, scopedAccountIds, shareWhere } from "@/lib/tenancy";
 
 export const metadata = { title: "Reports" };
 
 export default async function Reports({ searchParams }: { searchParams: Promise<SP> }) {
   const sp = await searchParams;
-  const v = await requireWorkspace();
+  const v = await requireModule("reports");
   const edit = canEdit(v);
-  const accountIds = await scopedAccountIds(v.clientId, { allowedCompanyIds: v.companyIds });
+  const accountIds = await scopedAccountIds(v.clientId, { access: v.access });
   const [companies, campaigns, links] = await Promise.all([
-    db.company.findMany({ where: { clientId: v.clientId, ...companyWhere(v) }, orderBy: { name: "asc" } }),
+    // Limited users can share only companies they were given whole (or single campaigns).
+    db.company.findMany({ where: { clientId: v.clientId, ...(v.access ? { id: { in: v.access.companyIds } } : {}) }, orderBy: { name: "asc" } }),
     db.campaign.findMany({ where: { accountId: { in: accountIds } }, orderBy: { name: "asc" }, select: { id: true, name: true, platform: true } }),
-    db.shareLink.findMany({ where: { clientId: v.clientId, ...(v.companyIds.length ? { companyId: { in: v.companyIds } } : {}) }, orderBy: { createdAt: "desc" } }),
+    db.shareLink.findMany({ where: await shareWhere(v), orderBy: { createdAt: "desc" } }),
   ]);
   const base = process.env.APP_URL ?? "";
   const def = lastNDays(30);
@@ -33,7 +34,7 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
           <div><label className="label">Title</label><input className="input" name="title" defaultValue="Performance report" /></div>
           <div className="grid grid-cols-2 gap-2">
             <div><label className="label">Company</label>
-              <select className="input" name="companyId">{!v.companyIds.length && <option value="">All companies</option>}{companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+              <select className="input" name="companyId">{(!v.access || !companies.length) && <option value="">{v.access ? "— pick a campaign below —" : "All companies"}</option>}{companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
             <div><label className="label">Platform</label>
               <select className="input" name="platform"><option value="">All platforms</option>{PLATFORMS.map((p) => <option key={p} value={PLATFORM_META[p].slug}>{PLATFORM_META[p].label}</option>)}</select></div>
           </div>

@@ -67,6 +67,10 @@ model User {
   active       Boolean   @default(true)
   /// Client users: limit to these companies (empty = all companies of the client).
   companyIds   String[]  @default([])
+  /// Client users: also these single ad accounts (on top of whole companies above).
+  accountIds   String[]  @default([])
+  /// Client users: sections they may open (empty = all).
+  modules      String[]  @default([])
   /// STAFF: the clients this account manager may open (ADMIN sees all).
   clientIds    String[]  @default([])
   lastLoginAt  DateTime?

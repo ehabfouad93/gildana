@@ -5,6 +5,9 @@ import type { Platform, Prisma } from "@prisma/client";
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
 import { loadSettings } from "@/lib/settings";
+import { hasModule, homePath, type ModuleKey } from "@/lib/modules";
+
+export type Access = { companyIds: string[]; accountIds: string[] };
 
 export type RoleName = "ADMIN" | "STAFF" | "OWNER" | "CLIENT" | "VIEWER";
 
@@ -20,8 +23,15 @@ export type Viewer = {
   isAdmin: boolean;
   /** Any Gildana user (admin or account manager). */
   isGildana: boolean;
-  /** Companies this user is limited to inside the client (empty = all). */
+  /**
+   * What a limited user may see inside the client: whole companies plus single
+   * ad accounts. null = everything (owners, Gildana staff, unrestricted users).
+   */
+  access: Access | null;
+  /** Companies the user can see at all (only meaningful when `access` is set). */
   companyIds: string[];
+  /** Sections the user may open (empty = all). */
+  modules: string[];
   /** STAFF: the clients they may open. */
   clientIds: string[];
 };
@@ -60,9 +70,19 @@ export async function getViewer(): Promise<Viewer | null> {
     const ws = (await cookies()).get(WORKSPACE_COOKIE)?.value ?? null;
     clientId = ws && (isAdmin || u.clientIds.includes(ws)) ? ws : null;
   }
+  // Owners and Gildana staff always see the whole workspace and every section.
+  const unrestricted = isGildana || u.role === "OWNER";
+  const access: Access | null = !unrestricted && (u.companyIds.length || u.accountIds.length) ? { companyIds: u.companyIds, accountIds: u.accountIds } : null;
+  let companyIds: string[] = [];
+  if (access) {
+    const extra = access.accountIds.length
+      ? await db.adAccount.findMany({ where: { id: { in: access.accountIds }, companyId: { not: null } }, select: { companyId: true }, distinct: ["companyId"] })
+      : [];
+    companyIds = [...new Set([...access.companyIds, ...extra.map((a) => a.companyId!)])];
+  }
   return {
     id: u.id, role: u.role, email: u.email, name: u.name, locale: u.locale, clientId, isAdmin, isGildana,
-    companyIds: isGildana ? [] : u.companyIds, clientIds: u.clientIds,
+    access, companyIds, modules: unrestricted ? [] : u.modules, clientIds: u.clientIds,
   };
 }
 
@@ -109,26 +129,67 @@ export function canManageTeam(v: Viewer): boolean {
 
 /** Prisma filter for the companies a viewer may see inside their client. */
 export function companyWhere(v: Viewer): Prisma.CompanyWhereInput {
-  return v.companyIds.length ? { id: { in: v.companyIds } } : {};
+  return v.access ? { id: { in: v.companyIds } } : {};
 }
 
-export type Filters = { companyId?: string; platform?: Platform; accountId?: string; accountIds?: string[]; campaignId?: string; allowedCompanyIds?: string[] };
+/** Same, for rows that carry a companyId (sites, budgets, share links). */
+export function companyIdWhere(v: Viewer): { companyId?: { in: string[] } } {
+  return v.access ? { companyId: { in: v.companyIds } } : {};
+}
+
+/** The companies a viewer may see, or null for all — for helpers that take a list. */
+export function visibleCompanies(v: Viewer): string[] | null {
+  return v.access ? v.companyIds : null;
+}
+
+export function canSeeCompany(v: Viewer, companyId: string): boolean {
+  return !v.access || v.companyIds.includes(companyId);
+}
+
+/** Prisma filter for the ad accounts an access grant covers. */
+export function accessWhere(a: Access | null | undefined): Prisma.AdAccountWhereInput {
+  if (!a) return {};
+  return { OR: [{ companyId: { in: a.companyIds } }, { id: { in: a.accountIds } }] };
+}
+
+/** Share links a limited user may see: whole companies they were given, or campaigns in their ad accounts. */
+export async function shareWhere(v: Viewer & { clientId: string }): Promise<Prisma.ShareLinkWhereInput> {
+  if (!v.access) return { clientId: v.clientId };
+  const campaigns = await db.campaign.findMany({ where: { account: accountWhere(v.clientId, { access: v.access }) }, select: { id: true } });
+  return { clientId: v.clientId, OR: [{ campaignId: null, companyId: { in: v.access.companyIds } }, { campaignId: { in: campaigns.map((c) => c.id) } }] };
+}
+
+/** Whether a viewer may open a section. */
+export function canUse(v: Viewer, m: ModuleKey): boolean {
+  return hasModule(v.modules, m);
+}
+
+/** A workspace page in section `m`; anyone without it goes to the first section they have. */
+export async function requireModule(m: ModuleKey): Promise<Viewer & { clientId: string }> {
+  const v = await requireWorkspace();
+  if (!canUse(v, m)) redirect(homePath(v.modules));
+  return v;
+}
+
+export type Filters = { companyId?: string; platform?: Platform; accountId?: string; accountIds?: string[]; campaignId?: string; access?: Access | null };
 
 /**
  * The ad accounts a query may touch. Every warehouse read goes through this,
  * so tenancy is enforced in one place rather than in each page.
  */
 export function accountWhere(clientId: string, f: Filters = {}): Prisma.AdAccountWhereInput {
+  const and: Prisma.AdAccountWhereInput[] = [];
+  // A limited user never sees accounts outside their grant.
+  if (f.access) and.push(accessWhere(f.access));
+  // Every connected account is reported; "none" picks the ones not yet put in a company.
+  if (f.companyId === "none") and.push({ companyId: null });
+  else if (f.companyId) and.push({ companyId: f.companyId });
   return {
     connection: { clientId },
     enabled: true,
-    // Every connected account is reported; "none" picks the ones not yet put in a company.
-    // A user limited to some companies never sees other companies' or unassigned accounts.
-    ...(f.allowedCompanyIds?.length
-      ? { companyId: f.companyId && f.companyId !== "none" && f.allowedCompanyIds.includes(f.companyId) ? f.companyId : { in: f.allowedCompanyIds } }
-      : f.companyId === "none" ? { companyId: null } : f.companyId ? { companyId: f.companyId } : {}),
     ...(f.platform ? { platform: f.platform } : {}),
     ...(f.accountId ? { id: f.accountId } : f.accountIds?.length ? { id: { in: f.accountIds } } : {}),
+    ...(and.length ? { AND: and } : {}),
   };
 }
 

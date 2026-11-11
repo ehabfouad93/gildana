@@ -7,10 +7,11 @@ vi.mock("@/auth", () => ({ auth: async () => null }));
 vi.mock("@/lib/db", () => ({ db: {} }));
 vi.mock("@/lib/settings", () => ({ loadSettings: async () => undefined }));
 
-const { accountWhere, canEdit, canManageClient, canManageTeam, companyWhere } = await import("@/lib/tenancy");
+const { accountWhere, canEdit, canManageClient, canManageTeam, canUse, companyWhere } = await import("@/lib/tenancy");
+const { homePath } = await import("@/lib/modules");
 type V = Parameters<typeof canEdit>[0];
 
-const base: V = { id: "u", role: "CLIENT", email: "", name: "", locale: "en", clientId: "c1", isAdmin: false, isGildana: false, companyIds: [], clientIds: [] };
+const base: V = { id: "u", role: "CLIENT", email: "", name: "", locale: "en", clientId: "c1", isAdmin: false, isGildana: false, access: null, companyIds: [], modules: [], clientIds: [] };
 
 describe("roles", () => {
   it("admins manage every client; account managers only theirs", () => {
@@ -33,14 +34,25 @@ describe("roles", () => {
     expect(canEdit(base)).toBe(true);
   });
 
-  it("company-limited users never see other companies or unassigned accounts", () => {
-    expect(companyWhere({ ...base, companyIds: ["a"] })).toEqual({ id: { in: ["a"] } });
+  it("limited users see only granted companies and single ad accounts", () => {
+    const access = { companyIds: ["a"], accountIds: ["x1"] };
+    expect(companyWhere({ ...base, access, companyIds: ["a", "b"] })).toEqual({ id: { in: ["a", "b"] } });
+    // An account-only grant whose accounts are all unassigned sees no companies — never "all".
+    expect(companyWhere({ ...base, access: { companyIds: [], accountIds: ["x1"] }, companyIds: [] })).toEqual({ id: { in: [] } });
     expect(companyWhere(base)).toEqual({});
-    const allowed = ["a", "b"];
-    expect(accountWhere("c1", { allowedCompanyIds: allowed }).companyId).toEqual({ in: allowed });
-    expect(accountWhere("c1", { allowedCompanyIds: allowed, companyId: "a" }).companyId).toBe("a");
-    expect(accountWhere("c1", { allowedCompanyIds: allowed, companyId: "z" }).companyId).toEqual({ in: allowed });
-    expect(accountWhere("c1", { allowedCompanyIds: allowed, companyId: "none" }).companyId).toEqual({ in: allowed });
-    expect(accountWhere("c1", { companyId: "none" }).companyId).toBeNull();
+    const grant = { OR: [{ companyId: { in: ["a"] } }, { id: { in: ["x1"] } }] };
+    expect(accountWhere("c1", { access }).AND).toEqual([grant]);
+    expect(accountWhere("c1", { access, companyId: "b" }).AND).toEqual([grant, { companyId: "b" }]);
+    expect(accountWhere("c1", { companyId: "none" }).AND).toEqual([{ companyId: null }]);
+    expect(accountWhere("c1", {}).AND).toBeUndefined();
+  });
+
+  it("sections: empty means all; otherwise only the ticked ones", () => {
+    expect(canUse(base, "sites")).toBe(true);
+    const v = { ...base, modules: ["spend", "reports"] };
+    expect(canUse(v, "spend")).toBe(true);
+    expect(canUse(v, "sites")).toBe(false);
+    expect(homePath(v.modules)).toBe("/spend");
+    expect(homePath([])).toBe("/overview");
   });
 });

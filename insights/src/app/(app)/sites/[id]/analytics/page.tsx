@@ -10,6 +10,7 @@ import { delta } from "@/lib/metrics";
 import { pageContext, qs, type SP } from "@/lib/page";
 import { PLATFORM_META } from "@/lib/platforms";
 import { WEB_DIMS, siteForClient, webAdsJoin, webBy, webDaily, webEvents, webFunnel, webPages, webRealtime, webTotals, type WebDim, type WebTotals } from "@/lib/web";
+import { visibleCompanies } from "@/lib/tenancy";
 
 export const metadata = { title: "Website analytics" };
 
@@ -29,8 +30,8 @@ const fmtDur = (s: number | null) => (s == null ? "—" : `${Math.floor(s / 60)}
 
 export default async function Analytics({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<SP> }) {
   const { id } = await params;
-  const c = await pageContext(searchParams);
-  const site = await siteForClient(c.client.id, id, c.viewer.companyIds);
+  const c = await pageContext(searchParams, "sites");
+  const site = await siteForClient(c.client.id, id, visibleCompanies(c.viewer));
   if (!site) notFound();
   const { range, prev, t } = c;
   const tab = (c.one("tab") in TABS ? c.one("tab") : "overview") as keyof typeof TABS;

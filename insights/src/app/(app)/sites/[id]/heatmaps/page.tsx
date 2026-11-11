@@ -10,6 +10,7 @@ import { DataTable } from "@/components/table";
 import { db } from "@/lib/db";
 import { pageContext, qs, type SP } from "@/lib/page";
 import { clickedElements, heatPaths, heatPoints, scrollReach, siteForClient, type HeatKind } from "@/lib/web";
+import { visibleCompanies } from "@/lib/tenancy";
 
 export const metadata = { title: "Heatmaps" };
 
@@ -18,8 +19,8 @@ const MODES = { click: "Clicks", rage_click: "Rage clicks", dead_click: "Dead cl
 
 export default async function Heatmaps({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<SP> }) {
   const { id } = await params;
-  const c = await pageContext(searchParams);
-  const site = await siteForClient(c.client.id, id, c.viewer.companyIds);
+  const c = await pageContext(searchParams, "sites");
+  const site = await siteForClient(c.client.id, id, visibleCompanies(c.viewer));
   if (!site) notFound();
   const { range, t } = c;
 

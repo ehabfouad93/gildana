@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/shell";
 import { UserManager } from "@/components/user-manager";
 import { db } from "@/lib/db";
-import { toManagedUsers } from "@/lib/team";
+import { teamPickers, toManagedUsers } from "@/lib/team";
 import { CLIENT_ROLE_OPTIONS, canManageTeam, requireWorkspace } from "@/lib/tenancy";
 
 export const metadata = { title: "Team" };
@@ -11,13 +11,13 @@ export const metadata = { title: "Team" };
 export default async function TeamPage() {
   const v = await requireWorkspace();
   if (!canManageTeam(v)) redirect("/overview");
-  const [users, companies] = await Promise.all([
+  const [users, pickers] = await Promise.all([
     db.user.findMany({ where: { clientId: v.clientId }, orderBy: [{ role: "asc" }, { email: "asc" }] }),
-    db.company.findMany({ where: { clientId: v.clientId }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
+    teamPickers(v.clientId),
   ]);
   return (
     <>
-      <PageHeader title="Team" sub="Who can use this dashboard, what they can do, and which companies they see." />
+      <PageHeader title="Team" sub="Who can use this dashboard, which sections they open and which ad accounts they see." />
       <div className="card mb-4 grid gap-3 text-sm sm:grid-cols-3">
         {CLIENT_ROLE_OPTIONS.map((r) => (
           <div key={r.value}><div className="font-semibold">{r.label}</div><div className="text-xs text-muted">{r.hint}</div></div>
@@ -25,8 +25,7 @@ export default async function TeamPage() {
       </div>
       <div className="card">
         <UserManager
-          users={toManagedUsers(users, "company")} clientId={v.clientId} meId={v.id}
-          roles={CLIENT_ROLE_OPTIONS} scopes={companies} scopeNoun="Companies" scopedRoles={["CLIENT", "VIEWER"]}
+          users={toManagedUsers(users)} clientId={v.clientId} meId={v.id} roles={CLIENT_ROLE_OPTIONS} {...pickers}
         />
       </div>
     </>

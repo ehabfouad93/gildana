@@ -2,16 +2,16 @@ import Link from "next/link";
 import { createSiteAction } from "@/app/actions/sites";
 import { PageHeader } from "@/components/shell";
 import { db } from "@/lib/db";
-import { canEdit, companyWhere, requireWorkspace } from "@/lib/tenancy";
+import { canEdit, companyIdWhere, companyWhere, requireModule } from "@/lib/tenancy";
 
 export const metadata = { title: "Websites" };
 
 export default async function Sites() {
-  const v = await requireWorkspace();
+  const v = await requireModule("sites");
   const since = new Date(Date.now() - 30 * 86_400_000);
   const [companies, sites] = await Promise.all([
     db.company.findMany({ where: { clientId: v.clientId, ...companyWhere(v) }, orderBy: { name: "asc" } }),
-    db.site.findMany({ where: { company: { clientId: v.clientId }, ...(v.companyIds.length ? { companyId: { in: v.companyIds } } : {}) }, include: { company: true, _count: { select: { sessions: { where: { startedAt: { gte: since } } } } } }, orderBy: { name: "asc" } }),
+    db.site.findMany({ where: { company: { clientId: v.clientId }, ...companyIdWhere(v) }, include: { company: true, _count: { select: { sessions: { where: { startedAt: { gte: since } } } } } }, orderBy: { name: "asc" } }),
   ]);
   return (
     <>

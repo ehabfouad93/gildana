@@ -6,19 +6,20 @@ import { previousRange, rangeFromParams } from "@/lib/dates";
 import { getDict } from "@/lib/i18n";
 import { platformFromSlug } from "@/lib/platforms";
 import type { Scope } from "@/lib/queries";
-import { companyWhere, requireWorkspace, scopedAccountIds } from "@/lib/tenancy";
+import { accessWhere, companyWhere, requireModule, scopedAccountIds } from "@/lib/tenancy";
+import type { ModuleKey } from "@/lib/modules";
 
 export type SP = Record<string, string | string[] | undefined>;
 
 const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? "";
 
 /** Everything a client dashboard page needs from the URL and the session. */
-export async function pageContext(spP: Promise<SP>) {
+export async function pageContext(spP: Promise<SP>, module: ModuleKey) {
   const sp = await spP;
-  const viewer = await requireWorkspace();
+  const viewer = await requireModule(module);
   const client = await db.client.findUniqueOrThrow({ where: { id: viewer.clientId } });
   // A user limited to some companies sees only those (and never unassigned accounts).
-  const limited = viewer.companyIds.length > 0;
+  const limited = !!viewer.access;
   const companies = await db.company.findMany({ where: { clientId: client.id, ...companyWhere(viewer) }, orderBy: { name: "asc" }, select: { id: true, name: true } });
 
   const companyId = (one(sp.company) === "none" && !limited) || companies.some((c) => c.id === one(sp.company)) ? one(sp.company) : undefined;
@@ -26,12 +27,12 @@ export async function pageContext(spP: Promise<SP>) {
   const range = rangeFromParams({ from: one(sp.from), to: one(sp.to), days: one(sp.days), period: one(sp.period) }, client.defaultDays);
   // ?acc=id1,id2 — any subset of the client's ad accounts; ids that aren't theirs are dropped by the scope.
   const acc = (Array.isArray(sp.acc) ? sp.acc.join(",") : sp.acc ?? "").split(",").filter(Boolean).slice(0, 500);
-  const accountIds = await scopedAccountIds(client.id, { companyId, platform, accountIds: acc.length ? acc : undefined, allowedCompanyIds: viewer.companyIds });
+  const accountIds = await scopedAccountIds(client.id, { companyId, platform, accountIds: acc.length ? acc : undefined, access: viewer.access });
   // Opening a report refreshes any of its accounts whose numbers are more than five minutes old.
   await refreshIfStale(accountIds);
   const fresh = await freshness(accountIds);
   const accounts = await db.adAccount.findMany({
-    where: { connection: { clientId: client.id }, enabled: true, ...(limited ? { companyId: { in: viewer.companyIds } } : {}) },
+    where: { connection: { clientId: client.id }, enabled: true, ...accessWhere(viewer.access) },
     select: { id: true, name: true, platform: true, externalId: true, company: { select: { name: true } } }, orderBy: [{ platform: "asc" }, { name: "asc" }],
   });
   const scope: Scope = { accountIds, currency: client.reportingCurrency };

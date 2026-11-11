@@ -8,6 +8,7 @@ import { db } from "@/lib/db";
 import { toDate } from "@/lib/dates";
 import { pageContext, qs, type SP } from "@/lib/page";
 import { siteForClient } from "@/lib/web";
+import { visibleCompanies } from "@/lib/tenancy";
 
 export const metadata = { title: "Recordings" };
 
@@ -15,8 +16,8 @@ const FILTERS = { all: "All sessions", replay: "With replay", converted: "Conver
 
 export default async function Recordings({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<SP> }) {
   const { id } = await params;
-  const c = await pageContext(searchParams);
-  const site = await siteForClient(c.client.id, id, c.viewer.companyIds);
+  const c = await pageContext(searchParams, "sites");
+  const site = await siteForClient(c.client.id, id, visibleCompanies(c.viewer));
   if (!site) notFound();
   const f = (c.one("f") in FILTERS ? c.one("f") : "all") as keyof typeof FILTERS;
   const where: Prisma.TrackSessionWhereInput = {

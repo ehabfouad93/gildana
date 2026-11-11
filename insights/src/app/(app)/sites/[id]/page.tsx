@@ -3,15 +3,15 @@ import { addGoalAction, deleteGoalAction, deleteSiteAction, demoTrafficAction, u
 import { CopyButton } from "@/components/copy";
 import { SiteNav } from "@/components/site-nav";
 import { db } from "@/lib/db";
-import { canEdit, requireWorkspace } from "@/lib/tenancy";
+import { canEdit, requireModule, visibleCompanies } from "@/lib/tenancy";
 import { siteForClient } from "@/lib/web";
 
 export const metadata = { title: "Website setup" };
 
 export default async function SiteSetup({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const v = await requireWorkspace();
-  const site = await siteForClient(v.clientId, id, v.companyIds);
+  const v = await requireModule("sites");
+  const site = await siteForClient(v.clientId, id, visibleCompanies(v));
   if (!site) notFound();
   const edit = canEdit(v);
   const base = process.env.APP_URL ?? "";

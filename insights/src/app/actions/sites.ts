@@ -6,16 +6,16 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { randomToken } from "@/lib/crypto";
 import { generateDemoTraffic } from "@/lib/demo-traffic";
-import { canEdit, requireWorkspace } from "@/lib/tenancy";
+import { canEdit, canSeeCompany, companyIdWhere, requireModule, type Viewer } from "@/lib/tenancy";
 
 async function editor() {
-  const v = await requireWorkspace();
+  const v = await requireModule("sites");
   if (!canEdit(v)) throw new Error("Read-only user");
   return v;
 }
 
-async function ownSite(v: { clientId: string; companyIds: string[] }, siteId: string) {
-  const s = await db.site.findFirst({ where: { id: siteId, company: { clientId: v.clientId }, ...(v.companyIds.length ? { companyId: { in: v.companyIds } } : {}) } });
+async function ownSite(v: Viewer & { clientId: string }, siteId: string) {
+  const s = await db.site.findFirst({ where: { id: siteId, company: { clientId: v.clientId }, ...companyIdWhere(v) } });
   if (!s) throw new Error("Site not found");
   return s;
 }
@@ -25,7 +25,7 @@ const domain = z.string().trim().toLowerCase().transform((d) => d.replace(/^http
 export async function createSiteAction(form: FormData) {
   const v = await editor();
   const companyId = String(form.get("companyId"));
-  if (v.companyIds.length && !v.companyIds.includes(companyId)) throw new Error("Company not found");
+  if (!canSeeCompany(v, companyId)) throw new Error("Company not found");
   if (!(await db.company.findFirst({ where: { id: companyId, clientId: v.clientId } }))) throw new Error("Company not found");
   const d = domain.parse(form.get("domain"));
   const site = await db.site.create({ data: { companyId, domain: d, name: String(form.get("name") || d).slice(0, 120), trackingKey: randomToken(15) } });

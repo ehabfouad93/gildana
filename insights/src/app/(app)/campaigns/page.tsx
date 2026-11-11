@@ -10,7 +10,7 @@ import { mrow } from "@/lib/rows";
 export const metadata = { title: "Campaigns" };
 
 export default async function Campaigns({ searchParams }: { searchParams: Promise<SP> }) {
-  const c = await pageContext(searchParams);
+  const c = await pageContext(searchParams, "campaigns");
   const { scope, range, t } = c;
   const rows = await campaignTable(scope, range, { platform: c.platform });
   const keep = qs({ days: c.one("days"), from: c.one("from"), to: c.one("to") });

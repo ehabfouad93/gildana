@@ -20,7 +20,7 @@ const GROUPS: Record<string, { label: string; types: string[] }> = {
 
 /** Every targeting option the client uses, ranked across all campaigns and platforms. */
 export default async function Audiences({ searchParams }: { searchParams: Promise<SP> }) {
-  const c = await pageContext(searchParams);
+  const c = await pageContext(searchParams, "audiences");
   const { scope, range, t } = c;
   const g = GROUPS[c.one("g")] ? c.one("g") : "interests";
   const only = c.one("only") === "1";

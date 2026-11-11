@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { homePath } from "@/lib/modules";
 import { assignAccountAction, createCompanyAction } from "@/app/actions/accounts";
 import { finishOnboardingAction } from "@/app/actions/saas";
 import { ShareAccess } from "@/components/share-access";
@@ -18,7 +19,7 @@ export default async function Welcome({ searchParams }: { searchParams: Promise<
   const sp = await searchParams;
   const v = await requireWorkspace();
   // Setting up the workspace is for users who can see all of it.
-  if (!canEdit(v) || v.companyIds.length) redirect("/overview");
+  if (!canEdit(v) || v.access || v.modules.length) redirect(homePath(v.modules));
   const edit = canEdit(v);
   const [client, companies, accounts, claims] = await Promise.all([
     db.client.findUniqueOrThrow({ where: { id: v.clientId } }),

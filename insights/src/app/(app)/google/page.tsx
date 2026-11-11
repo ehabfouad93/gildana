@@ -13,9 +13,9 @@ export const metadata = { title: "Google Search" };
 const TABS = { keywords: "Keywords", terms: "Search terms", placements: "Display & YouTube placements" } as const;
 
 export default async function Google({ searchParams }: { searchParams: Promise<SP> }) {
-  const c = await pageContext(searchParams);
+  const c = await pageContext(searchParams, "google");
   const { range, t } = c;
-  const accountIds = await scopedAccountIds(c.client.id, { companyId: c.companyId, platform: "GOOGLE", accountIds: c.acc.length ? c.acc : undefined, allowedCompanyIds: c.viewer.companyIds });
+  const accountIds = await scopedAccountIds(c.client.id, { companyId: c.companyId, platform: "GOOGLE", accountIds: c.acc.length ? c.acc : undefined, access: c.viewer.access });
   const scope = { ...c.scope, accountIds };
   const tab = (c.one("tab") in TABS ? c.one("tab") : "keywords") as keyof typeof TABS;
   const camps = new Map((await db.campaign.findMany({ where: { accountId: { in: accountIds } }, select: { id: true, name: true } })).map((x) => [x.id, x.name]));

@@ -2,22 +2,22 @@ import { createCompanyAction, deleteCompanyAction, setBudgetAction, updateCompan
 import { PageHeader } from "@/components/shell";
 import { db } from "@/lib/db";
 import { PLATFORM_META } from "@/lib/platforms";
-import { canEdit, companyWhere, requireWorkspace } from "@/lib/tenancy";
+import { accessWhere, canEdit, companyWhere, requireModule } from "@/lib/tenancy";
 
 export const metadata = { title: "Companies" };
 
 export default async function Companies() {
-  const v = await requireWorkspace();
+  const v = await requireModule("companies");
   const edit = canEdit(v);
   // Users limited to some companies can edit those, but not add or remove companies.
-  const organise = edit && !v.companyIds.length;
+  const organise = edit && !v.access;
   const now = new Date();
   const month = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
   const [client, companies] = await Promise.all([
     db.client.findUniqueOrThrow({ where: { id: v.clientId } }),
     db.company.findMany({
       where: { clientId: v.clientId, ...companyWhere(v) }, orderBy: { name: "asc" },
-      include: { accounts: { select: { platform: true } }, budgets: { where: { month, platform: null } } },
+      include: { accounts: { where: accessWhere(v.access), select: { platform: true } }, budgets: { where: { month, platform: null } } },
     }),
   ]);
 

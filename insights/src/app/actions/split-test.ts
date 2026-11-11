@@ -6,7 +6,7 @@ import { db } from "@/lib/db";
 import { decrypt } from "@/lib/crypto";
 import { lastNDays, ymd } from "@/lib/dates";
 import { enqueueSync } from "@/lib/jobs";
-import { canEdit, requireWorkspace } from "@/lib/tenancy";
+import { accessWhere, canEdit, requireModule } from "@/lib/tenancy";
 import { WRITE_SCOPE } from "@/platforms/meta";
 import { createInterestSplit } from "@/platforms/meta/split-test";
 import type { RemoteTargetingItem } from "@/platforms/types";
@@ -18,10 +18,10 @@ export type SplitResult = { ok: boolean; message: string };
  * logins simulate it; real logins need the ads_management permission.
  */
 export async function splitAdSetAction(adSetId: string, targetingIds: string[]): Promise<SplitResult> {
-  const v = await requireWorkspace();
+  const v = await requireModule("campaigns");
   if (!canEdit(v)) return { ok: false, message: "Read-only users cannot create split tests." };
   const set = await db.adSet.findFirst({
-    where: { id: adSetId, account: { connection: { clientId: v.clientId }, ...(v.companyIds.length ? { companyId: { in: v.companyIds } } : {}) } },
+    where: { id: adSetId, account: { connection: { clientId: v.clientId }, ...accessWhere(v.access) } },
     include: { targeting: true, account: { include: { connection: true } } },
   });
   if (!set || set.platform !== "META") return { ok: false, message: "Ad set not found." };

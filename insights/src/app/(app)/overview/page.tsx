@@ -13,7 +13,7 @@ import { mrow } from "@/lib/rows";
 export const metadata = { title: "Overview" };
 
 export default async function Overview({ searchParams }: { searchParams: Promise<SP> }) {
-  const c = await pageContext(searchParams);
+  const c = await pageContext(searchParams, "overview");
   const { scope, range, prev, t } = c;
   const [cur, before, series, sp, camps] = await Promise.all([
     totals(scope, range), totals(scope, prev), daily(scope, range), splits(scope, range), campaignTable(scope, range),
