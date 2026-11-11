@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/shell";
 import { ShareAccess } from "@/components/share-access";
 import { shareInfo } from "@/lib/share-info";
 import { db } from "@/lib/db";
+import { THROTTLED } from "@/lib/jobs";
 import type { SP } from "@/lib/page";
 import { PLATFORMS, PLATFORM_META } from "@/lib/platforms";
 import { accessWhere, canEdit, companyWhere, requireModule } from "@/lib/tenancy";
@@ -139,6 +140,12 @@ export default async function Connections({ searchParams }: { searchParams: Prom
                             <td className="text-xs">{a.lastSyncAt ? a.lastSyncAt.toISOString().replace("T", " ").slice(0, 16) : "never"}</td>
                             <td className="text-xs">
                               {running.has(a.id) ? <span className="text-blue-700">● syncing now{(parts.get(a.id) ?? 0) > 1 ? ` · ${(parts.get(a.id) ?? 1) - 1} more part${(parts.get(a.id) ?? 1) > 2 ? "s" : ""} after` : ""}</span>
+                                : retrying.has(a.id) && retrying.get(a.id)!.error.includes(THROTTLED) ? (
+                                  <span className="block max-w-72 whitespace-normal text-amber-700" title={retrying.get(a.id)!.error}>
+                                    ⏸ Meta rate limit — resumes {retrying.get(a.id)!.at > new Date() ? `at ${retrying.get(a.id)!.at.toISOString().slice(11, 16)} UTC` : "now"}
+                                    <span className="block text-[11px] text-muted">Too many calls to this account; it continues by itself.</span>
+                                  </span>
+                                )
                                 : retrying.has(a.id) ? (
                                   <span className="block max-w-72 text-bad" title={retrying.get(a.id)!.error}>
                                     ⚠ failed {retrying.get(a.id)!.attempts}× — retrying {retrying.get(a.id)!.at > new Date() ? `at ${retrying.get(a.id)!.at.toISOString().slice(11, 16)} UTC` : "now"}
@@ -146,7 +153,7 @@ export default async function Connections({ searchParams }: { searchParams: Prom
                                   </span>
                                 )
                                 : place.has(a.id) ? <span className="text-amber-700">queued #{place.get(a.id)} · {parts.get(a.id)} part{(parts.get(a.id) ?? 0) > 1 ? "s" : ""}</span>
-                                : a.syncError ? <span className="block max-w-72 whitespace-normal text-bad" title={a.syncError}>⚠ {a.syncError.slice(0, 160)}</span>
+                                : a.syncError && !a.syncError.includes(THROTTLED) ? <span className="block max-w-72 whitespace-normal text-bad" title={a.syncError}>⚠ {a.syncError.slice(0, 160)}</span>
                                 : !a.enabled ? <span className="text-muted">disabled</span>
                                 : a.lastSyncAt ? <span className="text-good">● live</span> : <span className="text-muted">waiting</span>}
                             </td>

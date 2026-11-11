@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { decrypt, encrypt } from "@/lib/crypto";
 import { toDate } from "@/lib/dates";
 import { connectorFor } from "@/platforms";
-import type { Connector, Metrics, RemoteTargetingItem, SyncContext } from "@/platforms/types";
+import { RateLimitError, type Connector, type Metrics, type RemoteTargetingItem, type SyncContext } from "@/platforms/types";
 
 /**
  * Pulls one ad account for one date window and writes it into the warehouse.
@@ -18,6 +18,7 @@ export async function syncAccount(accountId: string, from: string, to: string, l
     accessToken: conn.isDemo ? "demo" : await freshToken(conn, connector),
     account: { externalId: account.externalId, currency: account.currency, timezone: account.timezone, parentId: account.parentId },
     splitTests: conn.isDemo ? await demoSplitTests(accountId) : undefined,
+    light: kind === "live",
   };
   const platform = account.platform;
   const range = { gte: toDate(from), lte: toDate(to) };
@@ -25,7 +26,10 @@ export async function syncAccount(accountId: string, from: string, to: string, l
   // An account with no delivery in the window (paused, dormant, new) needs no structure or breakdown calls.
   if (connector.hasActivity) {
     let active = true;
-    try { active = await connector.hasActivity(ctx, from, to); } catch { /* unsure: do the full sync */ }
+    try { active = await connector.hasActivity(ctx, from, to); } catch (e) {
+      if (e instanceof RateLimitError) throw e; // throttled: wait, don't pile on more calls
+      /* otherwise unsure: do the full sync */
+    }
     if (!active) {
       for (const t of ["statDaily", "statBreakdown", "keyword", "searchTerm", "placement"] as Table[]) await replace(t, accountId, range, []);
       await db.adAccount.update({ where: { id: accountId }, data: { lastSyncAt: new Date(), syncError: "", ...(kind === "live" ? {} : { lastFullSyncAt: new Date() }) } });
@@ -118,7 +122,7 @@ export async function syncAccount(accountId: string, from: string, to: string, l
   }
 
   const bdRows: Prisma.StatBreakdownCreateManyInput[] = [];
-  for (const r of bundle.breakdowns) {
+  for (const r of bundle.breakdowns ?? []) {
     const entityId = resolve(r.level, r.externalId);
     if (!entityId) continue;
     const x = m(r);
@@ -130,7 +134,7 @@ export async function syncAccount(accountId: string, from: string, to: string, l
   }
 
   await replace("statDaily", accountId, range, statRows);
-  await replace("statBreakdown", accountId, range, bdRows);
+  if (bundle.breakdowns) await replace("statBreakdown", accountId, range, bdRows);
 
   if (bundle.keywords) {
     await replace("keyword", accountId, range, bundle.keywords.flatMap((k) => {
@@ -157,7 +161,13 @@ export async function syncAccount(accountId: string, from: string, to: string, l
 
   // ── leads ──
   if (connector.fetchLeads) {
-    const leads = await connector.fetchLeads(ctx, from, to);
+    // Meta: ask only the ads that reported leads in the window, not every ad in the account.
+    const adExt = new Map(s.ads.map((a) => [a.externalId, a]));
+    const leadAds = platform === "META"
+      ? [...new Set(bundle.stats.filter((r) => r.level === "AD" && (r.leads ?? 0) > 0).map((r) => r.externalId))]
+          .flatMap((id) => { const a = adExt.get(id); return a ? [{ ad: id, adSet: a.adSetExternalId, campaign: a.campaignExternalId }] : []; })
+      : undefined;
+    const leads = leadAds && !leadAds.length ? [] : await connector.fetchLeads(ctx, from, to, leadAds);
     if (leads.length) {
       await db.lead.createMany({
         skipDuplicates: true,

@@ -69,6 +69,8 @@ export type RemoteLead = {
 
 export type SyncContext = {
   accessToken: string;
+  /** Quick live refresh: daily stats only (no breakdowns), to spare the platform's rate limits. */
+  light?: boolean;
   account: { externalId: string; currency: string; timezone: string; parentId?: string };
   /** Interest split tests created from this app; only the demo connector needs them (real platforms return the ad sets themselves). */
   splitTests?: { sourceAdSet: string; arms: { externalId: string; interest: RemoteTargetingItem }[] }[];
@@ -76,7 +78,8 @@ export type SyncContext = {
 
 export type StatsBundle = {
   stats: RemoteStat[];
-  breakdowns: RemoteBreakdown[];
+  /** Absent on a light (live) refresh: stored breakdowns are then left as they are. */
+  breakdowns?: RemoteBreakdown[];
   keywords?: RemoteKeyword[];
   searchTerms?: RemoteSearchTerm[];
   placements?: RemotePlacement[];
@@ -92,7 +95,8 @@ export interface Connector {
   listAccounts(accessToken: string): Promise<RemoteAccount[]>;
   fetchStructure(ctx: SyncContext): Promise<{ campaigns: RemoteCampaign[]; adSets: RemoteAdSet[]; ads: RemoteAd[] }>;
   fetchStats(ctx: SyncContext, from: string, to: string): Promise<StatsBundle>;
-  fetchLeads?(ctx: SyncContext, from: string, to: string): Promise<RemoteLead[]>;
+  /** `adIds`: only these ads (the ones that got leads in the window), when known. */
+  fetchLeads?(ctx: SyncContext, from: string, to: string, adIds?: { ad: string; adSet: string; campaign: string }[]): Promise<RemoteLead[]>;
   /** Cheap check whether the account delivered anything in the window; false lets a sync skip the heavy calls. */
   hasActivity?(ctx: SyncContext, from: string, to: string): Promise<boolean>;
 }
@@ -100,5 +104,15 @@ export interface Connector {
 export class PlatformError extends Error {
   constructor(message: string, public readonly status = 0, public readonly retryable = false) {
     super(message);
+  }
+}
+
+/**
+ * The platform asked us to slow down for this account or app. Not a failure:
+ * the sync waits `waitMs` and resumes without using up a retry.
+ */
+export class RateLimitError extends PlatformError {
+  constructor(message: string, public readonly waitMs: number) {
+    super(message, 429, true);
   }
 }

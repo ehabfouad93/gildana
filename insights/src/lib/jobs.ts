@@ -57,8 +57,13 @@ export async function syncAll(clientId: string): Promise<number> {
  * account already has jobs waiting, they are moved to the front instead of
  * adding duplicates. Returns how many jobs are now waiting for the account.
  */
+/** Marker in a waiting job's error while the platform throttles the account (set by the worker). */
+export const THROTTLED = "rate-limiting this ad account";
+
 export async function syncNow(accountId: string): Promise<number> {
-  const waiting = await db.syncRun.updateMany({ where: { accountId, status: "QUEUED" }, data: { priority: 10, runAfter: new Date() } });
+  // To the front of the queue — but not before the platform's rate-limit pause is over.
+  const waiting = await db.syncRun.updateMany({ where: { accountId, status: "QUEUED" }, data: { priority: 10 } });
+  await db.syncRun.updateMany({ where: { accountId, status: "QUEUED", NOT: { runAfter: { gt: new Date() }, error: { contains: THROTTLED } } }, data: { runAfter: new Date() } });
   const running = await db.syncRun.count({ where: { accountId, status: "RUNNING" } });
   if (!waiting.count && !running) {
     const r = lastNDays(28);
@@ -79,7 +84,8 @@ export async function enqueueLive(accountId: string, priority = 5): Promise<bool
   // Several renders can ask at the same instant; the per-account lock makes check-then-insert atomic.
   return db.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${"live:" + accountId}))`;
-    const busy = await tx.syncRun.count({ where: { accountId, status: { in: ["QUEUED", "RUNNING"] }, toDate: { gte: yesterday } } });
+    // Also wait while the platform is throttling the account: a new job would only be refused again.
+    const busy = await tx.syncRun.count({ where: { accountId, OR: [{ status: { in: ["QUEUED", "RUNNING"] }, toDate: { gte: yesterday } }, { status: "QUEUED", runAfter: { gt: new Date() }, error: { contains: THROTTLED } }] } });
     if (busy) return false;
     await tx.syncRun.create({ data: { accountId, kind: "live", fromDate: yesterday, toDate: toDate(ymd(new Date())), priority } });
     return true;

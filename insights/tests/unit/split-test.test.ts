@@ -36,7 +36,7 @@ describe("meta breakdown values", () => {
 describe("demo reported segments and split tests", () => {
   it("reports TikTok interests per ad group, adding up to the ad group", () => {
     const { stats, breakdowns } = buildStats("TIKTOK", "acc-x", "2026-01-01", "2026-01-01");
-    const seg = breakdowns.filter((b) => b.level === "ADSET" && b.dimension === "seg_interest");
+    const seg = breakdowns!.filter((b) => b.level === "ADSET" && b.dimension === "seg_interest");
     expect(seg.length).toBeGreaterThan(0);
     const set = seg[0].externalId;
     const total = stats.find((s) => s.level === "ADSET" && s.externalId === set)!;

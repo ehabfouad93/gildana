@@ -7,6 +7,7 @@
 import { db } from "@/lib/db";
 import { lastNDays, ymd } from "@/lib/dates";
 import { refreshFxRates } from "@/lib/fx";
+import { RateLimitError } from "@/platforms/types";
 import { enqueueInitialSync, enqueueLive, enqueueSync, liveMinutes } from "@/lib/jobs";
 import { runGeoAudit, runVisibility } from "./geo";
 import { runCrawl } from "./seo";
@@ -47,6 +48,7 @@ async function runOne(job: Claimed) {
     console.log(`[sync] ${job.accountId} ${from}..${to} ok — ${lines.join("; ")}`);
   } catch (e) {
     const msg = (e as Error).message ?? String(e);
+    if (e instanceof RateLimitError) return pauseThrottled(job, e, lines);
     const retry = job.attempts < MAX_ATTEMPTS;
     await db.syncRun.update({
       where: { id: job.id },
@@ -58,6 +60,23 @@ async function runOne(job: Claimed) {
     await db.adAccount.update({ where: { id: job.accountId }, data: { syncError: msg.slice(0, 500) } }).catch(() => {});
     console.error(`[sync] ${job.accountId} ${from}..${to} failed (attempt ${job.attempts}): ${msg}`);
   }
+}
+
+/**
+ * The platform throttled this account: put this part back (without using up a
+ * retry) and hold every waiting part of the account until Meta's own estimate
+ * of when calls are allowed again, so nothing keeps knocking in the meantime.
+ */
+async function pauseThrottled(job: Claimed, e: RateLimitError, lines: string[]) {
+  const until = new Date(Date.now() + e.waitMs);
+  const note = `Meta is rate-limiting this ad account (too many calls) — resuming at ${until.toISOString().slice(11, 16)} UTC. Data already synced stays visible.`;
+  await db.syncRun.update({
+    where: { id: job.id },
+    data: { status: "QUEUED", attempts: Math.max(0, job.attempts - 1), runAfter: until, error: note, log: lines.join("\n") },
+  });
+  await db.syncRun.updateMany({ where: { accountId: job.accountId, status: "QUEUED", runAfter: { lt: until } }, data: { runAfter: until } });
+  await db.adAccount.update({ where: { id: job.accountId }, data: { syncError: note } }).catch(() => {});
+  console.warn(`[sync] ${job.accountId} throttled by the platform — waiting ${Math.round(e.waitMs / 60_000)} min`);
 }
 
 /**

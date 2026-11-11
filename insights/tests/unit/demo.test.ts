@@ -26,7 +26,7 @@ describe("demo connector", () => {
   it("breakdown buckets add up to the campaign", () => {
     const { stats, breakdowns } = buildStats("TIKTOK", "acc-4", "2026-01-05", "2026-01-05");
     const camp = stats.find((s) => s.level === "CAMPAIGN")!;
-    const age = breakdowns.filter((b) => b.externalId === camp.externalId && b.dimension === "age");
+    const age = breakdowns!.filter((b) => b.externalId === camp.externalId && b.dimension === "age");
     expect(age.reduce((a, b) => a + (b.impressions ?? 0), 0)).toBe(camp.impressions);
   });
 

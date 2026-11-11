@@ -1,6 +1,6 @@
 import { fetchJson } from "@/lib/http";
 import type { Connector, RemoteAd, RemoteAdSet, RemoteBreakdown, RemoteCampaign, RemoteLead, RemoteStat, StatLevel, SyncContext } from "../types";
-import { PlatformError } from "../types";
+import { PlatformError, RateLimitError } from "../types";
 import { META_BREAKDOWNS, breakdownValue, flattenTargeting, insightMetrics, minor } from "./normalize";
 import { setting } from "@/lib/settings";
 
@@ -155,8 +155,10 @@ export const meta: Connector & { preview(token: string, adId: string, format?: s
     const levels = ["ACCOUNT", "CAMPAIGN", "ADSET", "AD"] as StatLevel[];
     const byLevel = await Promise.all(levels.map((level) => all(q(`${a}/insights`, t, { level: LEVEL_PARAM[level], time_increment: 1, time_range: range, fields: INSIGHT_FIELDS, limit: 500 }), 200)));
     levels.forEach((level, i) => { for (const r of byLevel[i]) stats.push({ level, externalId: String(r[LEVEL_ID[level]]), date: r.date_start, ...insightMetrics(r) }); });
+    // A live refresh stops here: breakdowns come with the full refresh every few hours.
+    if (ctx.light) return { stats };
     const breakdowns: RemoteBreakdown[] = [];
-    // Three breakdown requests at a time: much faster, still well inside Meta's per-account limits.
+    // Three breakdown requests at a time: faster, and throttling is handled by the worker.
     const entries = Object.entries(META_BREAKDOWNS);
     const results: [string, any[] | null][] = [];
     for (let i = 0; i < entries.length; i += 3) {
@@ -165,7 +167,7 @@ export const meta: Connector & { preview(token: string, adId: string, format?: s
           return [dimension, await all(q(`${a}/insights`, t, { level: "campaign", time_increment: 1, time_range: range, breakdowns: param, fields: "campaign_id,spend,impressions,reach,clicks,actions,action_values", limit: 500 }), 200)];
         } catch (e) {
           // A breakdown this account or its campaigns don't support (e.g. asset splits without dynamic creative) is skipped, not fatal.
-          if (e instanceof PlatformError && e.status >= 400 && e.status < 500) return [dimension, null];
+          if (e instanceof PlatformError && !(e instanceof RateLimitError) && e.status >= 400 && e.status < 500) return [dimension, null];
           throw e;
         }
       }))));
@@ -185,9 +187,12 @@ export const meta: Connector & { preview(token: string, adId: string, format?: s
     return (r.data ?? []).some((x: any) => Number(x.impressions) > 0 || Number(x.spend) > 0);
   },
 
-  async fetchLeads(ctx, from) {
+  async fetchLeads(ctx, from, _to, adIds) {
     const t = ctx.accessToken;
-    const ads = await all(q(`${act(ctx.account.externalId)}/ads`, t, { fields: "id,adset_id,campaign_id", limit: 500, effective_status: JSON.stringify(["ACTIVE", "PAUSED", "CAMPAIGN_PAUSED", "ADSET_PAUSED"]) }));
+    // Only ads that actually got leads — calling every ad's /leads burns the account's rate limit.
+    const ads: { id: string; adset_id: string; campaign_id: string }[] = adIds
+      ? adIds.map((x) => ({ id: x.ad, adset_id: x.adSet, campaign_id: x.campaign }))
+      : await all(q(`${act(ctx.account.externalId)}/ads`, t, { fields: "id,adset_id,campaign_id", limit: 500, effective_status: JSON.stringify(["ACTIVE", "PAUSED", "CAMPAIGN_PAUSED", "ADSET_PAUSED"]) }));
     const since = Math.floor(Date.parse(from + "T00:00:00Z") / 1000);
     const out: RemoteLead[] = [];
     for (const ad of ads) {
@@ -196,7 +201,7 @@ export const meta: Connector & { preview(token: string, adId: string, format?: s
         rows = await all(q(`${ad.id}/leads`, t, { fields: "id,created_time,field_data,form_id", filtering: JSON.stringify([{ field: "time_created", operator: "GREATER_THAN", value: since }]), limit: 500 }), 20);
       } catch (e) {
         // Ads that are not lead ads, or a token without leads_retrieval, answer with an error; skip them.
-        if (e instanceof PlatformError && e.status >= 400 && e.status < 500) continue;
+        if (e instanceof PlatformError && !(e instanceof RateLimitError) && e.status >= 400 && e.status < 500) continue;
         throw e;
       }
       for (const l of rows) {
