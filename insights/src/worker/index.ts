@@ -98,8 +98,10 @@ async function schedule() {
   });
   const window = lastNDays(28);
   const liveMs = liveMinutes() * 60_000;
+  // An account whose sync just gave up after every retry rests for an hour instead of being re-queued at once.
+  const resting = new Set((await db.syncRun.findMany({ where: { status: "FAILED", finishedAt: { gt: new Date(Date.now() - 60 * 60_000) } }, select: { accountId: true }, distinct: ["accountId"] })).map((r) => r.accountId));
   for (const a of accounts) {
-    if (a.syncRuns.length) continue;
+    if (a.syncRuns.length || resting.has(a.id)) continue;
     if (!a.lastSyncAt) await enqueueInitialSync(a.id);
     else if (!a.lastFullSyncAt || Date.now() - a.lastFullSyncAt.getTime() > FULL_RESYNC_MS) await enqueueSync(a.id, window.from, ymd(new Date()));
     else if (Date.now() - a.lastSyncAt.getTime() > liveMs) await enqueueLive(a.id);

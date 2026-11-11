@@ -28,8 +28,11 @@ export default async function Connections({ searchParams }: { searchParams: Prom
   const share = shareInfo();
   const claims = await db.accountClaim.findMany({ where: { clientId: v.clientId, status: { not: "approved" } }, orderBy: { createdAt: "desc" }, take: 20 });
   // Sync status per account: running now, or its place in the (global) queue.
-  const jobs = await db.syncRun.findMany({ where: { status: { in: ["QUEUED", "RUNNING"] } }, orderBy: [{ priority: "desc" }, { createdAt: "asc" }], select: { accountId: true, status: true }, take: 2000 });
+  const jobs = await db.syncRun.findMany({ where: { status: { in: ["QUEUED", "RUNNING"] } }, orderBy: [{ priority: "desc" }, { createdAt: "asc" }], select: { accountId: true, status: true, error: true, runAfter: true, attempts: true }, take: 2000 });
   const running = new Set(jobs.filter((j) => j.status === "RUNNING").map((j) => j.accountId));
+  // A part that failed waits in the queue for its retry; show why, instead of a plain "queued".
+  const retrying = new Map<string, { error: string; at: Date; attempts: number }>();
+  for (const j of jobs) if (j.status === "QUEUED" && j.error && !retrying.has(j.accountId)) retrying.set(j.accountId, { error: j.error, at: j.runAfter, attempts: j.attempts });
   const parts = new Map<string, number>();
   const place = new Map<string, number>();
   for (const j of jobs) {
@@ -136,8 +139,14 @@ export default async function Connections({ searchParams }: { searchParams: Prom
                             <td className="text-xs">{a.lastSyncAt ? a.lastSyncAt.toISOString().replace("T", " ").slice(0, 16) : "never"}</td>
                             <td className="text-xs">
                               {running.has(a.id) ? <span className="text-blue-700">● syncing now{(parts.get(a.id) ?? 0) > 1 ? ` · ${(parts.get(a.id) ?? 1) - 1} more part${(parts.get(a.id) ?? 1) > 2 ? "s" : ""} after` : ""}</span>
+                                : retrying.has(a.id) ? (
+                                  <span className="block max-w-72 text-bad" title={retrying.get(a.id)!.error}>
+                                    ⚠ failed {retrying.get(a.id)!.attempts}× — retrying {retrying.get(a.id)!.at > new Date() ? `at ${retrying.get(a.id)!.at.toISOString().slice(11, 16)} UTC` : "now"}
+                                    <span className="block whitespace-normal text-[11px] text-muted">{retrying.get(a.id)!.error.slice(0, 160)}</span>
+                                  </span>
+                                )
                                 : place.has(a.id) ? <span className="text-amber-700">queued #{place.get(a.id)} · {parts.get(a.id)} part{(parts.get(a.id) ?? 0) > 1 ? "s" : ""}</span>
-                                : a.syncError ? <span className="text-bad" title={a.syncError}>error</span>
+                                : a.syncError ? <span className="block max-w-72 whitespace-normal text-bad" title={a.syncError}>⚠ {a.syncError.slice(0, 160)}</span>
                                 : !a.enabled ? <span className="text-muted">disabled</span>
                                 : a.lastSyncAt ? <span className="text-good">● live</span> : <span className="text-muted">waiting</span>}
                             </td>
