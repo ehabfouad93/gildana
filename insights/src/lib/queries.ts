@@ -98,7 +98,12 @@ export async function splits(scope: Scope, r: Range) {
 }
 
 /** Campaign table rows with their metrics for the range. */
-export async function campaignTable(scope: Scope, r: Range, filter: { platform?: Platform; status?: string; q?: string } = {}) {
+/**
+ * Campaigns with their totals. With `ownCurrency`, each campaign's money stays
+ * in its ad account's real currency (as in the platform's ads manager)
+ * instead of being converted into the reporting currency.
+ */
+export async function campaignTable(scope: Scope, r: Range, filter: { platform?: Platform; status?: string; q?: string; ownCurrency?: boolean } = {}) {
   const campaigns = await db.campaign.findMany({
     where: {
       accountId: { in: scope.accountIds },
@@ -106,11 +111,21 @@ export async function campaignTable(scope: Scope, r: Range, filter: { platform?:
       ...(filter.status ? { status: filter.status } : {}),
       ...(filter.q ? { name: { contains: filter.q, mode: "insensitive" } } : {}),
     },
-    select: { id: true, name: true, platform: true, status: true, objective: true, accountId: true, account: { select: { name: true, company: { select: { name: true } } } } },
+    select: { id: true, name: true, platform: true, status: true, objective: true, accountId: true, account: { select: { name: true, currency: true, company: { select: { name: true } } } } },
   });
-  const { rows } = await grouped(scope, r, "CAMPAIGN", ["entityId"], { entityId: { in: campaigns.map((c) => c.id) } });
+  const ids = { entityId: { in: campaigns.map((c) => c.id) } };
+  const rows = new Map<string, Totals>();
+  if (filter.ownCurrency) {
+    // One pass per currency, converting into that same currency (i.e. not at all).
+    for (const cur of new Set(campaigns.map((c) => c.account.currency))) {
+      const sub = { accountIds: [...new Set(campaigns.filter((c) => c.account.currency === cur).map((c) => c.accountId))], currency: cur };
+      for (const [k, v] of (await grouped(sub, r, "CAMPAIGN", ["entityId"], ids)).rows) rows.set(k, v);
+    }
+  } else {
+    for (const [k, v] of (await grouped(scope, r, "CAMPAIGN", ["entityId"], ids)).rows) rows.set(k, v);
+  }
   return campaigns
-    .map((c) => ({ ...c, m: derive(rows.get(c.id) ?? { ...ZERO }) }))
+    .map((c) => ({ ...c, currency: filter.ownCurrency ? c.account.currency : scope.currency, m: derive(rows.get(c.id) ?? { ...ZERO }) }))
     .sort((a, b) => b.m.spend - a.m.spend);
 }
 

@@ -2,6 +2,7 @@
 
 import { useActionState } from "react";
 import { signupAction } from "@/app/actions/saas";
+import { CURRENCIES } from "@/lib/currencies";
 
 export function SignupForm() {
   const [error, action, pending] = useActionState(signupAction, null);
@@ -16,7 +17,7 @@ export function SignupForm() {
         <div><label className="label" htmlFor="confirm">Repeat</label><input className="input" id="confirm" name="confirm" type="password" autoComplete="new-password" minLength={8} required /></div>
       </div>
       <div><label className="label" htmlFor="currency">Report currency</label>
-        <select className="input" id="currency" name="currency" defaultValue="USD">{["USD", "EGP", "SAR", "AED", "KWD", "QAR", "EUR", "GBP"].map((c) => <option key={c}>{c}</option>)}</select></div>
+        <select className="input" id="currency" name="currency" defaultValue="USD">{CURRENCIES.map((c) => <option key={c.code} value={c.code}>{c.code} — {c.name}</option>)}</select></div>
       {error && <p className="text-sm text-bad">{error}</p>}
       <button className="btn w-full justify-center" disabled={pending}>{pending ? "Creating…" : "Create workspace"}</button>
     </form>

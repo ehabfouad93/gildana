@@ -123,6 +123,10 @@ Clients never handle API keys. Gildana sets each platform up **once**, then ever
 
 For each manager or viewer, Team → Edit sets **which sections they can open** (Overview, Spend, Performance, Campaigns, Audiences, Google, Websites, Reports, Ad accounts, Companies) and **which ad accounts they see**: all, whole companies (including accounts added later) and/or single ad accounts. Everything they open — reports, campaigns, breakdowns, websites, budgets, share links — follows that grant, and limited users can't reorganise accounts or companies. Users can be deleted from Admin → Clients → client, Admin → Gildana team, or the client's own Team page. Nobody can delete or demote themselves, a workspace's last owner, or the last Gildana admin. Signing up creates an Owner.
 
+## Currencies
+
+Each workspace picks a **reporting currency** (Settings). Overview, spend, performance and reports add every ad account up in it, converted at daily exchange rates the worker fetches (`FX_RATES_URL`, default open.er-api.com; built-in rates are used until the first fetch). **Campaign pages** show each ad account's real currency — exactly what the platform charged — or the converted amounts; the default is a workspace setting and anyone can switch on the page.
+
 ## Passwords
 
 - **Forgot password** on the sign-in page emails a one-time link (valid 1 hour). It needs `SMTP_URL` in `.env`, e.g. `smtp://you%40gildana.net:PASSWORD@smtp.hostinger.com:587` (URL-encode `@` in the username as `%40`), and `MAIL_FROM`. Without it, the page tells people to ask an admin. `SMTP_URL=log://` prints the emails to the log, for testing.

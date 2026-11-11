@@ -8,7 +8,9 @@ import { KpiGrid, fmtMetric } from "@/components/kpi";
 import { PageHeader } from "@/components/shell";
 import { DataTable } from "@/components/table";
 import { METRIC_COLS, SOURCE_LABEL } from "@/components/table-types";
+import { CurrencySwitch, currencyMode } from "@/components/currency-switch";
 import { db } from "@/lib/db";
+import { convert, fxTable, fxUpdatedAt } from "@/lib/fx";
 import { money } from "@/lib/format";
 import { pageContext, qs, type SP } from "@/lib/page";
 import { PLATFORM_META } from "@/lib/platforms";
@@ -30,10 +32,15 @@ const TABS = [
 export default async function CampaignPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<SP> }) {
   const { id } = await params;
   const c = await pageContext(searchParams, "campaigns");
-  const { scope, range, prev, t } = c;
+  const { range, prev, t } = c;
 
   const campaign = await db.campaign.findUnique({ where: { id }, include: { account: { include: { company: true, connection: { select: { isDemo: true } } } } } });
-  if (!campaign || !scope.accountIds.includes(campaign.accountId)) notFound();
+  if (!campaign || !c.scope.accountIds.includes(campaign.accountId)) notFound();
+  // Money in the ad account's real currency (as in the platform), or converted into the reporting currency.
+  const curMode = currencyMode(c.sp, c.client.campaignCurrency);
+  const scope = { accountIds: [campaign.accountId], currency: curMode === "account" ? campaign.account.currency : c.scope.currency };
+  const [fx, fxDate] = await Promise.all([fxTable(), fxUpdatedAt()]);
+  const fxNote = `1 ${c.scope.currency} = ${convert(1, c.scope.currency, campaign.account.currency, fx).toLocaleString("en-US", { maximumFractionDigits: 4 })} ${campaign.account.currency} · ${fxDate ? `rates of ${fxDate.toISOString().slice(0, 10)}` : "approximate rates"}`;
   const isDemo = campaign.account.connection.isDemo;
   const meta = PLATFORM_META[campaign.platform];
   const isGoogle = campaign.platform === "GOOGLE";
@@ -53,7 +60,7 @@ export default async function CampaignPage({ params, searchParams }: { params: P
     return true;
   });
   const tab = tabs.some(([k]) => k === c.one("tab")) ? c.one("tab") : "adsets";
-  const keep = { days: c.one("days"), from: c.one("from"), to: c.one("to") };
+  const keep = { days: c.one("days"), from: c.one("from"), to: c.one("to"), cur: c.one("cur") };
 
   return (
     <>
@@ -61,6 +68,7 @@ export default async function CampaignPage({ params, searchParams }: { params: P
         <Filters t={t} companies={[]} range={range} days={c.one("days")} showPlatform={false} extra={{ tab }} />
         <Link href={`/reports?campaign=${id}`} className="btn-ghost no-print">Share report</Link>
       </PageHeader>
+      <div className="mb-3"><CurrencySwitch sp={c.sp} mode={curMode} account={campaign.account.currency} reporting={c.scope.currency} rate={fxNote} /></div>
 
       <div className="space-y-4">
         <KpiGrid cur={cur} prev={before} currency={scope.currency} t={t} keys={["spend", "impressions", "reach", "clicks", "ctr", "cpc", "cpm", "frequency", "conversions", "leads", "cpl", "roas"]} />

@@ -33,8 +33,10 @@ function f(v: Row[string], fmt: Fmt = "text", currency: string): string {
  * Sortable, searchable table. Rows arrive as plain data from the server;
  * a column with `href` links each cell to row[href].
  */
-export function DataTable({ cols, rows, currency = "USD", initialSort, search = true, csvName, limit = 200 }: {
+export function DataTable({ cols, rows, currency = "USD", currencyKey, initialSort, search = true, csvName, limit = 200 }: {
   cols: Col[]; rows: Row[]; currency?: string; initialSort?: string; search?: boolean; csvName?: string; limit?: number;
+  /** Row field holding that row's own currency (money is then shown unconverted, per row). */
+  currencyKey?: string;
 }) {
   const [sort, setSort] = useState<{ k: string; dir: 1 | -1 }>({ k: initialSort ?? "", dir: -1 });
   const [q, setQ] = useState("");
@@ -59,7 +61,8 @@ export function DataTable({ cols, rows, currency = "USD", initialSort, search = 
 
   const csv = () => {
     const esc = (s: unknown) => `"${String(s ?? "").replace(/"/g, '""')}"`;
-    const body = [cols.map((c) => esc(c.label)).join(","), ...view.map((r) => cols.map((c) => esc(r[c.key])).join(","))].join("\n");
+    const head = [...cols.map((c) => esc(c.label)), ...(currencyKey ? [esc("Currency")] : [])].join(",");
+    const body = [head, ...view.map((r) => [...cols.map((c) => esc(r[c.key])), ...(currencyKey ? [esc(r[currencyKey] ?? currency)] : [])].join(","))].join("\n");
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob(["﻿" + body], { type: "text/csv;charset=utf-8" }));
     a.download = `${csvName ?? "export"}.csv`;
@@ -94,7 +97,7 @@ export function DataTable({ cols, rows, currency = "USD", initialSort, search = 
             {shown.map((r, i) => (
               <tr key={i}>
                 {cols.map((c) => {
-                  const val = f(r[c.key], c.fmt === "badge" ? "text" : c.fmt, currency);
+                  const val = f(r[c.key], c.fmt === "badge" ? "text" : c.fmt, (currencyKey && typeof r[currencyKey] === "string" ? (r[currencyKey] as string) : currency));
                   const href = c.href ? (r[c.href] as string | undefined) : undefined;
                   return (
                     <td key={c.key} className={`${c.fmt && c.fmt !== "text" && c.fmt !== "badge" ? "num" : ""} ${c.wrap ? "!whitespace-normal min-w-56" : ""}`}>

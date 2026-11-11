@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { createClientAction, openWorkspaceAction } from "@/app/actions/admin";
 import { PageHeader } from "@/components/shell";
+import { CURRENCIES } from "@/lib/currencies";
 import { db } from "@/lib/db";
 import { lastNDays, toDate } from "@/lib/dates";
 import { convert, fxTable } from "@/lib/fx";
@@ -58,7 +59,7 @@ export default async function ClientsPage() {
       </div>
       <form action={createClientAction} className="card grid items-end gap-3 md:grid-cols-5">
         <div className="md:col-span-2"><label className="label">New client name</label><input className="input" name="name" required /></div>
-        <div><label className="label">Reporting currency</label><input className="input" name="currency" defaultValue="USD" maxLength={3} /></div>
+        <div><label className="label">Reporting currency</label><select className="input" name="currency" defaultValue="USD">{CURRENCIES.map((x) => <option key={x.code} value={x.code}>{x.code} — {x.name}</option>)}</select></div>
         <div><label className="label">Timezone</label><input className="input" name="timezone" defaultValue="Africa/Cairo" /></div>
         <div className="flex items-center gap-3">
           <label className="flex items-center gap-1 text-sm"><input type="checkbox" name="isAgency" /> Agency</label>

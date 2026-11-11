@@ -6,6 +6,7 @@
  */
 import { db } from "@/lib/db";
 import { lastNDays, ymd } from "@/lib/dates";
+import { refreshFxRates } from "@/lib/fx";
 import { enqueueInitialSync, enqueueLive, enqueueSync, liveMinutes } from "@/lib/jobs";
 import { runGeoAudit, runVisibility } from "./geo";
 import { runCrawl } from "./seo";
@@ -125,6 +126,7 @@ async function main() {
         lastSchedule = Date.now();
         await schedule().catch((e) => console.error("[schedule]", e));
         await scheduleVisibility().catch((e) => console.error("[visibility]", e));
+        await refreshFxRates().then((n) => n && console.log(`[fx] stored ${n} exchange rates`)).catch((e) => console.error("[fx]", e.message));
       }
       const job = await claim().catch((e) => (console.error("[claim]", e), null));
       if (job) await runOne(job);

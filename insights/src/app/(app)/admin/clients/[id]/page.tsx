@@ -30,7 +30,7 @@ export default async function ClientAdmin({ params }: { params: Promise<{ id: st
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="card">
           <h2 className="mb-3 font-semibold">Settings</h2>
-          <WorkspaceSettings gildana c={{ id: c.id, name: c.name, reportingCurrency: c.reportingCurrency, timezone: c.timezone, logoUrl: c.logoUrl, defaultDays: c.defaultDays, isAgency: c.isAgency, active: c.active }} />
+          <WorkspaceSettings gildana c={{ id: c.id, name: c.name, reportingCurrency: c.reportingCurrency, campaignCurrency: c.campaignCurrency, timezone: c.timezone, logoUrl: c.logoUrl, defaultDays: c.defaultDays, isAgency: c.isAgency, active: c.active }} />
         </div>
 
         <div className="card">

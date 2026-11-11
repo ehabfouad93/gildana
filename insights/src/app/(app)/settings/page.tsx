@@ -20,7 +20,7 @@ export default async function SettingsPage() {
       <PageHeader title="Workspace settings" sub={`${users} users · ${companies} companies · ${accounts} ad accounts`} />
       <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
         <div className="card">
-          <WorkspaceSettings gildana={v.isGildana} c={{ id: c.id, name: c.name, reportingCurrency: c.reportingCurrency, timezone: c.timezone, logoUrl: c.logoUrl, defaultDays: c.defaultDays, isAgency: c.isAgency, active: c.active }} />
+          <WorkspaceSettings gildana={v.isGildana} c={{ id: c.id, name: c.name, reportingCurrency: c.reportingCurrency, campaignCurrency: c.campaignCurrency, timezone: c.timezone, logoUrl: c.logoUrl, defaultDays: c.defaultDays, isAgency: c.isAgency, active: c.active }} />
         </div>
         <div className="card space-y-2 text-sm">
           <h2 className="font-semibold">Also here</h2>
