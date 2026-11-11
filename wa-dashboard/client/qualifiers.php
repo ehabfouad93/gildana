@@ -172,6 +172,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
             </form>
             <?php endif; ?>
             <a class="btn btn-ghost btn-sm" href="qualifier_edit.php?id=<?= (int) $f['id'] ?>">Edit</a>
+            <a class="btn btn-ghost btn-sm" href="qualifier_report.php?id=<?= (int) $f['id'] ?>" title="How far leads got, where they stopped and what they answered">Report</a>
             <a class="btn btn-ghost btn-sm" href="leads.php?flow=<?= (int) $f['id'] ?>">Leads</a>
             <form method="post" style="display:inline">
               <?= csrf_field() ?><input type="hidden" name="action" value="duplicate"><input type="hidden" name="id" value="<?= (int) $f['id'] ?>">

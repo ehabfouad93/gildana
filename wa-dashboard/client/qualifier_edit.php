@@ -205,6 +205,7 @@ client_header('Qualifier · ' . $flow['name'], 'qualifier', $CLIENT);
       <?= csrf_field() ?><input type="hidden" name="action" value="send_now">
       <button class="btn btn-primary btn-sm">&#9658; Send now</button>
     </form>
+    <a class="btn btn-ghost btn-sm" href="qualifier_report.php?id=<?= $id ?>">Report</a>
     <a class="btn btn-ghost btn-sm" href="leads.php?flow=<?= $id ?>">Leads →</a>
   </div>
 </div>

@@ -45,7 +45,7 @@ function perm_modules(): array
         'automations' => ['label' => 'Automations',    'pages' => ['automations.php', 'automation_edit.php', 'automation_data.php',
                                                                    'automation_report.php', 'google_sheet.php',
                                                                    'upload_media.php']],
-        'qualifier'   => ['label' => 'Lead Qualifier', 'pages' => ['qualifiers.php', 'qualifier_edit.php', 'leads.php',
+        'qualifier'   => ['label' => 'Lead Qualifier', 'pages' => ['qualifiers.php', 'qualifier_edit.php', 'qualifier_report.php', 'leads.php',
                                                                    'google_sheet.php', 'upload_media.php']],
         'agents'      => ['label' => 'AI Chat Agent',  'pages' => ['agents.php', 'agent_edit.php', 'agent_chats.php']],
         'sms'         => ['label' => 'SMS',            'pages' => ['sms.php']],
