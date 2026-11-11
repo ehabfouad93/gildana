@@ -37,7 +37,7 @@ async function mailResetLink(user: { id: string; email: string; name: string }, 
 
 /** Always answers the same way, so the form can't be used to find out which emails have accounts. */
 export async function forgotPasswordAction(_: string | null, form: FormData): Promise<string> {
-  const done = "If that email has an account, we've sent a link to reset the password. Check your inbox (and spam).";
+  const done = "If that email has an account, we've sent a link to reset the password. It can take a minute — check your spam folder too. Still nothing? Ask your Gildana admin to reset it for you.";
   await loadSettings();
   if (!mailEnabled()) return done;
   const email = String(form.get("email") ?? "").toLowerCase().trim().slice(0, 190);

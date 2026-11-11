@@ -126,8 +126,11 @@ export const PLATFORM_SETUP: Record<Platform, PlatformSetup> = {
 };
 
 export const GENERAL_FIELDS: Field[] = [
-  { key: "SMTP_URL", label: "Email server (SMTP URL)", secret: true, placeholder: "smtp://noreply%40gildana.net:PASSWORD@smtp.hostinger.com:587", help: "For password resets and invitations. Write @ in the username as %40." },
-  { key: "MAIL_FROM", label: "Send emails as", placeholder: "Gildana Insights <noreply@gildana.net>" },
+  { key: "SMTP_HOST", label: "Mail server (SMTP host)", placeholder: "mail.gildana.net", help: "From your email provider. For email hosted on cPanel: mail.yourdomain.com or the hosting server name." },
+  { key: "SMTP_PORT", label: "Port", placeholder: "465", help: "465 (SSL) or 587 (STARTTLS)." },
+  { key: "SMTP_USER", label: "Mailbox (username)", placeholder: "noreply@gildana.net", help: "The full email address of the mailbox that sends." },
+  { key: "SMTP_PASS", label: "Mailbox password", secret: true },
+  { key: "MAIL_FROM", label: "Send emails as (optional)", placeholder: "Gildana Insights <noreply@gildana.net>", help: "Defaults to the mailbox above." },
   { key: "ANTHROPIC_API_KEY", label: "Claude API key", secret: true, help: "GEO reviews and AI-visibility checks." },
   { key: "PAGESPEED_API_KEY", label: "PageSpeed Insights API key", secret: true, help: "Optional — higher quota for Core Web Vitals." },
 ];
@@ -136,4 +139,5 @@ export const SETTING_KEYS: string[] = [
   ...Object.values(PLATFORM_SETUP).flatMap((p) => p.fields.map((f) => f.key)),
   ...GENERAL_FIELDS.map((f) => f.key),
   "CLAIMS_AUTO_APPROVE",
+  "SMTP_URL",
 ];

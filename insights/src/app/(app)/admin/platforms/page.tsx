@@ -10,6 +10,7 @@ import type { SP } from "@/lib/page";
 import { requireAdmin } from "@/lib/tenancy";
 import { demoEnabled, liveConnector } from "@/platforms";
 import { SystemUserForm } from "./system-user-form";
+import { TestEmailForm } from "./test-email-form";
 
 export const metadata = { title: "Platforms" };
 export const dynamic = "force-dynamic";
@@ -20,7 +21,7 @@ export const dynamic = "force-dynamic";
  * sign-up and email. Values are stored encrypted; .env still works as a fallback.
  */
 export default async function Platforms({ searchParams }: { searchParams: Promise<SP> }) {
-  await requireAdmin();
+  const admin = await requireAdmin();
   const sp = await searchParams;
   const agency = await db.adConnection.findMany({ where: { isAgency: true }, include: { _count: { select: { accounts: true } } }, orderBy: { createdAt: "asc" } });
   const pending = await db.accountClaim.count({ where: { status: "pending" } });
@@ -44,9 +45,18 @@ export default async function Platforms({ searchParams }: { searchParams: Promis
           <input type="checkbox" name="CLAIMS_AUTO_APPROVE" value="true" defaultChecked={setting("CLAIMS_AUTO_APPROVE") === "true"} />
           Approve shared ad accounts automatically when Gildana can see them <span className="text-muted">(off = you approve each one in Access requests{pending ? ` — ${pending} waiting` : ""})</span>
         </label>
-        <div className="grid gap-3 md:grid-cols-2">{GENERAL_FIELDS.map((f) => <FieldInput key={f.key} f={f} />)}</div>
+        <h3 className="pt-2 text-sm font-semibold">Email — for password resets and invitations</h3>
+        <div className="grid gap-3 md:grid-cols-2">{GENERAL_FIELDS.filter((f) => f.key.startsWith("SMTP") || f.key === "MAIL_FROM").map((f) => <FieldInput key={f.key} f={f} />)}</div>
+        <h3 className="pt-2 text-sm font-semibold">AI and speed checks</h3>
+        <div className="grid gap-3 md:grid-cols-2">{GENERAL_FIELDS.filter((f) => !f.key.startsWith("SMTP") && f.key !== "MAIL_FROM").map((f) => <FieldInput key={f.key} f={f} />)}</div>
         <button className="btn">Save</button>
       </form>
+      <div className="card mb-4 space-y-2">
+        <h2 className="font-semibold">Check email delivery</h2>
+        <p className="text-sm text-muted">Save the email settings first, then send yourself a test. Password-reset emails use the same settings.</p>
+        <TestEmailForm defaultTo={admin.email} />
+        {setting("MAIL_LAST_ERROR") && <p className="rounded-lg bg-red-50 p-2 text-xs text-bad">Last failed email: {setting("MAIL_LAST_ERROR")}</p>}
+      </div>
 
       <div className="space-y-4">
         {PLATFORMS.map((p) => {

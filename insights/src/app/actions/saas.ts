@@ -187,3 +187,19 @@ export async function inviteUserAction(_: string | null, form: FormData): Promis
   }
 }
 
+
+/** Admin → Platforms: send a test email and report the real result. */
+export async function sendTestEmailAction(_: string | null, form: FormData): Promise<string> {
+  const v = await requireAdmin();
+  await loadSettings(true);
+  if (!mailEnabled()) return "error:Fill in the mail server, mailbox and password, then Save, before testing.";
+  const to = String(form.get("to") || v.email).trim();
+  try {
+    await sendMail({ to, subject: "Gildana Insights test email", text: `This is a test from Gildana Insights.\n\nIf you can read this, password resets and invitations will be delivered.\n\nSent ${new Date().toISOString()}` });
+    revalidatePath("/admin/platforms");
+    return `ok:Sent to ${to}. If it isn't in the inbox within a minute, check spam — and add an SPF record for the sending server to your domain's DNS.`;
+  } catch (e) {
+    revalidatePath("/admin/platforms");
+    return `error:${(e as Error).message}`;
+  }
+}
