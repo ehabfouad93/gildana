@@ -30,7 +30,7 @@ const fmtDur = (s: number | null) => (s == null ? "—" : `${Math.floor(s / 60)}
 export default async function Analytics({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<SP> }) {
   const { id } = await params;
   const c = await pageContext(searchParams);
-  const site = await siteForClient(c.client.id, id);
+  const site = await siteForClient(c.client.id, id, c.viewer.companyIds);
   if (!site) notFound();
   const { range, prev, t } = c;
   const tab = (c.one("tab") in TABS ? c.one("tab") : "overview") as keyof typeof TABS;

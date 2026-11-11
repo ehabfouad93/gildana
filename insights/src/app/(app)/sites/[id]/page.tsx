@@ -11,7 +11,7 @@ export const metadata = { title: "Website setup" };
 export default async function SiteSetup({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const v = await requireWorkspace();
-  const site = await siteForClient(v.clientId, id);
+  const site = await siteForClient(v.clientId, id, v.companyIds);
   if (!site) notFound();
   const edit = canEdit(v);
   const base = process.env.APP_URL ?? "";

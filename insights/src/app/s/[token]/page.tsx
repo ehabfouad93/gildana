@@ -36,10 +36,15 @@ export default async function SharedReport({ params, searchParams }: { params: P
     }
   }
   await db.shareLink.update({ where: { id: link.id }, data: { views: { increment: 1 } } });
+  const client = await db.client.findUnique({ where: { id: link.clientId }, select: { logoUrl: true, name: true } });
 
   return (
     <main className="mx-auto max-w-7xl p-4 md:p-6">
-      <div className="no-print mb-3 flex justify-end"><PrintButton /></div>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        {client?.logoUrl ? <img src={client.logoUrl} alt={client.name} className="h-10 max-w-48 object-contain" /> : <span />}
+        <div className="no-print"><PrintButton /></div>
+      </div>
       <ReportBody spec={shareSpec(link)} t={await getDict()} />
       <p className="mt-6 text-center text-xs text-muted">Live report · Gildana Insights</p>
     </main>

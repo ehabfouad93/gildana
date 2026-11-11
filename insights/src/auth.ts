@@ -6,7 +6,7 @@ import { db } from "@/lib/db";
 
 declare module "next-auth" {
   interface Session {
-    user: { id: string; role: "ADMIN" | "CLIENT" | "VIEWER"; clientId: string | null; locale: string } & DefaultSession["user"];
+    user: { id: string; role: "ADMIN" | "STAFF" | "OWNER" | "CLIENT" | "VIEWER"; clientId: string | null; locale: string } & DefaultSession["user"];
   }
 }
 
@@ -56,7 +56,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     },
     session({ session, token }) {
       session.user.id = token.uid as string;
-      session.user.role = token.role as "ADMIN" | "CLIENT" | "VIEWER";
+      session.user.role = token.role as "ADMIN" | "STAFF" | "OWNER" | "CLIENT" | "VIEWER";
       session.user.clientId = (token.clientId as string | null) ?? null;
       session.user.locale = (token.locale as string) ?? "en";
       return session;

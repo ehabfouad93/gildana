@@ -2,19 +2,21 @@ import { createCompanyAction, deleteCompanyAction, setBudgetAction, updateCompan
 import { PageHeader } from "@/components/shell";
 import { db } from "@/lib/db";
 import { PLATFORM_META } from "@/lib/platforms";
-import { canEdit, requireWorkspace } from "@/lib/tenancy";
+import { canEdit, companyWhere, requireWorkspace } from "@/lib/tenancy";
 
 export const metadata = { title: "Companies" };
 
 export default async function Companies() {
   const v = await requireWorkspace();
   const edit = canEdit(v);
+  // Users limited to some companies can edit those, but not add or remove companies.
+  const organise = edit && !v.companyIds.length;
   const now = new Date();
   const month = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
   const [client, companies] = await Promise.all([
     db.client.findUniqueOrThrow({ where: { id: v.clientId } }),
     db.company.findMany({
-      where: { clientId: v.clientId }, orderBy: { name: "asc" },
+      where: { clientId: v.clientId, ...companyWhere(v) }, orderBy: { name: "asc" },
       include: { accounts: { select: { platform: true } }, budgets: { where: { month, platform: null } } },
     }),
   ]);
@@ -46,17 +48,19 @@ export default async function Companies() {
                       <input className="input !w-28 !py-1" name="amount" type="number" min="0" step="1" defaultValue={c.budgets[0] ? Number(c.budgets[0].amount) : ""} />
                       <button className="btn-ghost !py-1">Set</button>
                     </form>
-                    <form action={deleteCompanyAction}>
-                      <input type="hidden" name="id" value={c.id} />
-                      <button className="text-bad hover:underline">Delete</button>
-                    </form>
+                    {organise && (
+                      <form action={deleteCompanyAction}>
+                        <input type="hidden" name="id" value={c.id} />
+                        <button className="text-bad hover:underline">Delete</button>
+                      </form>
+                    )}
                   </>
                 )}
               </div>
             </div>
           );
         })}
-        {edit && (
+        {organise && (
           <form action={createCompanyAction} className="card grid gap-2 md:grid-cols-[2fr_2fr_1fr_auto]">
             <input className="input" name="name" placeholder="New company name" required />
             <input className="input" name="website" placeholder="https://" />

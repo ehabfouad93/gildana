@@ -16,7 +16,7 @@ const FILTERS = { all: "All sessions", replay: "With replay", converted: "Conver
 export default async function Recordings({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<SP> }) {
   const { id } = await params;
   const c = await pageContext(searchParams);
-  const site = await siteForClient(c.client.id, id);
+  const site = await siteForClient(c.client.id, id, c.viewer.companyIds);
   if (!site) notFound();
   const f = (c.one("f") in FILTERS ? c.one("f") : "all") as keyof typeof FILTERS;
   const where: Prisma.TrackSessionWhereInput = {

@@ -30,8 +30,9 @@ export async function enqueueInitialSync(accountId: string) {
 }
 
 /** Puts new accounts in a company when it's obvious: the client has one company, or the account name contains a company's name. */
-export async function autoAssign(clientId: string, accountIds: string[]) {
-  const companies = await db.company.findMany({ where: { clientId }, select: { id: true, name: true } });
+export async function autoAssign(clientId: string, accountIds: string[], onlyCompanyIds: string[] = []) {
+  // A user limited to some companies only fills those.
+  const companies = await db.company.findMany({ where: { clientId, ...(onlyCompanyIds.length ? { id: { in: onlyCompanyIds } } : {}) }, select: { id: true, name: true } });
   if (!companies.length) return;
   const accounts = await db.adAccount.findMany({ where: { id: { in: accountIds }, companyId: null }, select: { id: true, name: true } });
   const norm = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();

@@ -6,7 +6,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { randomToken } from "@/lib/crypto";
 import { platformFromSlug } from "@/lib/platforms";
-import { canEdit, requireWorkspace } from "@/lib/tenancy";
+import { canEdit, requireWorkspace, scopedAccountIds } from "@/lib/tenancy";
 
 const schema = z.object({
   title: z.string().trim().max(160),
@@ -25,8 +25,15 @@ export async function createShareAction(form: FormData) {
   const v = await requireWorkspace();
   if (!canEdit(v)) throw new Error("Read-only user");
   const d = schema.parse(Object.fromEntries(form));
-  const companyId = d.companyId && (await db.company.findFirst({ where: { id: d.companyId, clientId: v.clientId } })) ? d.companyId : null;
-  const campaignId = d.campaignId && (await db.campaign.findFirst({ where: { id: d.campaignId, account: { connection: { clientId: v.clientId } } } })) ? d.campaignId : null;
+  const limited = v.companyIds;
+  let companyId = d.companyId && (!limited.length || limited.includes(d.companyId)) && (await db.company.findFirst({ where: { id: d.companyId, clientId: v.clientId } })) ? d.companyId : null;
+  // A user limited to some companies can only share one of them.
+  if (limited.length && !companyId) {
+    if (limited.length > 1) throw new Error("Pick one of your companies for this report");
+    companyId = limited[0];
+  }
+  const allowedAccounts = await scopedAccountIds(v.clientId, { allowedCompanyIds: limited });
+  const campaignId = d.campaignId && (await db.campaign.findFirst({ where: { id: d.campaignId, accountId: { in: allowedAccounts } } })) ? d.campaignId : null;
   const platform = d.platform ? platformFromSlug(d.platform) : null;
   if (d.rangeMode === "fixed" && (!d.from || !d.to || d.from > d.to)) throw new Error("Pick a valid date range");
 
@@ -48,6 +55,6 @@ export async function createShareAction(form: FormData) {
 export async function revokeShareAction(form: FormData) {
   const v = await requireWorkspace();
   if (!canEdit(v)) throw new Error("Read-only user");
-  await db.shareLink.deleteMany({ where: { id: String(form.get("id")), clientId: v.clientId } });
+  await db.shareLink.deleteMany({ where: { id: String(form.get("id")), clientId: v.clientId, ...(v.companyIds.length ? { companyId: { in: v.companyIds } } : {}) } });
   revalidatePath("/reports");
 }

@@ -29,7 +29,9 @@ export function FilterBar({ labels, companies, accounts = [], showPlatform = tru
   const pathname = usePathname();
   const sp = useSearchParams();
 
-  const initialPreset = sp.get("from") && sp.get("to") ? "custom" : sp.get("period") || sp.get("days") || "30";
+  // With no date in the URL the page used the workspace's default range; show which one.
+  const shownDays = String(Math.round((Date.parse(range.to) - Date.parse(range.from)) / 86_400_000) + 1);
+  const initialPreset = sp.get("from") && sp.get("to") ? "custom" : sp.get("period") || sp.get("days") || (PRESETS.some(([k]) => k === shownDays) ? shownDays : "custom");
   const [preset, setPreset] = useState(initialPreset);
   const [from, setFrom] = useState(range.from);
   const [to, setTo] = useState(range.to);

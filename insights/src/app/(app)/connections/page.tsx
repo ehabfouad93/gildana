@@ -6,7 +6,7 @@ import { shareInfo } from "@/lib/share-info";
 import { db } from "@/lib/db";
 import type { SP } from "@/lib/page";
 import { PLATFORMS, PLATFORM_META } from "@/lib/platforms";
-import { canEdit, requireWorkspace } from "@/lib/tenancy";
+import { canEdit, companyWhere, requireWorkspace } from "@/lib/tenancy";
 import { demoEnabled, liveConnector } from "@/platforms";
 
 export const metadata = { title: "Ad accounts" };
@@ -15,11 +15,14 @@ export default async function Connections({ searchParams }: { searchParams: Prom
   const sp = await searchParams;
   const v = await requireWorkspace();
   const edit = canEdit(v);
+  // Users limited to some companies see only those companies' accounts and can't reorganise them.
+  const limited = v.companyIds.length > 0;
+  const organise = edit && !limited;
   const [companies, conns] = await Promise.all([
-    db.company.findMany({ where: { clientId: v.clientId }, orderBy: { name: "asc" } }),
+    db.company.findMany({ where: { clientId: v.clientId, ...companyWhere(v) }, orderBy: { name: "asc" } }),
     db.adConnection.findMany({
       where: { clientId: v.clientId }, orderBy: { createdAt: "asc" },
-      include: { accounts: { orderBy: { name: "asc" }, include: { syncRuns: { orderBy: { createdAt: "desc" }, take: 1 } } } },
+      include: { accounts: { where: limited ? { companyId: { in: v.companyIds } } : {}, orderBy: { name: "asc" }, include: { syncRuns: { orderBy: { createdAt: "desc" }, take: 1 } } } },
     }),
   ]);
   const share = shareInfo();
@@ -81,7 +84,7 @@ export default async function Connections({ searchParams }: { searchParams: Prom
               </div>
               {!live && <p className="mb-3 text-xs text-muted">{v.isAdmin ? <>Not set up yet — add {meta.label}&apos;s app keys in <a className="text-accent underline" href="/admin/platforms">Admin → Platforms</a>.</> : `${meta.label} connections are coming soon.`}</p>}
 
-              {list.map((c) => (
+              {list.filter((c) => !limited || c.accounts.length).map((c) => (
                 <div key={c.id} className="mb-3 rounded-lg border border-line">
                   <div className="flex flex-wrap items-center gap-2 border-b border-line bg-bg px-3 py-2 text-sm">
                     <b>{c.label || c.externalUser || "Login"}</b>
@@ -91,14 +94,14 @@ export default async function Connections({ searchParams }: { searchParams: Prom
                     {c.expiresAt && <span className="text-xs text-muted">token expires {c.expiresAt.toISOString().slice(0, 10)}</span>}
                     {p === "META" && !c.isDemo && <span className="text-xs text-muted">{c.scopes.split(",").includes("ads_management") ? "split tests allowed" : "read-only"}</span>}
                     {c.lastError && <span className="text-xs text-bad">{c.lastError}</span>}
-                    {edit && (
+                    {organise && (
                       <form action={removeConnectionAction} className="ms-auto">
                         <input type="hidden" name="connectionId" value={c.id} />
                         <button className="text-xs text-bad hover:underline">Remove login</button>
                       </form>
                     )}
                   </div>
-                  {edit && c.accounts.length > 1 && (
+                  {organise && c.accounts.length > 1 && (
                     <form id={`bulk-${c.id}`} action={bulkAccountsAction} className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2 text-sm">
                       <span className="text-muted">With ticked accounts:</span>
                       <select name="companyId" className="input !w-48 !py-1" defaultValue="">
@@ -113,21 +116,21 @@ export default async function Connections({ searchParams }: { searchParams: Prom
                   )}
                   <div className="overflow-x-auto">
                     <table className="tbl">
-                      <thead><tr>{edit && c.accounts.length > 1 && <th className="!w-8"><SelectAll form={`bulk-${c.id}`} /></th>}<th>Ad account</th><th>Currency</th><th>Company</th><th>Last sync</th><th>Status</th><th /></tr></thead>
+                      <thead><tr>{organise && c.accounts.length > 1 && <th className="!w-8"><SelectAll form={`bulk-${c.id}`} /></th>}<th>Ad account</th><th>Currency</th><th>Company</th><th>Last sync</th><th>Status</th><th /></tr></thead>
                       <tbody>
                         {c.accounts.map((a) => (
                           <tr key={a.id} className={a.enabled ? "" : "opacity-50"}>
-                            {edit && c.accounts.length > 1 && <td><input type="checkbox" name="ids" value={a.id} form={`bulk-${c.id}`} aria-label={`Select ${a.name}`} /></td>}
+                            {organise && c.accounts.length > 1 && <td><input type="checkbox" name="ids" value={a.id} form={`bulk-${c.id}`} aria-label={`Select ${a.name}`} /></td>}
                             <td><div className="font-medium">{a.name}</div><div className="text-xs text-muted">{a.externalId}</div></td>
                             <td>{a.currency}</td>
                             <td>
                               <form key={`${a.id}:${a.companyId ?? ""}`} action={assignAccountAction} className="flex gap-1">
                                 <input type="hidden" name="accountId" value={a.id} />
-                                <select name="companyId" defaultValue={a.companyId ?? ""} className="input !w-48 !py-1" disabled={!edit}>
+                                <select name="companyId" defaultValue={a.companyId ?? ""} className="input !w-48 !py-1" disabled={!organise}>
                                   <option value="">Unassigned</option>
                                   {companies.map((co) => <option key={co.id} value={co.id}>{co.name}</option>)}
                                 </select>
-                                {edit && <button className="btn-ghost !py-1">Save</button>}
+                                {organise && <button className="btn-ghost !py-1">Save</button>}
                               </form>
                             </td>
                             <td className="text-xs">{a.lastSyncAt ? a.lastSyncAt.toISOString().replace("T", " ").slice(0, 16) : "never"}</td>
@@ -144,7 +147,7 @@ export default async function Connections({ searchParams }: { searchParams: Prom
                                   {a.enabled && (
                                     <form action={syncNowAction}><input type="hidden" name="accountId" value={a.id} /><button className="text-accent hover:underline">Sync now</button></form>
                                   )}
-                                  <form action={toggleAccountAction}><input type="hidden" name="accountId" value={a.id} /><button className="text-muted hover:underline">{a.enabled ? "Disable" : "Enable"}</button></form>
+                                  {organise && <form action={toggleAccountAction}><input type="hidden" name="accountId" value={a.id} /><button className="text-muted hover:underline">{a.enabled ? "Disable" : "Enable"}</button></form>}
                                 </div>
                               )}
                             </td>

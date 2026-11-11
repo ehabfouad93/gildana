@@ -18,7 +18,7 @@ const TONE = { pass: "text-good", warn: "text-amber-600", fail: "text-bad" } as 
 export default async function Geo({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const v = await requireWorkspace();
-  const site = await siteForClient(v.clientId, id);
+  const site = await siteForClient(v.clientId, id, v.companyIds);
   if (!site) notFound();
   const edit = canEdit(v);
   const [latest, done, prompts, aiTraffic] = await Promise.all([

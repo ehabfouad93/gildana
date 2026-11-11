@@ -3,14 +3,14 @@ import { exitWorkspaceAction } from "@/app/actions/admin";
 import { logoutAction, setLangAction } from "@/app/actions/auth";
 import { db } from "@/lib/db";
 import { getDict, getLang } from "@/lib/i18n";
-import { getViewer } from "@/lib/tenancy";
+import { ROLE_LABEL, canManageTeam, getViewer } from "@/lib/tenancy";
 import { NavLink } from "./nav-link";
 
 export async function Shell({ children }: { children: React.ReactNode }) {
   const v = await getViewer();
   const t = await getDict();
   const lang = await getLang();
-  const client = v?.clientId ? await db.client.findUnique({ where: { id: v.clientId }, select: { name: true, onboardedAt: true } }) : null;
+  const client = v?.clientId ? await db.client.findUnique({ where: { id: v.clientId }, select: { name: true, onboardedAt: true, logoUrl: true } }) : null;
 
   return (
     <div className="flex min-h-screen">
@@ -21,8 +21,12 @@ export async function Shell({ children }: { children: React.ReactNode }) {
         </Link>
         {client && (
           <nav className="space-y-0.5">
-            <div className="px-3 pb-1 text-[11px] uppercase tracking-wider text-slate-500">{client.name}</div>
-            {!client.onboardedAt && <NavLink href="/welcome">★ Get started</NavLink>}
+            <div className="flex items-center gap-2 px-3 pb-1 text-[11px] uppercase tracking-wider text-slate-500">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              {client.logoUrl && <img src={client.logoUrl} alt="" className="h-5 w-5 rounded bg-white object-contain" />}
+              <span className="truncate">{client.name}</span>
+            </div>
+            {!client.onboardedAt && v?.role !== "VIEWER" && <NavLink href="/welcome">★ Get started</NavLink>}
             <NavLink href="/overview">{t.overview}</NavLink>
             <NavLink href="/spend">{t.spend}</NavLink>
             <NavLink href="/performance">{t.performance}</NavLink>
@@ -33,20 +37,26 @@ export async function Shell({ children }: { children: React.ReactNode }) {
             <NavLink href="/reports">{t.reports}</NavLink>
             <NavLink href="/connections">{t.connections}</NavLink>
             <NavLink href="/companies">{t.companies}</NavLink>
+            {v && canManageTeam(v) && <NavLink href="/team">Team</NavLink>}
+            {v && canManageTeam(v) && <NavLink href="/settings">Settings</NavLink>}
           </nav>
         )}
-        {v?.isAdmin && (
+        {v?.isGildana && (
           <nav className="mt-6 space-y-0.5">
             <div className="px-3 pb-1 text-[11px] uppercase tracking-wider text-slate-500">{t.admin}</div>
-            <NavLink href="/admin/clients">{t.clients}</NavLink>
-            <NavLink href="/admin/platforms">Platforms</NavLink>
-            <NavLink href="/admin/access">Access requests</NavLink>
-            <NavLink href="/admin/health">{t.health}</NavLink>
+            <NavLink href="/admin/clients">{v.isAdmin ? t.clients : "My clients"}</NavLink>
+            {v.isAdmin && <NavLink href="/admin/team">Gildana team</NavLink>}
+            {v.isAdmin && <NavLink href="/admin/platforms">Platforms</NavLink>}
+            {v.isAdmin && <NavLink href="/admin/access">Access requests</NavLink>}
+            {v.isAdmin && <NavLink href="/admin/health">{t.health}</NavLink>}
             {client && <form action={exitWorkspaceAction}><button className="block w-full rounded-lg px-3 py-2 text-start text-sm text-side-ink hover:bg-white/5 hover:text-white">← Leave {client.name}</button></form>}
           </nav>
         )}
         <div className="mt-auto space-y-2 px-3 text-xs text-side-ink">
-          <Link href="/account" className="block truncate hover:text-white" title="My account">{v?.email}</Link>
+          <Link href="/account" className="block hover:text-white" title="My account">
+            <span className="block truncate">{v?.email}</span>
+            {v && <span className="text-[10px] uppercase tracking-wider text-slate-500">{ROLE_LABEL[v.role]}</span>}
+          </Link>
           <div className="flex gap-3">
             <form action={setLangAction}>
               <input type="hidden" name="lang" value={lang === "ar" ? "en" : "ar"} />

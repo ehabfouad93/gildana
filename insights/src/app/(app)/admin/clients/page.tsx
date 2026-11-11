@@ -5,22 +5,26 @@ import { db } from "@/lib/db";
 import { lastNDays, toDate } from "@/lib/dates";
 import { convert, fxTable } from "@/lib/fx";
 import { money } from "@/lib/format";
-import { requireAdmin } from "@/lib/tenancy";
+import { requireGildana } from "@/lib/tenancy";
 
 export const metadata = { title: "Clients" };
 
 export default async function ClientsPage() {
-  await requireAdmin();
+  const v = await requireGildana();
   const r = lastNDays(30);
-  const [clients, spendRows, fx] = await Promise.all([
-    db.client.findMany({ orderBy: { name: "asc" }, include: { _count: { select: { companies: true, users: true } }, connections: { select: { platform: true, _count: { select: { accounts: true } } } } } }),
+  // Account managers see only the clients assigned to them.
+  const mine = v.isAdmin ? {} : { id: { in: v.clientIds } };
+  const [clients, spendRows, fx, staff] = await Promise.all([
+    db.client.findMany({ where: mine, orderBy: { name: "asc" }, include: { _count: { select: { companies: true, users: true } }, connections: { select: { platform: true, _count: { select: { accounts: true } } } } } }),
     db.$queryRaw<{ clientId: string; currency: string; spend: number }[]>`
       SELECT c."clientId", a.currency, SUM(s.spend)::float AS spend
       FROM "StatDaily" s JOIN "AdAccount" a ON a.id = s."accountId" JOIN "AdConnection" c ON c.id = a."connectionId"
       WHERE s.level = 'ACCOUNT' AND s.date BETWEEN ${toDate(r.from)} AND ${toDate(r.to)} AND a."companyId" IS NOT NULL AND a.enabled
       GROUP BY 1, 2`,
     fxTable(),
+    db.user.findMany({ where: { role: "STAFF", active: true }, select: { name: true, email: true, clientIds: true } }),
   ]);
+  const managerOf = (id: string) => staff.filter((s) => s.clientIds.includes(id)).map((s) => s.name || s.email.split("@")[0]).join(", ");
   const spend = new Map<string, number>();
   for (const s of spendRows) {
     const target = clients.find((c) => c.id === s.clientId)?.reportingCurrency ?? "USD";
@@ -29,15 +33,17 @@ export default async function ClientsPage() {
 
   return (
     <>
-      <PageHeader title="Clients" sub={`${clients.length} clients · spend over the last 30 days`} />
+      <PageHeader title="Clients" sub={`${clients.length} ${v.isAdmin ? "" : "assigned "}clients · spend over the last 30 days`} />
+      {!clients.length && !v.isAdmin && <div className="card mb-4 text-sm text-muted">No clients are assigned to you yet. Ask a Gildana admin to assign some in Admin → Gildana team, or add a new client below.</div>}
       <div className="card mb-4 overflow-x-auto">
         <table className="tbl">
-          <thead><tr><th>Client</th><th>Type</th><th className="num">Companies</th><th className="num">Ad accounts</th><th className="num">Users</th><th className="num">Spend (30d)</th><th /></tr></thead>
+          <thead><tr><th>Client</th><th>Type</th><th>Account manager</th><th className="num">Companies</th><th className="num">Ad accounts</th><th className="num">Users</th><th className="num">Spend (30d)</th><th /></tr></thead>
           <tbody>
             {clients.map((c) => (
               <tr key={c.id} className={c.active ? "" : "opacity-50"}>
                 <td><Link href={`/admin/clients/${c.id}`} className="font-medium text-accent hover:underline">{c.name}</Link></td>
                 <td>{c.isAgency ? "Agency" : "Brand"}</td>
+                <td className="text-xs">{managerOf(c.id) || <span className="text-muted">—</span>}</td>
                 <td className="num">{c._count.companies}</td>
                 <td className="num">{c.connections.reduce((n, x) => n + x._count.accounts, 0)}</td>
                 <td className="num">{c._count.users}</td>

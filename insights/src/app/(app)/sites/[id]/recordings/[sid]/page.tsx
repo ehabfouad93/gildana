@@ -10,7 +10,7 @@ export const metadata = { title: "Session" };
 export default async function SessionView({ params }: { params: Promise<{ id: string; sid: string }> }) {
   const { id, sid } = await params;
   const v = await requireWorkspace();
-  const site = await siteForClient(v.clientId, id);
+  const site = await siteForClient(v.clientId, id, v.companyIds);
   if (!site) notFound();
   const s = await db.trackSession.findUnique({ where: { id: `${id}:${decodeURIComponent(sid)}` }, include: { views: { orderBy: { ts: "asc" } }, evs: { orderBy: { ts: "asc" }, take: 500 } } });
   if (!s) notFound();

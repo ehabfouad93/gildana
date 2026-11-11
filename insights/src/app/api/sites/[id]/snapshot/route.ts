@@ -7,7 +7,7 @@ const WIDTH: Record<string, number> = { desktop: 1440, tablet: 820, mobile: 390 
 
 async function access(id: string) {
   const v = await getViewer();
-  return v?.clientId ? siteForClient(v.clientId, id) : null;
+  return v?.clientId ? siteForClient(v.clientId, id, v.companyIds) : null;
 }
 
 /** The stored screenshot behind a heatmap. */

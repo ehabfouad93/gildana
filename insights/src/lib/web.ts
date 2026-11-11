@@ -9,8 +9,9 @@ import { convert, fxTable } from "@/lib/fx";
  * lasted 10s+, viewed 2+ pages or converted; bounce rate is the rest.
  */
 
-export async function siteForClient(clientId: string, siteId: string) {
-  return db.site.findFirst({ where: { id: siteId, company: { clientId } }, include: { company: true, goals: true } });
+/** A site of the client — and, for a user limited to some companies, of one of those. */
+export async function siteForClient(clientId: string, siteId: string, companyIds: string[] = []) {
+  return db.site.findFirst({ where: { id: siteId, company: { clientId }, ...(companyIds.length ? { companyId: { in: companyIds } } : {}) }, include: { company: true, goals: true } });
 }
 
 const end = (r: Range) => new Date(toDate(r.to).getTime() + 86_400_000);

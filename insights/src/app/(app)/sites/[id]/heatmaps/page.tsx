@@ -19,7 +19,7 @@ const MODES = { click: "Clicks", rage_click: "Rage clicks", dead_click: "Dead cl
 export default async function Heatmaps({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<SP> }) {
   const { id } = await params;
   const c = await pageContext(searchParams);
-  const site = await siteForClient(c.client.id, id);
+  const site = await siteForClient(c.client.id, id, c.viewer.companyIds);
   if (!site) notFound();
   const { range, t } = c;
 

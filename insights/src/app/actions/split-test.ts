@@ -21,7 +21,7 @@ export async function splitAdSetAction(adSetId: string, targetingIds: string[]):
   const v = await requireWorkspace();
   if (!canEdit(v)) return { ok: false, message: "Read-only users cannot create split tests." };
   const set = await db.adSet.findFirst({
-    where: { id: adSetId, account: { connection: { clientId: v.clientId } } },
+    where: { id: adSetId, account: { connection: { clientId: v.clientId }, ...(v.companyIds.length ? { companyId: { in: v.companyIds } } : {}) } },
     include: { targeting: true, account: { include: { connection: true } } },
   });
   if (!set || set.platform !== "META") return { ok: false, message: "Ad set not found." };

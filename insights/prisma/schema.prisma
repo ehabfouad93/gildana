@@ -14,8 +14,12 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/// Gildana side: ADMIN (everything) and STAFF (account manager: only assigned clients).
+/// Client side: OWNER (everything incl. team & settings), CLIENT (manager: edits data), VIEWER (read-only).
 enum Role {
   ADMIN
+  STAFF
+  OWNER
   CLIENT
   VIEWER
 }
@@ -61,6 +65,10 @@ model User {
   client       Client?   @relation(fields: [clientId], references: [id], onDelete: Cascade)
   locale       String    @default("en")
   active       Boolean   @default(true)
+  /// Client users: limit to these companies (empty = all companies of the client).
+  companyIds   String[]  @default([])
+  /// STAFF: the clients this account manager may open (ADMIN sees all).
+  clientIds    String[]  @default([])
   lastLoginAt  DateTime?
   createdAt    DateTime  @default(now())
 
@@ -77,6 +85,8 @@ model Client {
   reportingCurrency String   @default("USD")
   timezone          String   @default("Africa/Cairo")
   logoUrl           String   @default("")
+  /// Date range a report opens with, in days.
+  defaultDays       Int      @default(30)
   active            Boolean  @default(true)
   onboardedAt       DateTime?
   createdAt         DateTime @default(now())

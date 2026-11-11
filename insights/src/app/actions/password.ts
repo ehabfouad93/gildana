@@ -8,7 +8,7 @@ import { db } from "@/lib/db";
 import { mailEnabled, sendMail } from "@/lib/mail";
 import { loadSettings } from "@/lib/settings";
 import { consumeResetToken, createResetToken, passwordProblem } from "@/lib/password-reset";
-import { requireAdmin, requireViewer } from "@/lib/tenancy";
+import { requireViewer } from "@/lib/tenancy";
 
 // Per-process limits on reset emails: 3 per address and 10 per IP an hour.
 const sent = new Map<string, number[]>();
@@ -81,11 +81,3 @@ export async function updateProfileAction(form: FormData) {
   revalidatePath("/account");
 }
 
-/** Admin: email a user a reset link. */
-export async function sendResetLinkAction(form: FormData) {
-  await requireAdmin();
-  if (!mailEnabled()) throw new Error("Email is not configured (SMTP_URL)");
-  const user = await db.user.findUniqueOrThrow({ where: { id: String(form.get("userId")) } });
-  await mailResetLink(user, await clientIp());
-  revalidatePath("/admin/clients");
-}

@@ -23,7 +23,7 @@ export default async function Seo({ params, searchParams }: { params: Promise<{ 
   const { id } = await params;
   const c = await pageContext(searchParams);
   const site = await db.site.findFirst({ where: { id, company: { clientId: c.client.id } } });
-  if (!site || !(await siteForClient(c.client.id, id))) notFound();
+  if (!site || !(await siteForClient(c.client.id, id, c.viewer.companyIds))) notFound();
   const tab = (c.one("tab") in TABS ? c.one("tab") : "issues") as keyof typeof TABS;
   const crawl = await db.seoCrawl.findFirst({ where: { siteId: id }, orderBy: { createdAt: "desc" } });
   const done = await db.seoCrawl.findFirst({ where: { siteId: id, status: "done" }, orderBy: { createdAt: "desc" } });

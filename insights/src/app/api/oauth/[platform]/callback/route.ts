@@ -7,7 +7,7 @@ import { autoAssign, enqueueInitialSync } from "@/lib/jobs";
 import { encrypt } from "@/lib/crypto";
 import { AGENCY, redirectUri, safeNext, verifyState } from "@/lib/oauth";
 import { platformFromSlug } from "@/lib/platforms";
-import { getViewer } from "@/lib/tenancy";
+import { canEdit, getViewer } from "@/lib/tenancy";
 import { connectorFor } from "@/platforms";
 
 export async function GET(req: Request, { params }: { params: Promise<{ platform: string }> }) {
@@ -23,7 +23,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ platform
   jar.delete("gi_oauth");
   const v = await getViewer();
   const agency = st?.clientId === AGENCY;
-  const allowed = !!v && (agency ? v.isAdmin : v.clientId === st?.clientId);
+  const allowed = !!v && (agency ? v.isAdmin : v.clientId === st?.clientId && canEdit(v));
   if (!platform || !st || st.platform !== platform || st.nonce !== nonce || !allowed) return back("error=invalid-state");
   if (url.searchParams.get("error")) return back(`error=${encodeURIComponent(url.searchParams.get("error_description") ?? url.searchParams.get("error")!)}`);
 
@@ -49,7 +49,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ platform
     else {
       // Everything starts syncing straight away; obvious company matches are filled in.
       const created = await db.adAccount.findMany({ where: { connectionId: conn.id }, select: { id: true } });
-      await autoAssign(st.clientId, created.map((a) => a.id));
+      await autoAssign(st.clientId, created.map((a) => a.id), v!.companyIds);
       for (const a of created) await enqueueInitialSync(a.id);
     }
     return back(`connected=${conn.id}`);

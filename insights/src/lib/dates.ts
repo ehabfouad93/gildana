@@ -49,11 +49,11 @@ export function periodRange(period: string, today = ymd(new Date())): Range | nu
   }
 }
 
-export function rangeFromParams(p: { from?: string; to?: string; days?: string; period?: string }): Range {
+export function rangeFromParams(p: { from?: string; to?: string; days?: string; period?: string }, defaultDays = 30): Range {
   if (p.from && p.to && RE.test(p.from) && RE.test(p.to) && p.from <= p.to) return { from: p.from, to: p.to };
   const named = p.period ? periodRange(p.period) : null;
   if (named) return named;
-  const n = Math.min(1100, Math.max(1, Number(p.days) || 30));
+  const n = Math.min(1100, Math.max(1, Number(p.days) || defaultDays));
   return lastNDays(n);
 }
 

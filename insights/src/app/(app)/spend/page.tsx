@@ -25,7 +25,7 @@ export default async function SpendPage({ searchParams }: { searchParams: Promis
 
   // Budget pacing for the current month, where planned budgets exist.
   const month = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1));
-  const budgets = await db.budget.findMany({ where: { month, company: { clientId: c.client.id } }, include: { company: { select: { name: true } } } });
+  const budgets = await db.budget.findMany({ where: { month, company: { clientId: c.client.id }, ...(c.limited ? { companyId: { in: c.viewer.companyIds } } : {}) }, include: { company: { select: { name: true } } } });
 
   const nDays = all.length || 1;
   return (
