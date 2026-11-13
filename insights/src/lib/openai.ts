@@ -12,13 +12,13 @@ export const openaiEnabled = () => !!setting("OPENAI_API_KEY");
 type ChatAnswer = { choices?: { message?: { content?: string | null; refusal?: string | null } }[] };
 
 /** One request that must answer with a JSON object; returns the answer text. */
-export async function askOpenAI({ system, prompt }: { system: string; prompt: string }): Promise<string> {
+export async function askOpenAI({ system, prompt, json = true }: { system: string; prompt: string; /** false = a free-text answer */ json?: boolean }): Promise<string> {
   const res = await fetchJson<ChatAnswer>("https://api.openai.com/v1/chat/completions", {
     method: "POST", tries: 2, timeoutMs: 180_000,
     headers: { Authorization: `Bearer ${setting("OPENAI_API_KEY")}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model: openaiModel(),
-      response_format: { type: "json_object" },
+      ...(json ? { response_format: { type: "json_object" } } : {}),
       messages: [{ role: "system", content: system }, { role: "user", content: prompt }],
     }),
   });

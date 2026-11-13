@@ -422,6 +422,16 @@ export async function creativeData(scope: Scope, r: Range, filter: { platform?: 
   });
 }
 
+/** The ad sets with the most spend in the range, with their campaign and funnel stage. */
+export async function topAdSets(scope: Scope, r: Range, n = 25) {
+  if (!scope.accountIds.length) return [];
+  const { rows } = await grouped(scope, r, "ADSET", ["entityId"]);
+  const top = [...rows.entries()].sort((a, b) => b[1].spend - a[1].spend).slice(0, n);
+  const sets = await db.adSet.findMany({ where: { id: { in: top.map(([id]) => id) } }, select: { id: true, name: true, status: true, funnelStage: true, funnelStageManual: true, campaign: { select: { name: true } } } });
+  const info = new Map(sets.map((s) => [s.id, s]));
+  return top.flatMap(([id, t]) => { const s = info.get(id); return s ? [{ id, name: s.name, status: s.status, campaign: s.campaign.name, stage: stageOf(s), m: derive(t) }] : []; });
+}
+
 /** Results per funnel stage: every ad set's numbers under its stage. */
 export async function stageTable(scope: Scope, r: Range) {
   if (!scope.accountIds.length) return [];

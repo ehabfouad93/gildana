@@ -1,6 +1,5 @@
-import "server-only";
 import type { Prisma } from "@prisma/client";
-import { propose, type Proposal } from "@/lib/actions-engine";
+import { propose, type Proposal } from "@/lib/proposals";
 import { db } from "@/lib/db";
 import { money } from "@/lib/format";
 import { detectStage, stageOf } from "@/lib/funnel";
@@ -9,7 +8,8 @@ import { audit, evaluateRule, type Ent, type Idea, type RuleSpec } from "@/lib/o
 /**
  * Runs the audit and the automation rules over a workspace's Meta accounts
  * (the only platform changes can be applied on) and files what they find in
- * the to-do list. Reads the warehouse only — no platform calls.
+ * the to-do list. Reads the warehouse only — no platform calls. Used by the
+ * web app and by the background worker, so it must not import web-only modules.
  */
 
 type Loaded = { accountId: string; currency: string; adSets: (Ent & { stage: string })[]; ads: Ent[] };

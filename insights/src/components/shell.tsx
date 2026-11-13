@@ -4,7 +4,7 @@ import { logoutAction, setLangAction } from "@/app/actions/auth";
 import { db } from "@/lib/db";
 import { getDict, getLang } from "@/lib/i18n";
 import { MODULES, type ModuleKey } from "@/lib/modules";
-import { ROLE_LABEL, canManageTeam, canUse, getViewer } from "@/lib/tenancy";
+import { ROLE_LABEL, canFeature, canManageTeam, canUse, getViewer } from "@/lib/tenancy";
 import { NavLink } from "./nav-link";
 
 type Dict = Awaited<ReturnType<typeof getDict>>;
@@ -37,6 +37,7 @@ export async function Shell({ children }: { children: React.ReactNode }) {
             {!client.onboardedAt && v && v.role !== "VIEWER" && !v.access && !v.modules.length && <NavLink href="/welcome">★ Get started</NavLink>}
             {/* Only the sections this user was given. */}
             {MODULES.filter((m) => !v || canUse(v, m.key)).map((m) => <NavLink key={m.key} href={m.path}>{NAV_LABEL[m.key](t)}</NavLink>)}
+            {v && canFeature(v, "general.ai_chat") && <NavLink href="/ask">✦ Ask AI</NavLink>}
             {v && canManageTeam(v) && <NavLink href="/team">Team</NavLink>}
             {v && canManageTeam(v) && <NavLink href="/settings">Settings</NavLink>}
           </nav>
