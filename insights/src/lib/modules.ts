@@ -52,6 +52,7 @@ export const FEATURES = [
   { key: "actions.apply", module: "actions", label: "Apply and undo changes in ad accounts" },
   { key: "actions.rules", module: "actions", label: "Create and edit automation rules" },
   { key: "campaigns.tags", module: "campaigns", label: "Tags and funnel stages" },
+  { key: "creatives.grid", module: "creatives", label: "Creative split-test grid (create ad variations)" },
   { key: "general.sync_breakdowns", module: "general", label: "“Sync breakdowns now” button" },
   { key: "general.ai_chat", module: "general", label: "Ask AI about your numbers" },
 ] as const;

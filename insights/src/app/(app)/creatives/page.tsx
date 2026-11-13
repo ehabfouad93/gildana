@@ -7,6 +7,7 @@ import { money } from "@/lib/format";
 import { pageContext, qs, type SP } from "@/lib/page";
 import { PLATFORM_META } from "@/lib/platforms";
 import { creativeData } from "@/lib/queries";
+import { canEdit, canFeature } from "@/lib/tenancy";
 
 export const metadata = { title: "Creatives" };
 
@@ -36,6 +37,7 @@ export default async function Creatives({ searchParams }: { searchParams: Promis
         {Object.entries(VIEWS).map(([k, label]) => (
           <Link key={k} href={qs(c.sp, { v: k === "creatives" ? undefined : k })} className={`-mb-px border-b-2 px-1 pb-2 text-sm ${k === view ? "border-accent font-semibold" : "border-transparent text-muted hover:text-ink"}`}>{label}</Link>
         ))}
+        {canFeature(c.viewer, "creatives.grid") && canEdit(c.viewer) && <Link href="/creatives/grid" className="-mb-px border-b-2 border-transparent px-1 pb-2 text-sm text-muted hover:text-ink">+ Split-test grid</Link>}
       </div>
 
       {view === "creatives" && (() => {
