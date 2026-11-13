@@ -453,6 +453,22 @@ export function buildStats(platform: Platform, accountExternalId: string, from: 
           breakdowns.push({ level: "CAMPAIGN", externalId: cid, date: day, dimension: dim, bucket: v, ...p });
         });
       }
+      // Like live Meta: the main breakdowns per ad set too, so reports can be filtered by ad set.
+      if (platform === "META") {
+        for (const set of adSets.filter((s) => s.campaignExternalId === cid)) {
+          const sm = bySet.get(set.externalId);
+          if (!sm) continue;
+          for (const dim of ["age", "gender", "age_gender", "country", "region", "device", "placement"]) {
+            const values = dims[dim];
+            if (!values?.length) continue;
+            const parts = splitMetrics(sm, weights(dim, values, cid, day));
+            values.forEach((v, i) => {
+              if (parts[i].impressions === 0 && parts[i].spend === 0) return;
+              breakdowns.push({ level: "ADSET", externalId: set.externalId, date: day, dimension: dim, bucket: v, ...parts[i] });
+            });
+          }
+        }
+      }
 
       if (platform === "GOOGLE") {
         const camp = campaigns.find((c) => c.externalId === cid)!;

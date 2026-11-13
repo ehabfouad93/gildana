@@ -6,6 +6,7 @@ import { toDate, type Range } from "@/lib/dates";
 import { ZERO, add, derive, type Totals } from "@/lib/metrics";
 import { advantageAudience } from "@/platforms/meta/normalize";
 import { SEGMENT_TYPES } from "@/lib/segments";
+import { applyEntity, type EntityFilter } from "@/lib/entity-filter";
 import { splitTestStatus, type ArmResult, type History, type TestVerdict } from "@/lib/interest-advice";
 
 /**
@@ -14,7 +15,8 @@ import { splitTestStatus, type ArmResult, type History, type TestVerdict } from 
  * because one client's accounts can bill in different currencies.
  */
 
-export type Scope = { accountIds: string[]; currency: string };
+/** `entity` is the page's campaign / ad set / ad filter, when one is on. */
+export type Scope = { accountIds: string[]; currency: string; entity?: EntityFilter };
 
 type AccInfo = { currency: string; platform: Platform; name: string; companyId: string | null };
 
@@ -43,10 +45,12 @@ async function grouped<K extends "date" | "entityId" | "campaignId" | "adSetId">
   scope: Scope, r: Range, level: Level, by: K[], where: Prisma.StatDailyWhereInput = {},
 ) {
   if (!scope.accountIds.length) return { rows: new Map<string, Totals>(), info: new Map<string, AccInfo>() };
+  // A campaign / ad set / ad filter may move the question to another level (see entity-filter.ts).
+  const x = applyEntity(scope.entity, level, by, where as Record<string, unknown>);
   const [raw, info, fx] = await Promise.all([
     db.statDaily.groupBy({
-      by: ["accountId", ...by] as any,
-      where: { accountId: { in: scope.accountIds }, level, date: dateWhere(r), ...where },
+      by: ["accountId", ...x.by] as any,
+      where: { accountId: { in: scope.accountIds }, level: x.level, date: dateWhere(r), AND: [x.where, x.filter] },
       _sum: SUM,
     }),
     accountInfo(scope.accountIds),
@@ -54,7 +58,7 @@ async function grouped<K extends "date" | "entityId" | "campaignId" | "adSetId">
   ]);
   const rows = new Map<string, Totals>();
   for (const g of raw as any[]) {
-    const key = by.map((k) => (k === "date" ? (g.date as Date).toISOString().slice(0, 10) : g[k])).join("|");
+    const key = x.by.map((k) => (k === "date" ? (g.date as Date).toISOString().slice(0, 10) : g[k])).join("|");
     const t = toTotals(g._sum, info.get(g.accountId)?.currency ?? scope.currency, scope.currency, fx);
     rows.set(key, add(rows.get(key) ?? { ...ZERO }, t));
   }
@@ -74,8 +78,9 @@ export async function daily(scope: Scope, r: Range, where: Prisma.StatDailyWhere
 /** Account-level totals split by platform, company and account. */
 export async function splits(scope: Scope, r: Range) {
   if (!scope.accountIds.length) return { byPlatform: [], byCompany: [], byAccount: [] };
+  const x = applyEntity(scope.entity, "ACCOUNT", [], {});
   const [raw, info, fx, companies] = await Promise.all([
-    db.statDaily.groupBy({ by: ["accountId"], where: { accountId: { in: scope.accountIds }, level: "ACCOUNT", date: dateWhere(r) }, _sum: SUM }),
+    db.statDaily.groupBy({ by: ["accountId"], where: { accountId: { in: scope.accountIds }, level: x.level, date: dateWhere(r), ...x.filter }, _sum: SUM }),
     accountInfo(scope.accountIds),
     fxTable(),
     db.company.findMany({ where: { accounts: { some: { id: { in: scope.accountIds } } } }, select: { id: true, name: true } }),
@@ -108,6 +113,7 @@ export async function campaignTable(scope: Scope, r: Range, filter: { platform?:
   const campaigns = await db.campaign.findMany({
     where: {
       accountId: { in: scope.accountIds },
+      ...(scope.entity ? { id: { in: scope.entity.campaignIds } } : {}),
       ...(filter.platform ? { platform: filter.platform } : {}),
       ...(filter.status ? { status: filter.status } : {}),
       ...(filter.q ? { name: { contains: filter.q, mode: "insensitive" } } : {}),
@@ -119,7 +125,7 @@ export async function campaignTable(scope: Scope, r: Range, filter: { platform?:
   if (filter.ownCurrency) {
     // One pass per currency, converting into that same currency (i.e. not at all).
     for (const cur of new Set(campaigns.map((c) => c.account.currency))) {
-      const sub = { accountIds: [...new Set(campaigns.filter((c) => c.account.currency === cur).map((c) => c.accountId))], currency: cur };
+      const sub = { ...scope, accountIds: [...new Set(campaigns.filter((c) => c.account.currency === cur).map((c) => c.accountId))], currency: cur };
       for (const [k, v] of (await grouped(sub, r, "CAMPAIGN", ["entityId"], ids)).rows) rows.set(k, v);
     }
   } else {
@@ -142,6 +148,13 @@ export async function adTable(scope: Scope, r: Range, campaignId: string) {
   return ads.map((a) => ({ ...a, m: derive(rows.get(a.id) ?? { ...ZERO }) })).sort((a, b) => b.m.spend - a.m.spend);
 }
 
+/** How the page's filter narrows breakdown rows (stored per campaign and per ad set). */
+function breakdownEntity(e: EntityFilter | undefined): Prisma.StatBreakdownWhereInput {
+  if (!e || !e.ids.length) return {};
+  if (e.level === "CAMPAIGN") return { campaignId: { in: e.ids } };
+  return { level: "ADSET", entityId: { in: e.level === "ADSET" ? e.ids : e.adSetIds } };
+}
+
 /** One breakdown dimension, summed over the range, for campaigns or whole accounts. */
 export async function breakdown(scope: Scope, r: Range, dimension: string, where: Prisma.StatBreakdownWhereInput = {}) {
   if (!scope.accountIds.length) return [];
@@ -149,7 +162,8 @@ export async function breakdown(scope: Scope, r: Range, dimension: string, where
     db.statBreakdown.groupBy({
       by: ["accountId", "value"],
       // Campaign-level rows unless the caller asks otherwise: ad-set-level audience rows would double count.
-      where: { accountId: { in: scope.accountIds }, dimension, date: dateWhere(r), level: "CAMPAIGN", ...where },
+      // With an ad-set or ad filter the ad sets' own rows are read (an ad's breakdown is its ad set's).
+      where: { accountId: { in: scope.accountIds }, dimension, date: dateWhere(r), level: "CAMPAIGN", ...where, ...breakdownEntity(scope.entity) },
       _sum: { spend: true, impressions: true, reach: true, clicks: true, conversions: true, leads: true, convValue: true },
     }),
     accountInfo(scope.accountIds),
@@ -191,8 +205,12 @@ export type NotMeasured = { type: string; value: string; externalId: string; pla
  */
 export async function audienceInsights(scope: Scope, r: Range, where: { campaignId?: string; types?: string[] } = {}): Promise<{ rows: AudienceRow[]; notMeasured: NotMeasured[] }> {
   if (!scope.accountIds.length) return { rows: [], notMeasured: [] };
+  const e = scope.entity;
   const inView = await db.adSet.findMany({
-    where: { accountId: { in: scope.accountIds }, ...(where.campaignId ? { campaignId: where.campaignId } : {}) },
+    where: {
+      accountId: { in: scope.accountIds }, ...(where.campaignId ? { campaignId: where.campaignId } : {}),
+      ...(e ? (e.level === "CAMPAIGN" ? { campaignId: { in: e.ids } } : { id: { in: e.level === "ADSET" ? e.ids : e.adSetIds } }) : {}),
+    },
     select: { id: true, name: true, externalId: true, platform: true, accountId: true, targetingRaw: true, targeting: { where: { exclude: false } } },
   });
   const viewIds = inView.map((x) => x.id);
@@ -368,7 +386,7 @@ export async function splitTests(scope: Scope, where: { campaignId?: string } = 
 export async function keywordTable(scope: Scope, r: Range, campaignId?: string) {
   const raw = await db.keyword.groupBy({
     by: ["accountId", "externalId", "text", "matchType", "campaignId", "adSetId"],
-    where: { accountId: { in: scope.accountIds }, date: dateWhere(r), ...(campaignId ? { campaignId } : {}) },
+    where: { accountId: { in: scope.accountIds }, date: dateWhere(r), ...(campaignId ? { campaignId } : {}), ...adGroupEntity(scope.entity) },
     _sum: { spend: true, impressions: true, clicks: true, conversions: true, value: true },
     _avg: { qualityScore: true },
   });
@@ -378,7 +396,7 @@ export async function keywordTable(scope: Scope, r: Range, campaignId?: string) 
 export async function searchTermTable(scope: Scope, r: Range, campaignId?: string) {
   const raw = await db.searchTerm.groupBy({
     by: ["accountId", "term", "keywordText", "matchType", "campaignId"],
-    where: { accountId: { in: scope.accountIds }, date: dateWhere(r), ...(campaignId ? { campaignId } : {}) },
+    where: { accountId: { in: scope.accountIds }, date: dateWhere(r), ...(campaignId ? { campaignId } : {}), ...adGroupEntity(scope.entity) },
     _sum: { spend: true, impressions: true, clicks: true, conversions: true },
   });
   return convertRows(scope, raw, (g) => ({ term: g.term, keywordText: g.keywordText, matchType: g.matchType, campaignId: g.campaignId }));
@@ -387,10 +405,16 @@ export async function searchTermTable(scope: Scope, r: Range, campaignId?: strin
 export async function placementTable(scope: Scope, r: Range, campaignId?: string) {
   const raw = await db.placement.groupBy({
     by: ["accountId", "kind", "target", "display", "campaignId"],
-    where: { accountId: { in: scope.accountIds }, date: dateWhere(r), ...(campaignId ? { campaignId } : {}) },
+    where: { accountId: { in: scope.accountIds }, date: dateWhere(r), ...(campaignId ? { campaignId } : {}), ...(scope.entity ? { campaignId: { in: scope.entity.campaignIds } } : {}) },
     _sum: { spend: true, impressions: true, clicks: true, conversions: true },
   });
   return convertRows(scope, raw, (g) => ({ kind: g.kind, target: g.target, display: g.display, campaignId: g.campaignId }));
+}
+
+/** Keywords and search terms belong to an ad group; an ad filter narrows to the ad's ad group. */
+function adGroupEntity(e: EntityFilter | undefined): { campaignId?: { in: string[] }; adSetId?: { in: string[] } } {
+  if (!e || !e.ids.length) return {};
+  return e.level === "CAMPAIGN" ? { campaignId: { in: e.ids } } : { adSetId: { in: e.level === "ADSET" ? e.ids : e.adSetIds } };
 }
 
 async function convertRows<T>(scope: Scope, raw: any[], pick: (g: any) => T) {

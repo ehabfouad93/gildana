@@ -21,7 +21,7 @@ export default async function Campaigns({ searchParams }: { searchParams: Promis
   return (
     <>
       <PageHeader title={t.campaigns} sub={`${rows.length} campaigns · ${range.from} → ${range.to}`}>
-        <Filters t={t} freshness={c.freshness} accounts={c.accounts} companies={c.companies} companyId={c.companyId} platform={c.platform} range={range} days={c.one("days")} />
+        <Filters t={t} entity={c.entityPick} freshness={c.freshness} accounts={c.accounts} companies={c.companies} companyId={c.companyId} platform={c.platform} range={range} days={c.one("days")} />
       </PageHeader>
       {currencies.some((x) => x !== scope.currency) && (
         <div className="mb-3 flex flex-wrap items-center gap-3">

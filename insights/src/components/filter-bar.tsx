@@ -12,19 +12,25 @@ const PRESETS: [string, string][] = [
   ["this_month", "This month"], ["last_month", "Last month"], ["this_year", "This year"], ["last_year", "Last year"], ["custom", "Custom range…"],
 ];
 
+export type EntityPick = { level: "CAMPAIGN" | "ADSET" | "AD"; items: { id: string; name: string }[] };
+const ENTITY_PARAM = { CAMPAIGN: "camp", ADSET: "set", AD: "ad" } as const;
+const ENTITY_LABEL = { CAMPAIGN: "Campaigns", ADSET: "Ad sets", AD: "Ads" } as const;
+
 type Props = {
   labels: { allCompanies: string; allPlatforms: string; apply: string };
   companies: { id: string; name: string }[];
   accounts?: PickAccount[];
   showPlatform?: boolean;
   range: { from: string; to: string };
+  /** Shows the campaign / ad set / ad picker; null = on with nothing picked, undefined = off. */
+  entity?: EntityPick | null;
 };
 
 /**
  * Filters for every report page, kept in the URL so views can be bookmarked
  * and shared: company, platform, any set of ad accounts, and a preset or custom date range.
  */
-export function FilterBar({ labels, companies, accounts = [], showPlatform = true, range }: Props) {
+export function FilterBar({ labels, companies, accounts = [], showPlatform = true, range, entity }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const sp = useSearchParams();
@@ -40,12 +46,17 @@ export function FilterBar({ labels, companies, accounts = [], showPlatform = tru
   // null = all accounts; otherwise exactly the ticked ones
   const [picked, setPicked] = useState<string[] | null>(() => { const a = (sp.get("acc") ?? "").split(",").filter(Boolean); return a.length ? a : null; });
 
+  const [ent, setEnt] = useState<EntityPick>(entity ?? { level: "CAMPAIGN", items: [] });
   const companyName = company === "none" ? "Unassigned" : companies.find((c) => c.id === company)?.name;
   const visible = useMemo(() => accounts.filter((a) => (!platform || SLUG[a.platform] === platform) && (!company || a.company === companyName)), [accounts, platform, company, companyName]);
 
   const apply = () => {
     const q = new URLSearchParams(sp.toString());
     for (const k of ["company", "platform", "acc", "days", "period", "from", "to"]) q.delete(k);
+    if (entity !== undefined) {
+      for (const k of Object.values(ENTITY_PARAM)) q.delete(k);
+      if (ent.items.length) q.set(ENTITY_PARAM[ent.level], ent.items.map((x) => x.id).join(","));
+    }
     if (company) q.set("company", company);
     if (platform) q.set("platform", platform);
     const accs = (picked ?? []).filter((id) => visible.some((a) => a.id === id));
@@ -72,6 +83,7 @@ export function FilterBar({ labels, companies, accounts = [], showPlatform = tru
         </select>
       )}
       {accounts.length > 1 && <AccountPicker accounts={visible} picked={picked} setPicked={setPicked} />}
+      {entity !== undefined && <EntityPicker value={ent} onChange={setEnt} query={{ company, platform, acc: (picked ?? []).join(",") }} />}
       <select value={preset} onChange={(e) => setPreset(e.target.value)} className="input w-auto" aria-label="Date range">
         {PRESETS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
       </select>
@@ -132,6 +144,75 @@ function AccountPicker({ accounts, picked, setPicked }: { accounts: PickAccount[
             ))}
             {!shown.length && <p className="p-2 text-sm text-muted">No accounts match.</p>}
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Searchable picker for campaigns, ad sets or ads (one kind at a time); results come from /api/entities. */
+function EntityPicker({ value, onChange, query }: { value: EntityPick; onChange: (v: EntityPick) => void; query: { company: string; platform: string; acc: string } }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [found, setFound] = useState<{ id: string; name: string; sub: string }[]>([]);
+  const [loading, setLoading] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const close = (e: MouseEvent) => { if (box.current && !box.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, []);
+  useEffect(() => {
+    if (!open) return;
+    const ctrl = new AbortController();
+    const t = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const u = new URLSearchParams({ level: value.level === "AD" ? "ad" : value.level === "ADSET" ? "adset" : "campaign", q, ...query });
+        const r = await fetch(`/api/entities?${u}`, { signal: ctrl.signal });
+        setFound(r.ok ? (await r.json()).items : []);
+      } catch { /* aborted or offline: keep the last list */ }
+      setLoading(false);
+    }, 250);
+    return () => { clearTimeout(t); ctrl.abort(); };
+  }, [open, q, value.level, query.company, query.platform, query.acc]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const has = (id: string) => value.items.some((x) => x.id === id);
+  const toggle = (x: { id: string; name: string }) => onChange({ ...value, items: has(x.id) ? value.items.filter((i) => i.id !== x.id) : [...value.items, { id: x.id, name: x.name }] });
+  const n = value.items.length;
+  const label = !n ? "All campaigns, ad sets & ads" : n === 1 ? value.items[0].name : `${n} ${ENTITY_LABEL[value.level].toLowerCase()}`;
+  return (
+    <div className="relative" ref={box}>
+      <button type="button" className={`input flex w-auto min-w-52 max-w-72 items-center justify-between gap-2 ${n ? "!border-accent" : ""}`} onClick={() => setOpen(!open)} aria-expanded={open}>
+        <span className="truncate">{label}</span><span className="text-muted">▾</span>
+      </button>
+      {open && (
+        <div className="absolute end-0 z-30 mt-1 w-96 max-w-[90vw] rounded-lg border border-line bg-panel p-2 shadow-lg">
+          <div className="mb-2 flex rounded-lg bg-bg p-0.5 text-sm">
+            {(Object.keys(ENTITY_LABEL) as EntityPick["level"][]).map((l) => (
+              <button key={l} type="button" className={`flex-1 rounded-md px-2 py-1 ${value.level === l ? "bg-panel font-medium shadow-sm" : "text-muted"}`}
+                onClick={() => value.level !== l && onChange({ level: l, items: [] })}>{ENTITY_LABEL[l]}</button>
+            ))}
+          </div>
+          <input className="input mb-2 !py-1" placeholder={`Search ${ENTITY_LABEL[value.level].toLowerCase()}…`} value={q} onChange={(e) => setQ(e.target.value)} autoFocus />
+          {n > 0 && (
+            <div className="mb-2 flex flex-wrap gap-1">
+              {value.items.map((x) => (
+                <button key={x.id} type="button" className="pill max-w-full bg-accent text-white" onClick={() => toggle(x)} title="Remove"><span className="truncate">{x.name}</span><span className="ms-1">×</span></button>
+              ))}
+              <button type="button" className="text-xs text-muted hover:underline" onClick={() => onChange({ ...value, items: [] })}>Clear</button>
+            </div>
+          )}
+          <div className="max-h-72 overflow-auto">
+            {found.map((x) => (
+              <label key={x.id} className="flex cursor-pointer items-start gap-2 rounded px-1 py-1 text-sm hover:bg-bg">
+                <input type="checkbox" className="mt-1" checked={has(x.id)} onChange={() => toggle(x)} />
+                <span className="min-w-0"><span className="block truncate">{x.name}</span><span className="block truncate text-xs text-muted">{x.sub}</span></span>
+              </label>
+            ))}
+            {!found.length && <p className="p-2 text-sm text-muted">{loading ? "Searching…" : "Nothing matches."}</p>}
+          </div>
+          <p className="mt-2 text-[11px] text-muted">Tick one or more, then press Apply. Showing up to 40 — type to search.</p>
         </div>
       )}
     </div>

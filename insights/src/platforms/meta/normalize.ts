@@ -88,6 +88,26 @@ export function advantageAudience(t: Record<string, any> | null | undefined): bo
   return Number(t.targeting_automation?.advantage_audience) === 1 || t.targeting_optimization === "expansion_all";
 }
 
+const METRIC_KEYS = ["spend", "impressions", "reach", "clicks", "linkClicks", "leads", "purchases", "conversions", "value", "videoViews", "engagements"] as const;
+
+/**
+ * Breakdowns are fetched per ad set (so pages can filter by ad set); this adds
+ * the per-campaign rows by summing each campaign's ad sets. Pure; unit-tested.
+ */
+export function withCampaignRollup<T extends Metrics & { externalId: string; campaignExternalId: string; date: string; dimension: string; bucket: string }>(rows: T[]): (Metrics & { level: "ADSET" | "CAMPAIGN"; externalId: string; date: string; dimension: string; bucket: string })[] {
+  const out: (Metrics & { level: "ADSET" | "CAMPAIGN"; externalId: string; date: string; dimension: string; bucket: string })[] = [];
+  const camps = new Map<string, Metrics & { level: "CAMPAIGN"; externalId: string; date: string; dimension: string; bucket: string }>();
+  for (const r of rows) {
+    const { campaignExternalId, ...rest } = r;
+    out.push({ ...rest, level: "ADSET" });
+    const k = `${campaignExternalId}|${r.date}|${r.dimension}|${r.bucket}`;
+    const c = camps.get(k) ?? { level: "CAMPAIGN" as const, externalId: campaignExternalId, date: r.date, dimension: r.dimension, bucket: r.bucket };
+    for (const m of METRIC_KEYS) if (r[m] != null) c[m] = (c[m] ?? 0) + (r[m] ?? 0);
+    camps.set(k, c);
+  }
+  return [...out, ...camps.values()];
+}
+
 /** Maps a Meta breakdown row to our dimension name + value. */
 export function breakdownValue(dimension: string, row: Record<string, any>): string {
   switch (dimension) {

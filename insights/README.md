@@ -121,7 +121,17 @@ Clients never handle API keys. Gildana sets each platform up **once**, then ever
 | Manager | Client | Connect ad accounts, companies, sites, reports |
 | Viewer | Client | Read-only |
 
-For each manager or viewer, Team → Edit sets **which sections they can open** (Overview, Spend, Performance, Campaigns, Audiences, Google, Websites, Reports, Ad accounts, Companies) and **which ad accounts they see**: all, whole companies (including accounts added later) and/or single ad accounts. Everything they open — reports, campaigns, breakdowns, websites, budgets, share links — follows that grant, and limited users can't reorganise accounts or companies. Users can be deleted from Admin → Clients → client, Admin → Gildana team, or the client's own Team page. Nobody can delete or demote themselves, a workspace's last owner, or the last Gildana admin. Signing up creates an Owner.
+For each manager or viewer, Team → Edit sets **which sections they can open** (Overview, Spend, Performance, Campaigns, Audiences, Google, Websites, Reports, Ad accounts, Companies) and **which ad accounts they see**: all, whole companies (including accounts added later) and/or single ad accounts. Everything they open — reports, campaigns, breakdowns, websites, budgets, share links — follows that grant, and limited users can't reorganise accounts or companies. Under each section, single **features** can be switched off per user (each campaign tab, breakdowns, AI suggestions, creating split tests, pausing ad sets, Sync breakdowns now). Users can be deleted from Admin → Clients → client, Admin → Gildana team, or the client's own Team page. Nobody can delete or demote themselves, a workspace's last owner, or the last Gildana admin. Signing up creates an Owner.
+
+## Meta interests: exact results, suggestions, split tests
+
+Meta reports results per ad set, never per interest inside an ad set that mixes several. So **Audiences → Exact results** shows a number for an interest only when it is exact (an ad set or split-test arm that targets it alone; other platforms' per-segment reports); everything else is listed as "Not measured yet" without numbers. Nothing is estimated.
+
+**Audiences → Suggestions** reads all Meta history (ignoring the date filter) and gives three opinions: rules from the account's own exact results (`src/lib/interest-advice.ts`: Scale / Stop / Test alone / Use here / Test again), Claude, and OpenAI — the AI ones on request, when `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` (+ optional `OPENAI_MODEL`) are set in Admin → Platforms. Ticked suggestions become a **split-test campaign**: one ad set per interest, copied from a chosen ad set, equal budgets, Advantage+ audience off, created paused unless "Start now" is ticked (needs a Meta login connected with split tests). Tests are read automatically (winner / too early / no clear winner); "Pause losing ad sets" is a manual button.
+
+## Filters
+
+Every analysis page (Overview, Spend, Performance, Campaigns, Audiences, Google Search) filters by company, platform, ad accounts, date range and **campaigns, ad sets or ads** (`?camp=` / `?set=` / `?ad=`). Meta breakdowns are stored per ad set and per campaign; an ad filter shows its ad set's breakdown.
 
 ## Currencies
 

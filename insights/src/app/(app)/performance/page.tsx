@@ -34,7 +34,7 @@ export default async function Performance({ searchParams }: { searchParams: Prom
   return (
     <>
       <PageHeader title={t.performance} sub={`${range.from} → ${range.to}`}>
-        <Filters t={t} freshness={c.freshness} accounts={c.accounts} companies={c.companies} companyId={c.companyId} platform={c.platform} range={range} days={c.one("days")} extra={{ metric, dim }} />
+        <Filters t={t} entity={c.entityPick} freshness={c.freshness} accounts={c.accounts} companies={c.companies} companyId={c.companyId} platform={c.platform} range={range} days={c.one("days")} extra={{ metric, dim }} />
       </PageHeader>
       <div className="space-y-4">
         <KpiGrid cur={cur} prev={before} currency={scope.currency} t={t} keys={["spend", "impressions", "reach", "frequency", "clicks", "ctr", "cpc", "cpm", "conversions", "convRate", "cpa", "roas"]} />
@@ -60,6 +60,12 @@ export default async function Performance({ searchParams }: { searchParams: Prom
             ))}
           </div>
           {canFeature(c.viewer, "general.sync_breakdowns") && <BreakdownSync accountIds={scope.accountIds} module="performance" path="/performance" />}
+          {scope.entity && scope.entity.level !== "CAMPAIGN" && (
+            <p className="mb-2 text-xs text-muted">
+              {scope.entity.level === "AD" ? "Meta's breakdowns are stored per ad set, so this shows the whole ad set of the selected ad. " : ""}
+              Ad-set breakdowns are filled in by the full refresh — if this is empty, press “Sync breakdowns now”.
+            </p>
+          )}
           <DataTable search={false} currency={scope.currency} initialSort={dim === "hour" ? "bucket" : "spend"}
             cols={[{ key: "bucket", label: DIM_LABEL[dim] }, ...METRIC_COLS]} rows={bd.map((r) => ({ ...mrow(r.m), bucket: r.value }))} />
         </div>

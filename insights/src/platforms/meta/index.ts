@@ -1,7 +1,7 @@
 import { fetchJson } from "@/lib/http";
-import type { Connector, RemoteAd, RemoteAdSet, RemoteBreakdown, RemoteCampaign, RemoteLead, RemoteStat, StatLevel, SyncContext } from "../types";
+import type { Connector, Metrics, RemoteAd, RemoteAdSet, RemoteBreakdown, RemoteCampaign, RemoteLead, RemoteStat, StatLevel, SyncContext } from "../types";
 import { PlatformError, RateLimitError } from "../types";
-import { META_BREAKDOWNS, breakdownValue, flattenTargeting, insightMetrics, minor } from "./normalize";
+import { META_BREAKDOWNS, breakdownValue, flattenTargeting, insightMetrics, minor, withCampaignRollup } from "./normalize";
 import { setting } from "@/lib/settings";
 
 const V = () => setting("META_GRAPH_VERSION") || "v21.0";
@@ -164,7 +164,8 @@ export const meta: Connector & { preview(token: string, adId: string, format?: s
     for (let i = 0; i < entries.length; i += 3) {
       results.push(...(await Promise.all(entries.slice(i, i + 3).map(async ([dimension, param]): Promise<[string, any[] | null]> => {
         try {
-          return [dimension, await all(q(`${a}/insights`, t, { level: "campaign", time_increment: 1, time_range: range, breakdowns: param, fields: "campaign_id,spend,impressions,reach,clicks,actions,action_values", limit: 500 }), 200)];
+          // Per ad set (same number of calls as per campaign), so reports can be filtered by ad set; campaign rows are summed below.
+          return [dimension, await all(q(`${a}/insights`, t, { level: "adset", time_increment: 1, time_range: range, breakdowns: param, fields: "campaign_id,adset_id,spend,impressions,reach,clicks,actions,action_values", limit: 500 }), 400)];
         } catch (e) {
           // A breakdown this account or its campaigns don't support (e.g. asset splits without dynamic creative) is skipped, not fatal.
           if (e instanceof PlatformError && !(e instanceof RateLimitError) && e.status >= 400 && e.status < 500) return [dimension, null];
@@ -172,13 +173,12 @@ export const meta: Connector & { preview(token: string, adId: string, format?: s
         }
       }))));
     }
+    const perSet: (Metrics & { externalId: string; campaignExternalId: string; date: string; dimension: string; bucket: string })[] = [];
     for (const [dimension, rows] of results) {
       if (!rows) continue;
-      for (const r of rows) {
-        const m = insightMetrics(r);
-        breakdowns.push({ level: "CAMPAIGN", externalId: r.campaign_id, date: r.date_start, dimension, bucket: breakdownValue(dimension, r), ...m });
-      }
+      for (const r of rows) perSet.push({ externalId: String(r.adset_id), campaignExternalId: String(r.campaign_id), date: r.date_start, dimension, bucket: breakdownValue(dimension, r), ...insightMetrics(r) });
     }
+    breakdowns.push(...withCampaignRollup(perSet));
     return { stats, breakdowns };
   },
 
