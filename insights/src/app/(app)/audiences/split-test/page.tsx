@@ -49,7 +49,7 @@ export default async function SplitTestPage({ searchParams }: { searchParams: Pr
       ) : !sources.length ? (
         <div className="card text-sm">There is no Meta ad set with ads to copy from yet. Connect a Meta ad account on the <Link className="text-accent underline" href="/connections">Ad accounts</Link> page.</div>
       ) : (
-        <SplitCampaignForm picks={picks} sources={sources} defaultSource={sources[0].id} defaultName={`Interest test – ${ranked[0].campaign.name}`.slice(0, 200)} />
+        <SplitCampaignForm picks={picks} sources={sources} defaultSource={sources[0].id} defaultName={`Interest test – ${ranked[0].campaign.name}`.slice(0, 200)} canApprove={canFeature(v, "actions.approvals")} />
       )}
     </>
   );

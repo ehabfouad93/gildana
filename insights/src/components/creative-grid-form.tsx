@@ -3,13 +3,14 @@
 import Link from "next/link";
 import { useState, useTransition } from "react";
 import { createGridAction, loadGridImagesAction, type GridResult } from "@/app/actions/creative-grid";
+import { SendForApproval } from "@/components/approval-buttons";
 
 export type GridAd = { id: string; label: string; headline: string; body: string; cta: string; adSetId: string; format: string };
 
 const split = (s: string) => [...new Set(s.split("\n").map((x) => x.trim()).filter(Boolean))];
 
 /** Enter options per element; every combination becomes one ad copied from the source ad. */
-export function CreativeGridForm({ ads, adSets, ctas, max, initialAd }: { ads: GridAd[]; adSets: { id: string; label: string }[]; ctas: string[]; max: number; initialAd: string }) {
+export function CreativeGridForm({ ads, adSets, ctas, max, initialAd, canApprove = false }: { ads: GridAd[]; adSets: { id: string; label: string }[]; ctas: string[]; max: number; initialAd: string; canApprove?: boolean }) {
   const [adId, setAdId] = useState(initialAd);
   const ad = ads.find((a) => a.id === adId);
   const [adSetId, setAdSetId] = useState("");
@@ -82,6 +83,7 @@ export function CreativeGridForm({ ads, adSets, ctas, max, initialAd }: { ads: G
           onClick={() => { if (start === "now" && !confirm(`Create ${n} ads and start them now?`)) return; go(async () => setRes(await createGridAction({ adId, adSetId, headlines: split(headlines), texts: split(texts), images: imgs, ctas: picked, startNow: start === "now" }))); }}>
           {pending ? "Working…" : `Create ${n} ads`}
         </button>
+        {canApprove && <div><SendForApproval kind="grid" disabled={n < 2 || n > max || !adId} payload={() => ({ adId, adSetId, headlines: split(headlines), texts: split(texts), images: imgs, ctas: picked, startNow: start === "now" })} /></div>}
       </div>
     </div>
   );

@@ -51,6 +51,7 @@ export const FEATURES = [
   { key: "audiences.launcher", module: "audiences", label: "Ready-made audiences and lookalikes" },
   { key: "actions.apply", module: "actions", label: "Apply and undo changes in ad accounts" },
   { key: "actions.rules", module: "actions", label: "Create and edit automation rules" },
+  { key: "actions.approvals", module: "actions", label: "Send launches for client approval" },
   { key: "campaigns.tags", module: "campaigns", label: "Tags and funnel stages" },
   { key: "creatives.grid", module: "creatives", label: "Creative split-test grid (create ad variations)" },
   { key: "general.sync_breakdowns", module: "general", label: "“Sync breakdowns now” button" },

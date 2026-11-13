@@ -42,7 +42,7 @@ export default async function Mixer({ searchParams }: { searchParams: Promise<SP
       </form>
       {!canEdit(v) ? <div className="card text-sm">Read-only users can&apos;t build audiences.</div>
         : !sources.length ? <div className="card text-sm">This account has no ad set with ads to copy from yet.</div>
-        : <MixerForm key={account.id} accountId={account.id} available={available} sources={sources} initial={picks} defaultExclusions={defaults} />}
+        : <MixerForm key={account.id} accountId={account.id} available={available} sources={sources} initial={picks} defaultExclusions={defaults} canApprove={canFeature(v, "actions.approvals")} />}
     </>
   );
 }

@@ -1,14 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState, useState } from "react";
+import { useActionState, useRef, useState } from "react";
+import { SendForApproval } from "@/components/approval-buttons";
 import { createSplitCampaignAction } from "@/app/actions/split-test";
 
 export type PickOption = { key: string; value: string; type: string; known: boolean };
 export type SourceOption = { id: string; label: string; currency: string; dailyBudget: number | null; ads: number; demo: boolean; canWrite: boolean };
 
 /** Builds a split-test campaign: one ad set per ticked interest, copied from a source ad set. */
-export function SplitCampaignForm({ picks, sources, defaultSource, defaultName }: { picks: PickOption[]; sources: SourceOption[]; defaultSource: string; defaultName: string }) {
+export function SplitCampaignForm({ picks, sources, defaultSource, defaultName, canApprove = false }: { picks: PickOption[]; sources: SourceOption[]; defaultSource: string; defaultName: string; canApprove?: boolean }) {
+  const nameRef = useRef<HTMLInputElement>(null);
   const [res, action, pending] = useActionState(createSplitCampaignAction, null);
   const [chosen, setChosen] = useState<string[]>(picks.slice(0, 10).map((p) => p.key));
   const [sourceId, setSourceId] = useState(defaultSource);
@@ -58,7 +60,7 @@ export function SplitCampaignForm({ picks, sources, defaultSource, defaultName }
       <div className="card space-y-3">
         <h2 className="font-semibold">3. Budget and timing</h2>
         <div className="grid gap-3 sm:grid-cols-3">
-          <div><label className="label">Campaign name</label><input className="input" name="name" defaultValue={defaultName} maxLength={200} /></div>
+          <div><label className="label">Campaign name</label><input className="input" name="name" ref={nameRef} defaultValue={defaultName} maxLength={200} /></div>
           <div><label className="label">Daily budget per ad set ({cur})</label><input className="input" name="dailyBudget" type="number" min="1" step="any" required value={budget} onChange={(e) => setBudget(e.target.value)} placeholder={source?.dailyBudget ? String(Math.round(source.dailyBudget)) : ""} /></div>
           <div><label className="label">Run for (days, 0 = no end)</label><input className="input" name="days" type="number" min="0" max="90" value={days} onChange={(e) => setDays(e.target.value)} /></div>
         </div>
@@ -79,6 +81,7 @@ export function SplitCampaignForm({ picks, sources, defaultSource, defaultName }
         <button className="btn" disabled={pending || !chosen.length || chosen.length > 10 || !source}>{pending ? "Creating…" : `Create campaign with ${chosen.length} ad set${chosen.length === 1 ? "" : "s"}`}</button>
         <Link className="btn-ghost" href="/audiences?v=suggest">Cancel</Link>
       </div>
+      {canApprove && <SendForApproval kind="split_campaign" disabled={!chosen.length || chosen.length > 10 || !source || !(perDay > 0)} payload={() => ({ sourceAdSetId: sourceId, pick: chosen, name: nameRef.current?.value ?? defaultName, dailyBudget: perDay, days: Number(days) || 0, start })} />}
     </form>
   );
 }

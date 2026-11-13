@@ -27,7 +27,7 @@ export default async function Grid({ searchParams }: { searchParams: Promise<SP>
         <Link className="btn-ghost" href="/creatives">← Creatives</Link>
       </PageHeader>
       {!initial ? <div className="card text-sm">There is no Meta ad to copy yet.</div> : (
-        <CreativeGridForm initialAd={initial.id} max={MAX_ADS} ctas={[...CTAS]}
+        <CreativeGridForm initialAd={initial.id} max={MAX_ADS} ctas={[...CTAS]} canApprove={canFeature(v, "actions.approvals")}
           ads={ads.map((a) => ({ id: a.id, label: `${a.name} · ${a.campaign.name} › ${a.adSet.name}`, headline: a.headline, body: a.body, cta: a.cta, adSetId: a.adSetId, format: a.format }))}
           adSets={sets.map((s) => ({ id: s.id, label: `${s.name} · ${s.campaign.name}` }))} />
       )}

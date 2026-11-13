@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { SelectAll } from "@/components/auto-refresh";
 import { PageHeader } from "@/components/shell";
+import { deleteApprovalAction } from "@/app/actions/approvals";
+import { LaunchApproval } from "@/components/approval-buttons";
+import { CopyButton } from "@/components/copy";
 import { RunAuditButton } from "@/components/rule-forms";
 import { TodoBulk, TodoButtons } from "@/components/todo-row";
 import { db } from "@/lib/db";
@@ -30,7 +33,8 @@ function describe(a: { kind: string; level: string; entityName: string; payload:
 export default async function Actions({ searchParams }: { searchParams: Promise<SP> }) {
   const sp = await searchParams;
   const v = await requireModule("actions");
-  const tab = sp.tab === "history" ? "history" : "open";
+  const showApprovals = canFeature(v, "actions.approvals");
+  const tab = sp.tab === "history" ? "history" : sp.tab === "approvals" && showApprovals ? "approvals" : "open";
   const accounts = await db.adAccount.findMany({ where: { connection: { clientId: v.clientId }, ...accessWhere(v.access) }, select: { id: true, name: true, platform: true, currency: true } });
   const acc = new Map(accounts.map((a) => [a.id, a]));
   const where = { clientId: v.clientId, accountId: { in: accounts.map((a) => a.id) } };
@@ -40,6 +44,9 @@ export default async function Actions({ searchParams }: { searchParams: Promise<
     db.user.findMany({ where: { OR: [{ clientId: v.clientId }, { clientId: null }] }, select: { id: true, name: true, email: true } }),
   ]);
   const who = new Map(users.map((u) => [u.id, u.name || u.email]));
+  const approvals = showApprovals ? await db.approval.findMany({ where: { clientId: v.clientId, accountId: { in: accounts.map((a) => a.id) } }, orderBy: { createdAt: "desc" }, take: 100 }) : [];
+  const awaiting = approvals.filter((a) => a.status === "approved" && !a.launchedAt).length;
+  const base = process.env.APP_URL ?? "";
   const canApply = canEdit(v) && canFeature(v, "actions.apply");
   const byAccount = [...new Set(open.map((a) => a.accountId))];
 
@@ -50,8 +57,8 @@ export default async function Actions({ searchParams }: { searchParams: Promise<
         {canEdit(v) && <RunAuditButton />}
       </PageHeader>
       <div className="mb-4 flex gap-4 border-b border-line">
-        {([["open", `Open (${open.length})`], ["history", "History"]] as const).map(([k, label]) => (
-          <Link key={k} href={k === "open" ? "/actions" : "/actions?tab=history"} className={`-mb-px border-b-2 px-1 pb-2 text-sm ${k === tab ? "border-accent font-semibold" : "border-transparent text-muted hover:text-ink"}`}>{label}</Link>
+        {([["open", `Open (${open.length})`], ...(showApprovals ? [["approvals", `Approvals${awaiting ? ` (${awaiting} to launch)` : ""}`] as const] : []), ["history", "History"]] as const).map(([k, label]) => (
+          <Link key={k} href={k === "open" ? "/actions" : `/actions?tab=${k}`} className={`-mb-px border-b-2 px-1 pb-2 text-sm ${k === tab ? "border-accent font-semibold" : "border-transparent text-muted hover:text-ink"}`}>{label}</Link>
         ))}
       </div>
 
@@ -86,6 +93,32 @@ export default async function Actions({ searchParams }: { searchParams: Promise<
             })}
           </div>
         </>
+      )}
+
+      {tab === "approvals" && (
+        <div className="card overflow-x-auto">
+          <p className="mb-3 text-xs text-muted">Launches sent to the client. They open the link without an account and approve, reject or ask for changes. An approved one is launched here, exactly as it was approved.</p>
+          <table className="tbl">
+            <thead><tr><th>Request</th><th>Status</th><th>Client&apos;s answer</th><th>Link</th><th /></tr></thead>
+            <tbody>
+              {approvals.map((a) => (
+                <tr key={a.id}>
+                  <td className="!whitespace-normal"><div className="font-medium">{a.title}</div><div className="text-xs text-muted">{acc.get(a.accountId)?.name} · sent {a.createdAt.toISOString().slice(0, 10)}{a.createdById ? ` by ${who.get(a.createdById) ?? "—"}` : ""}</div></td>
+                  <td><span className={`pill ${a.launchedAt ? "bg-green-100 text-good" : a.status === "approved" ? "bg-emerald-100 text-emerald-800" : a.status === "rejected" ? "bg-red-100 text-bad" : a.status === "changes" ? "bg-blue-100 text-blue-800" : "bg-amber-100 text-amber-800"}`}>{a.launchedAt ? "launched" : a.status === "changes" ? "changes requested" : a.status}</span></td>
+                  <td className="!whitespace-normal text-xs">{a.decidedAt ? <><b>{a.contactName}</b> · {a.decidedAt.toISOString().slice(0, 10)}{a.comment && <div className="text-muted" dir="auto">{a.comment}</div>}</> : <span className="text-muted">not yet</span>}{a.launchNote && <div className="text-muted">{a.launchNote}</div>}</td>
+                  <td><div className="flex items-center gap-1"><input className="input !w-56 !py-1 font-mono text-xs" readOnly value={`${base}/a/${a.token}`} /><CopyButton text={`${base}/a/${a.token}`} /></div></td>
+                  <td>
+                    <div className="flex items-center justify-end gap-2">
+                      {canEdit(v) && a.status === "approved" && !a.launchedAt && <LaunchApproval id={a.id} title={a.title} />}
+                      {canEdit(v) && !a.launchedAt && <form action={deleteApprovalAction}><input type="hidden" name="id" value={a.id} /><button className="text-xs text-bad hover:underline">Delete</button></form>}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {!approvals.length && <tr><td colSpan={5} className="text-muted">No approval requests yet. Use “Send for client approval” when creating a split-test campaign, a mixed audience or an ad grid.</td></tr>}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {tab === "history" && (

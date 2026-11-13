@@ -97,6 +97,8 @@ model Client {
   campaignCurrency  String   @default("account")
   /// When the daily audit last ran for this workspace.
   lastAuditAt       DateTime?
+  /// New campaigns, ad sets and ads can only be launched from an approval the client accepted.
+  requireApproval   Boolean  @default(false)
   active            Boolean  @default(true)
   onboardedAt       DateTime?
   createdAt         DateTime @default(now())
@@ -920,4 +922,28 @@ model SavedAudience {
   updatedAt   DateTime @updatedAt
 
   @@unique([accountId, externalId])
+}
+
+/// A launch waiting for the client's yes: opened by link, no account needed.
+model Approval {
+  id          String    @id @default(cuid())
+  token       String    @unique
+  clientId    String
+  accountId   String
+  kind        String // split_campaign | mixer | grid
+  title       String
+  /// Lines shown to the approver: what will be created, budget, cost.
+  summary     Json
+  /// The exact request that runs when it is launched.
+  payload     Json
+  status      String    @default("pending") // pending | approved | rejected | changes
+  comment     String    @default("")
+  contactName String    @default("")
+  decidedAt   DateTime?
+  launchedAt  DateTime?
+  launchNote  String    @default("")
+  createdById String?
+  createdAt   DateTime  @default(now())
+
+  @@index([clientId, status])
 }

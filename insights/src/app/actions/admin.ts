@@ -92,7 +92,7 @@ export async function updateClientAction(_: Result, form: FormData): Promise<Res
   await db.client.update({
     where: { id },
     data: {
-      ...parsed.data, defaultDays: days, campaignCurrency: form.get("campaignCurrency") === "reporting" ? "reporting" : "account", logoUrl: String(form.get("logoUrl") ?? "").trim().slice(0, 500),
+      ...parsed.data, defaultDays: days, campaignCurrency: form.get("campaignCurrency") === "reporting" ? "reporting" : "account", requireApproval: form.get("requireApproval") === "on", logoUrl: String(form.get("logoUrl") ?? "").trim().slice(0, 500),
       // Only Gildana can switch a workspace off.
       ...(v.isGildana ? { active: form.get("active") === "on" } : {}),
     },

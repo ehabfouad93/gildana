@@ -7,7 +7,7 @@ import { CURRENCIES } from "@/lib/currencies";
 
 export type WorkspaceValues = {
   id: string; name: string; reportingCurrency: string; campaignCurrency: string; timezone: string; logoUrl: string;
-  defaultDays: number; isAgency: boolean; active: boolean;
+  defaultDays: number; isAgency: boolean; active: boolean; requireApproval: boolean;
 };
 
 const RANGES = [7, 14, 30, 90, 180, 365];
@@ -48,6 +48,7 @@ export function WorkspaceSettings({ c, gildana }: { c: WorkspaceValues; gildana:
       <div className="flex flex-wrap gap-4 text-sm">
         <label className="flex items-center gap-1"><input type="checkbox" name="isAgency" defaultChecked={c.isAgency} /> Agency (manages several companies)</label>
         {gildana && <label className="flex items-center gap-1"><input type="checkbox" name="active" defaultChecked={c.active} /> Workspace active</label>}
+        <label className="flex items-center gap-1" title="Split-test campaigns, mixed audiences and ad grids can then only be launched from an approval the client accepted"><input type="checkbox" name="requireApproval" defaultChecked={c.requireApproval} /> Client approval required before launching</label>
       </div>
       <button className="btn" disabled={pending}>{pending ? "Saving…" : "Save settings"}</button>
       <ResultNote msg={msg} />

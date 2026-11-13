@@ -4,6 +4,7 @@ import type { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { decrypt } from "@/lib/crypto";
 import { db } from "@/lib/db";
+import { approvalGate } from "@/lib/approvals";
 import { STAGES } from "@/lib/funnel";
 import { syncNow } from "@/lib/jobs";
 import { accessWhere, canEdit, canFeature, requireModule, type Viewer } from "@/lib/tenancy";
@@ -74,9 +75,11 @@ export async function mixerSearchAction(accountId: string, q: string): Promise<{
 }
 
 /** Creates one ad set for the mix, copied from the source ad set. Paused unless "start now". */
-export async function mixerLaunchAction(mix: Mix & { name: string; dailyBudget: number; days: number; startNow: boolean; newCampaign: boolean }): Promise<ToolResult & { campaignId?: string }> {
+export async function mixerLaunchAction(mix: Mix & { name: string; dailyBudget: number; days: number; startNow: boolean; newCampaign: boolean; approvalId?: string }): Promise<ToolResult & { campaignId?: string }> {
   const a = await accountFor("audiences.mixer", mix.accountId, true);
   if ("error" in a) return { ok: false, message: a.error! };
+  const gate = await approvalGate(a.v.clientId, mix.approvalId, "mixer");
+  if (gate) return { ok: false, message: gate };
   const src = await sourceFor(a.v, a.account.id, mix.sourceAdSetId);
   if (!src) return { ok: false, message: "Choose the ad set whose ads and settings should be copied." };
   const groups = (Array.isArray(mix.groups) ? mix.groups : []).map(clean).filter((g) => g.length);

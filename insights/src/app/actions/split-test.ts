@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { decrypt } from "@/lib/crypto";
 import { lastNDays, ymd } from "@/lib/dates";
 import { enqueueSync, syncNow } from "@/lib/jobs";
+import { approvalGate } from "@/lib/approvals";
 import { splitTests } from "@/lib/queries";
 import { accessWhere, canEdit, canFeature, requireModule, scopedAccountIds } from "@/lib/tenancy";
 import { WRITE_SCOPE } from "@/platforms/meta";
@@ -102,6 +103,8 @@ export async function createSplitCampaignAction(_: SplitCampaignResult | null, f
   const startNow = form.get("start") === "now";
   const name = String(form.get("name") || `Interest test – ${set.campaign.name}`).trim().slice(0, 200);
   const conn = set.account.connection;
+  const gate = await approvalGate(v.clientId, String(form.get("approvalId") || "") || null, "split_campaign");
+  if (gate) return { ok: false, message: gate };
   if (!conn.isDemo && !conn.scopes.split(",").includes(WRITE_SCOPE)) return { ok: false, message: "This Meta login can only read. Reconnect it with “Connect with split tests” on the Ad accounts page, then try again." };
 
   // Interests without a Meta id (AI ideas the account never used): look in the workspace first, then ask Meta.

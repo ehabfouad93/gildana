@@ -4,13 +4,14 @@ import type { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { decrypt } from "@/lib/crypto";
 import { db } from "@/lib/db";
+import { approvalGate } from "@/lib/approvals";
 import { syncNow } from "@/lib/jobs";
 import { accessWhere, canEdit, canFeature, requireModule } from "@/lib/tenancy";
 import { WRITE_SCOPE } from "@/platforms/meta";
 import { CTAS, MAX_ADS, createGrid, listImages, permutations } from "@/platforms/meta/creative-grid";
 
 export type GridResult = { ok: boolean; message: string };
-export type GridInput = { adId: string; adSetId: string; headlines: string[]; texts: string[]; images: string[]; ctas: string[]; startNow: boolean };
+export type GridInput = { adId: string; adSetId: string; headlines: string[]; texts: string[]; images: string[]; ctas: string[]; startNow: boolean; approvalId?: string };
 
 async function adFor(adId: string, write: boolean) {
   const v = await requireModule("creatives");
@@ -38,6 +39,8 @@ const lines = (l: unknown, max: number) => [...new Set((Array.isArray(l) ? l : [
 export async function createGridAction(input: GridInput): Promise<GridResult> {
   const a = await adFor(String(input.adId), true);
   if ("error" in a) return { ok: false, message: a.error! };
+  const gate = await approvalGate(a.v.clientId, input.approvalId, "grid");
+  if (gate) return { ok: false, message: gate };
   const variants = permutations(lines(input.headlines, 10).map((s) => s.slice(0, 255)), lines(input.texts, 10).map((s) => s.slice(0, 2000)), lines(input.images, 10), lines(input.ctas, 6).filter((c) => (CTAS as readonly string[]).includes(c)));
   if (variants.length < 2) return { ok: false, message: "Add at least two options for one element (for example two headlines)." };
   if (variants.length > MAX_ADS) return { ok: false, message: `That makes ${variants.length} ads — the limit is ${MAX_ADS}. Remove some options.` };

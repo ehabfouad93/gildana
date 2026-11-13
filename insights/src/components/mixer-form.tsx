@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState, useTransition } from "react";
 import { mixerLaunchAction, mixerReachAction, mixerSearchAction, type ToolResult } from "@/app/actions/audience-tools";
+import { SendForApproval } from "@/components/approval-buttons";
 
 export type Item = { type: string; value: string; externalId: string; note?: string };
 export type Source = { id: string; label: string; currency: string; ads: number };
@@ -43,7 +44,7 @@ function Group({ title, hint, items, onChange, available, accountId }: { title: 
 }
 
 /** Builds an audience (OR inside a group, AND between groups, minus exclusions), checks its reach and launches it as an ad set. */
-export function MixerForm({ accountId, available, sources, initial, defaultExclusions }: { accountId: string; available: Item[]; sources: Source[]; initial: Item[]; defaultExclusions: Record<string, Item[]> }) {
+export function MixerForm({ accountId, available, sources, initial, defaultExclusions, canApprove = false }: { accountId: string; available: Item[]; sources: Source[]; initial: Item[]; defaultExclusions: Record<string, Item[]>; canApprove?: boolean }) {
   const [groups, setGroups] = useState<Item[][]>([initial]);
   const [stage, setStage] = useState("prospecting");
   const [exclusions, setExclusions] = useState<Item[]>(defaultExclusions.prospecting ?? []);
@@ -121,6 +122,7 @@ export function MixerForm({ accountId, available, sources, initial, defaultExclu
           onClick={() => { if (start === "now" && !confirm("Create this ad set and start it now? It will spend from the ad account.")) return; go(async () => setRes(await mixerLaunchAction({ ...mix, name, dailyBudget: Number(budget), days: Number(days) || 0, startNow: start === "now", newCampaign: where === "new" }))); }}>
           {pending ? "Working…" : "Create ad set"}
         </button>
+        {canApprove && <div><SendForApproval kind="mixer" disabled={!filled || !sourceId || !(Number(budget) > 0)} payload={() => ({ ...mix, name, dailyBudget: Number(budget), days: Number(days) || 0, startNow: start === "now", newCampaign: where === "new" })} /></div>}
       </div>
     </div>
   );
