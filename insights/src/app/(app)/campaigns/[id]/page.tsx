@@ -11,13 +11,15 @@ import { PageHeader } from "@/components/shell";
 import { DataTable } from "@/components/table";
 import { METRIC_COLS, SOURCE_LABEL } from "@/components/table-types";
 import { BreakdownSync } from "@/components/breakdown-sync";
+import { CampaignEntityFilter } from "@/components/campaign-entity-filter";
 import { CurrencySwitch, currencyMode } from "@/components/currency-switch";
+import type { EntityFilter } from "@/lib/entity-filter";
 import { db } from "@/lib/db";
 import { convert, fxTable, fxUpdatedAt } from "@/lib/fx";
 import { money } from "@/lib/format";
 import { pageContext, qs, type SP } from "@/lib/page";
 import { PLATFORM_META } from "@/lib/platforms";
-import { adSetTable, adTable, audienceInsights, breakdown, daily, keywordTable, leadSegments, placementTable, searchTermTable, splitTests, totals, campaignTags } from "@/lib/queries";
+import { adSetTable, adTable, audienceInsights, breakdown, daily, keywordTable, leadSegments, placementTable, searchTermTable, splitTests, totals, campaignTags, type Scope } from "@/lib/queries";
 import { STAGES, STAGE_LABEL, stageOf } from "@/lib/funnel";
 import { setCampaignTagsAction, setStageAction } from "@/app/actions/tags";
 import { canEdit, canFeature, canUse } from "@/lib/tenancy";
@@ -40,10 +42,23 @@ export default async function CampaignPage({ params, searchParams }: { params: P
   const { range, prev, t } = c;
 
   const campaign = await db.campaign.findUnique({ where: { id }, include: { account: { include: { company: true, connection: { select: { isDemo: true } } } } } });
-  if (!campaign || !c.scope.accountIds.includes(campaign.accountId)) notFound();
+  // Checked against every account the viewer may see — the page's own ad set / ad filter must not hide the campaign.
+  if (!campaign || !c.accounts.some((a) => a.id === campaign.accountId)) notFound();
   // Money in the ad account's real currency (as in the platform), or converted into the reporting currency.
   const curMode = currencyMode(c.sp, c.client.campaignCurrency);
-  const scope = { accountIds: [campaign.accountId], currency: curMode === "account" ? campaign.account.currency : c.scope.currency };
+  // ?set= / ?ad= narrow the page to some of this campaign's ad sets or ads (an ad wins over an ad set).
+  const [allSets, allAds] = await Promise.all([
+    db.adSet.findMany({ where: { campaignId: id }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
+    db.ad.findMany({ where: { campaignId: id }, orderBy: { name: "asc" }, select: { id: true, name: true, adSetId: true } }),
+  ]);
+  const idList = (k: string) => c.one(k).split(",").filter(Boolean);
+  const fSets = allSets.filter((s) => idList("set").includes(s.id));
+  const fAds = allAds.filter((a) => idList("ad").includes(a.id));
+  const entity: EntityFilter | undefined = fAds.length
+    ? { level: "AD", ids: fAds.map((a) => a.id), adSetIds: [...new Set(fAds.map((a) => a.adSetId))], campaignIds: [id] }
+    : fSets.length ? { level: "ADSET", ids: fSets.map((s) => s.id), adSetIds: fSets.map((s) => s.id), campaignIds: [id] } : undefined;
+  const filterText = fAds.length ? `Ad: ${fAds.map((a) => a.name).join(", ")}` : fSets.length ? `${fSets.map((s) => s.name).join(", ")}` : "";
+  const scope: Scope = { accountIds: [campaign.accountId], currency: curMode === "account" ? campaign.account.currency : c.scope.currency, ...(entity ? { entity } : {}) };
   const [fx, fxDate] = await Promise.all([fxTable(), fxUpdatedAt()]);
   const fxNote = `1 ${c.scope.currency} = ${convert(1, c.scope.currency, campaign.account.currency, fx).toLocaleString("en-US", { maximumFractionDigits: 4 })} ${campaign.account.currency} · ${fxDate ? `rates of ${fxDate.toISOString().slice(0, 10)}` : "approximate rates"}`;
   const isDemo = campaign.account.connection.isDemo;
@@ -70,7 +85,7 @@ export default async function CampaignPage({ params, searchParams }: { params: P
   const mayTest = canEdit(c.viewer) && canFeature(c.viewer, "audiences.create_test");
   const mayTag = canEdit(c.viewer) && canFeature(c.viewer, "campaigns.tags");
   const myTags = (await campaignTags(c.client.id, [id])).get(id) ?? [];
-  const keep = { days: c.one("days"), from: c.one("from"), to: c.one("to"), cur: c.one("cur") };
+  const keep = { days: c.one("days"), from: c.one("from"), to: c.one("to"), cur: c.one("cur"), set: c.one("set"), ad: c.one("ad") };
 
   return (
     <>
@@ -105,14 +120,22 @@ export default async function CampaignPage({ params, searchParams }: { params: P
           ], [scope.currency, ""])} />
         </div>
 
-        <nav className="no-print flex flex-wrap gap-1 border-b border-line">
+        <nav className="no-print flex flex-wrap items-end gap-1 border-b border-line">
           {tabs.map(([k, label]) => (
             <Link key={k} href={`/campaigns/${id}${qs(keep, { tab: k })}`}
               className={`-mb-px border-b-2 px-3 py-2 text-sm ${tab === k ? "border-accent font-medium text-ink" : "border-transparent text-muted hover:text-ink"}`}>
               {k === "adsets" ? meta.adSetLabel : label}
             </Link>
           ))}
+          <CampaignEntityFilter key={`${c.one("set")}|${c.one("ad")}`} adSetLabel={meta.adSetLabel} adSets={allSets} ads={allAds} />
         </nav>
+        {filterText && (
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-accent/40 bg-accent/5 px-3 py-2 text-sm">
+            <span className="text-muted">Showing only</span><b className="truncate">{filterText}</b>
+            <span className="text-muted">— the numbers above and every tab follow this.</span>
+            <Link className="ms-auto text-accent hover:underline" href={`/campaigns/${id}${qs(keep, { tab, set: undefined, ad: undefined })}`} scroll={false}>Show the whole campaign</Link>
+          </div>
+        )}
 
         {tab === "adsets" && <AdSetsTab />}
         {tab === "ads" && <AdsTab />}
@@ -131,9 +154,10 @@ export default async function CampaignPage({ params, searchParams }: { params: P
     return (
       <div className="card">
         <DataTable currency={scope.currency} initialSort="spend" csvName={`${meta.slug}-adsets`}
-          cols={[{ key: "name", label: meta.adSetLabel, sub: "sub", wrap: true }, { key: "status", label: t.status }, { key: "goal", label: "Optimisation" }, ...METRIC_COLS]}
+          cols={[{ key: "name", label: meta.adSetLabel, href: "href", sub: "sub", wrap: true }, { key: "status", label: t.status }, { key: "goal", label: "Optimisation" }, ...METRIC_COLS]}
           rows={sets.map((s) => ({
-            name: s.name, status: s.status, goal: s.optimizationGoal,
+            // Clicking an ad set opens its ads only.
+            name: s.name, href: `/campaigns/${id}${qs(keep, { tab: "ads", set: s.id, ad: undefined })}`, status: s.status, goal: s.optimizationGoal,
             sub: s.targeting.filter((x) => ["interest", "keyword", "job_title", "audience", "lookalike"].includes(x.type)).slice(0, 4).map((x) => (x.exclude ? `−${x.value}` : x.value)).join(" · "),
             ...mrow(s.m),
           }))} />
@@ -162,8 +186,9 @@ export default async function CampaignPage({ params, searchParams }: { params: P
         </div>
         <div className="card">
           <DataTable currency={scope.currency} initialSort="spend" csvName={`${meta.slug}-ads`}
-            cols={[{ key: "name", label: "Ad", sub: "sub", wrap: true }, { key: "format", label: "Format" }, { key: "status", label: t.status }, ...METRIC_COLS]}
-            rows={ads.map((a) => ({ name: a.name, sub: a.adSet.name, format: a.format, status: a.status, ...mrow(a.m) }))} />
+            cols={[{ key: "name", label: "Ad", href: "href", sub: "sub", wrap: true }, { key: "format", label: "Format" }, { key: "status", label: t.status }, ...METRIC_COLS]}
+            rows={ads.map((a) => ({ name: a.name, href: `/campaigns/${id}${qs(keep, { tab: "ads", ad: a.id, set: undefined })}`, sub: a.adSet.name, format: a.format, status: a.status, ...mrow(a.m) }))} />
+          <p className="mt-2 text-xs text-muted">Click an ad&apos;s name to see only that ad&apos;s numbers and breakdowns.</p>
         </div>
       </div>
     );
@@ -174,8 +199,12 @@ export default async function CampaignPage({ params, searchParams }: { params: P
     const data = await Promise.all(dims.map(async (d) => ({ d, rows: await breakdown(scope, range, d, { campaignId: id }) })));
     const order = ["age", "gender", "age_gender", "customer_segment", "country", "region", "device", "placement", "network", "hour", "frequency", "asset_title", "asset_body", "asset_image", "asset_video", "asset_cta"];
     data.sort((a, b) => (order.indexOf(a.d) + 99) % 99 - (order.indexOf(b.d) + 99) % 99);
+    if (entity && !data.some((x) => x.rows.length)) {
+      return <div className="card text-sm text-muted">No breakdown is stored yet for {entity.level === "AD" ? "this ad's ad set" : `the selected ${meta.adSetLabel.toLowerCase()}`}. Breakdowns per ad set are filled in by the full refresh — press “Sync breakdowns now” above and come back in a few minutes.</div>;
+    }
     return (
       <div className="grid gap-4 lg:grid-cols-2">
+        {entity?.level === "AD" && <p className="text-xs text-muted lg:col-span-2">Breakdowns are stored per ad set, so these are for the whole ad set of the selected ad.</p>}
         {data.map(({ d, rows }) => {
           if (d === "age_gender") {
             const ages = [...new Set(rows.map((r) => r.value.split("|")[0]))].sort();
@@ -301,7 +330,7 @@ export default async function CampaignPage({ params, searchParams }: { params: P
 
   async function LeadsTab() {
     const leads = await db.lead.findMany({
-      where: { campaignId: id, createdAt: { gte: toDate(range.from), lt: new Date(toDate(range.to).getTime() + 86_400_000) } },
+      where: { campaignId: id, createdAt: { gte: toDate(range.from), lt: new Date(toDate(range.to).getTime() + 86_400_000) }, ...(entity?.level === "AD" ? { adId: { in: entity.ids } } : entity ? { adSetId: { in: entity.ids } } : {}) },
       orderBy: { createdAt: "desc" }, take: 2000,
     });
     const sets = await db.adSet.findMany({ where: { campaignId: id }, select: { id: true, name: true } });

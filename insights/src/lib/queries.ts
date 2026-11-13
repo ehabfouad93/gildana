@@ -139,13 +139,16 @@ export async function campaignTable(scope: Scope, r: Range, filter: { platform?:
 }
 
 export async function adSetTable(scope: Scope, r: Range, campaignId: string) {
-  const sets = await db.adSet.findMany({ where: { campaignId, accountId: { in: scope.accountIds } }, include: { targeting: true } });
+  const e = scope.entity;
+  // Under an ad-set or ad filter, only those ad sets (an ad's ad set) are listed.
+  const sets = await db.adSet.findMany({ where: { campaignId, accountId: { in: scope.accountIds }, ...(e && e.level !== "CAMPAIGN" ? { id: { in: e.adSetIds } } : {}) }, include: { targeting: true } });
   const { rows } = await grouped(scope, r, "ADSET", ["entityId"], { campaignId });
   return sets.map((s) => ({ ...s, m: derive(rows.get(s.id) ?? { ...ZERO }) })).sort((a, b) => b.m.spend - a.m.spend);
 }
 
 export async function adTable(scope: Scope, r: Range, campaignId: string) {
-  const ads = await db.ad.findMany({ where: { campaignId, accountId: { in: scope.accountIds } }, include: { adSet: { select: { name: true } } } });
+  const e = scope.entity;
+  const ads = await db.ad.findMany({ where: { campaignId, accountId: { in: scope.accountIds }, ...(e?.level === "ADSET" ? { adSetId: { in: e.ids } } : e?.level === "AD" ? { id: { in: e.ids } } : {}) }, include: { adSet: { select: { name: true } } } });
   const { rows } = await grouped(scope, r, "AD", ["entityId"], { campaignId });
   return ads.map((a) => ({ ...a, m: derive(rows.get(a.id) ?? { ...ZERO }) })).sort((a, b) => b.m.spend - a.m.spend);
 }

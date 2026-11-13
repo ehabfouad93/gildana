@@ -30,6 +30,15 @@ describe("campaign / ad set / ad filter", () => {
   });
 });
 
+describe("campaign page under its own ad set / ad filter", () => {
+  it("answers the campaign's totals from the chosen ad sets or ads", () => {
+    expect(applyEntity(set, "CAMPAIGN", [], { entityId: "c1" })).toEqual({ level: "ADSET", by: [], where: { campaignId: "c1" }, filter: { entityId: { in: ["s1", "s2"] } } });
+    expect(applyEntity(ad, "CAMPAIGN", ["date"], { entityId: "c1" })).toEqual({ level: "AD", by: ["date"], where: { campaignId: "c1" }, filter: { entityId: { in: ["a1"] } } });
+    // The ad sets table under an ad filter: the ad's numbers, grouped by its ad set.
+    expect(applyEntity(ad, "ADSET", ["entityId"], { campaignId: "c1" })).toEqual({ level: "AD", by: ["adSetId"], where: { campaignId: "c1" }, filter: { entityId: { in: ["a1"] } } });
+  });
+});
+
 describe("Meta breakdown roll-up", () => {
   it("keeps ad-set rows and sums them into campaign rows", () => {
     const row = (adset: string, bucket: string, spend: number, leads: number) => ({ externalId: adset, campaignExternalId: "c1", date: "2026-11-01", dimension: "age", bucket, spend, leads, impressions: spend * 100 });
