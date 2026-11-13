@@ -295,13 +295,22 @@ export function buildStructure(platform: Platform, accountExternalId: string, sp
   for (const t of splitTests) {
     const src = adSets.find((x) => x.externalId === t.sourceAdSet);
     if (!src) continue;
-    src.status = "PAUSED";
     const srcAds = ads.filter((a) => a.adSetExternalId === src.externalId);
-    srcAds.forEach((a) => (a.status = "PAUSED"));
+    // A split-test campaign is a new campaign next to the source; an in-place split pauses the source instead.
+    let campaignExternalId = src.campaignExternalId;
+    if (t.campaign) {
+      const base = campaigns.find((c) => c.externalId === src.campaignExternalId);
+      if (base && !campaigns.some((c) => c.externalId === t.campaign!.externalId)) campaigns.push({ ...base, externalId: t.campaign.externalId, name: t.campaign.name, status: "ACTIVE" });
+      campaignExternalId = t.campaign.externalId;
+    } else {
+      src.status = "PAUSED";
+      srcAds.forEach((a) => (a.status = "PAUSED"));
+    }
     for (const arm of t.arms) {
       const targeting = [...src.targeting.filter((x) => !SEGMENT_TYPES.has(x.type)), arm.interest];
-      adSets.push({ ...src, externalId: arm.externalId, name: `${src.name} – ${arm.interest.value}`, status: "ACTIVE", targeting, targetingRaw: { demo: true, items: targeting, splitOf: src.externalId } });
-      srcAds.forEach((a, k) => ads.push({ ...a, externalId: `${arm.externalId}-a${k + 1}`, adSetExternalId: arm.externalId, status: "ACTIVE" }));
+      const status = arm.paused ? "PAUSED" : "ACTIVE";
+      adSets.push({ ...src, externalId: arm.externalId, campaignExternalId, name: t.campaign ? arm.interest.value : `${src.name} – ${arm.interest.value}`, status, targeting, targetingRaw: { demo: true, items: targeting, splitOf: src.externalId } });
+      srcAds.forEach((a, k) => ads.push({ ...a, externalId: `${arm.externalId}-a${k + 1}`, adSetExternalId: arm.externalId, campaignExternalId, status }));
     }
   }
   return { campaigns, adSets, ads };

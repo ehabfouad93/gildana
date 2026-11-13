@@ -71,6 +71,8 @@ model User {
   accountIds   String[]  @default([])
   /// Client users: sections they may open (empty = all).
   modules      String[]  @default([])
+  /// Client users: sub-features switched off for them (see FEATURES in src/lib/modules.ts).
+  featuresOff  String[]  @default([])
   /// STAFF: the clients this account manager may open (ADMIN sees all).
   clientIds    String[]  @default([])
   lastLoginAt  DateTime?
@@ -747,11 +749,29 @@ model InterestTest {
   dailyBudget   Decimal? @db.Decimal(14, 2)
   status        String   @default("created") // created | active | ended | failed
   error         String   @default("")
+  /// adset = the source ad set was split in its own campaign; campaign = a new campaign with one ad set per interest
+  kind          String   @default("adset")
+  /// Platform id of the campaign created for a kind=campaign test
+  newCampaignExternalId String @default("")
+  name          String   @default("")
+  endsAt        DateTime?
   createdById   String?
   createdAt     DateTime @default(now())
 
   @@index([clientId])
   @@index([campaignId])
+}
+
+/// Cached AI answers for a workspace (interest suggestions from Claude / OpenAI).
+model AudienceCache {
+  id        String   @id @default(cuid())
+  clientId  String
+  kind      String // claude | openai
+  scopeKey  String // which accounts / campaign the answer was written for
+  content   Json
+  createdAt DateTime @default(now())
+
+  @@unique([clientId, kind, scopeKey])
 }
 
 /// One-time password reset link. Only a hash of the token is stored.

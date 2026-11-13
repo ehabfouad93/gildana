@@ -53,3 +53,42 @@ describe("demo reported segments and split tests", () => {
     expect(built.adSets.find((s) => s.externalId === src.externalId)!.status).toBe("PAUSED");
   });
 });
+
+describe("split-test campaign", () => {
+  it("plans one paused ad set per interest with its own equal budget and Advantage+ audience off", async () => {
+    const { splitCampaignPlan, toMinor } = await import("@/platforms/meta/split-test");
+    const src = {
+      name: "Prospecting", billing_event: "IMPRESSIONS", optimization_goal: "LEAD_GENERATION", bid_strategy: "LOWEST_COST_WITHOUT_CAP", promoted_object: { page_id: "1" },
+      targeting: { geo_locations: { countries: ["EG"] }, age_min: 25, flexible_spec: [{ interests: [{ id: "1", name: "A" }, { id: "2", name: "B" }] }], targeting_automation: { advantage_audience: 1 } },
+      campaign: { objective: "OUTCOME_LEADS", special_ad_categories: ["HOUSING"], buying_type: "AUCTION" },
+    };
+    const items = [{ type: "interest", value: "A", externalId: "1" }, { type: "behavior", value: "Expats", externalId: "9" }];
+    const plan = splitCampaignPlan(src, items, { name: "Test", dailyBudget: 300, currency: "EGP", days: 7, startNow: false }, new Date("2026-11-13T00:00:00Z"));
+    expect(plan.campaign).toMatchObject({ name: "Test", objective: "OUTCOME_LEADS", status: "PAUSED", special_ad_categories: ["HOUSING"], is_adset_budget_sharing_enabled: false });
+    expect(plan.adSets).toHaveLength(2);
+    expect(plan.adSets[0]).toMatchObject({ name: "A", status: "PAUSED", daily_budget: 30000, optimization_goal: "LEAD_GENERATION", end_time: "2026-11-20T00:00:00.000Z" });
+    expect(plan.adSets[0].targeting.flexible_spec).toEqual([{ interests: [{ id: "1", name: "A" }] }]);
+    expect(plan.adSets[1].targeting.flexible_spec).toEqual([{ behaviors: [{ id: "9", name: "Expats" }] }]);
+    expect(plan.adSets[0].targeting.targeting_automation.advantage_audience).toBe(0);
+    expect(plan.adSets[0].targeting.geo_locations).toEqual({ countries: ["EG"] });
+    // "Start now" is the only way anything is created active; no end date when days = 0.
+    const live = splitCampaignPlan(src, items, { name: "Test", dailyBudget: 300, currency: "JPY", days: 0, startNow: true });
+    expect(live.campaign.status).toBe("ACTIVE");
+    expect(live.adSets[0]).toMatchObject({ status: "ACTIVE", daily_budget: 300, end_time: undefined });
+    expect(toMinor(12.5, "USD")).toBe(1250);
+  });
+});
+
+describe("split test verdict", () => {
+  it("waits until every interest had a fair chance, then names a clear winner and the losers", async () => {
+    const { splitTestStatus } = await import("@/lib/interest-advice");
+    const arm = (value: string, spend: number, results: number) => ({ id: value, value, spend, results });
+    expect(splitTestStatus([arm("A", 20, 3), arm("B", 25, 4)]).state).toBe("too_early");
+    // B hasn't reached 10 results or spent 3× A's cost per result yet.
+    expect(splitTestStatus([arm("A", 100, 20), arm("B", 10, 1)]).state).toBe("too_early");
+    const done = splitTestStatus([arm("A", 100, 20), arm("B", 150, 12), arm("C", 40, 0)]);
+    expect(done).toMatchObject({ state: "winner", winnerId: "A" });
+    expect(done.loserIds.sort()).toEqual(["B", "C"]);
+    expect(splitTestStatus([arm("A", 100, 20), arm("B", 110, 20)]).state).toBe("no_clear_winner");
+  });
+});

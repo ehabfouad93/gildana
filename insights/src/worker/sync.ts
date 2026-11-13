@@ -193,7 +193,9 @@ async function demoSplitTests(accountId: string): Promise<SyncContext["splitTest
   const ext = new Map(sources.map((s) => [s.id, s.externalId]));
   return tests.flatMap((t) => {
     const src = ext.get(t.sourceAdSetId);
-    return src ? [{ sourceAdSet: src, arms: (t.arms as { externalId: string; interest: RemoteTargetingItem }[]).map((a) => ({ externalId: a.externalId, interest: a.interest })) }] : [];
+    if (!src) return [];
+    const arms = (t.arms as { externalId: string; interest: RemoteTargetingItem; paused?: boolean }[]).map((a) => ({ externalId: a.externalId, interest: a.interest, paused: a.paused }));
+    return [{ sourceAdSet: src, arms, ...(t.kind === "campaign" && t.newCampaignExternalId ? { campaign: { externalId: t.newCampaignExternalId, name: t.name || "Interest split test" } } : {}) }];
   });
 }
 

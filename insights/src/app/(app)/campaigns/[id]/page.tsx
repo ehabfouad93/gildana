@@ -6,6 +6,7 @@ import { CreativeCard } from "@/components/creative";
 import { Filters } from "@/components/filters";
 import { KpiGrid, fmtMetric } from "@/components/kpi";
 import { NotMeasuredList } from "@/components/not-measured";
+import { SplitTestsCard } from "@/components/split-tests-card";
 import { PageHeader } from "@/components/shell";
 import { DataTable } from "@/components/table";
 import { METRIC_COLS, SOURCE_LABEL } from "@/components/table-types";
@@ -16,7 +17,7 @@ import { convert, fxTable, fxUpdatedAt } from "@/lib/fx";
 import { money } from "@/lib/format";
 import { pageContext, qs, type SP } from "@/lib/page";
 import { PLATFORM_META } from "@/lib/platforms";
-import { adSetTable, adTable, audienceInsights, breakdown, daily, keywordTable, leadSegments, placementTable, searchTermTable, totals } from "@/lib/queries";
+import { adSetTable, adTable, audienceInsights, breakdown, daily, keywordTable, leadSegments, placementTable, searchTermTable, splitTests, totals } from "@/lib/queries";
 import { canEdit } from "@/lib/tenancy";
 import { SplitTestButton } from "@/components/split-test-button";
 import { mrow } from "@/lib/rows";
@@ -186,9 +187,10 @@ export default async function CampaignPage({ params, searchParams }: { params: P
   }
 
   async function TargetingTab() {
-    const [{ rows, notMeasured }, sets, tests] = await Promise.all([
+    const [{ rows, notMeasured }, sets, tests, testViews] = await Promise.all([
       audienceInsights(scope, range, { campaignId: id }), adSetTable(scope, range, id),
       db.interestTest.findMany({ where: { campaignId: id }, orderBy: { createdAt: "desc" } }),
+      splitTests(c.scope, { campaignId: id }, (n) => money(n, c.scope.currency)),
     ]);
     const ORDER = ["interest", "behavior", "audience", "lookalike", "keyword", "job_title", "seniority", "industry", "company_size", "demographic", "age", "gender", "geo", "language", "placement", "device"];
     const segRows = rows.filter((r) => r.source !== "setting");
@@ -221,21 +223,13 @@ export default async function CampaignPage({ params, searchParams }: { params: P
               rows={settings.map((p) => ({ ...mrow(p.m), type: p.type.replace(/_/g, " "), option: p.value, adSets: p.adSets }))} />
           </div>
         )}
-        {tests.length > 0 && (
-          <div className="card">
-            <h3 className="mb-2 text-sm font-semibold">Interest split tests</h3>
-            <table className="tbl"><tbody>
-              {tests.map((t) => (
-                <tr key={t.id}>
-                  <td>{sets.find((x) => x.id === t.sourceAdSetId)?.name ?? "—"}</td>
-                  <td className="!whitespace-normal">{(t.arms as { interest: { value: string } }[]).map((a) => a.interest.value).join(" · ") || "—"}</td>
-                  <td><span className={`pill ${t.status === "failed" ? "bg-red-100 text-bad" : "bg-blue-100 text-blue-800"}`}>{t.status === "created" ? "created — paused" : t.status}</span></td>
-                  <td className="text-xs text-muted">{t.createdAt.toISOString().slice(0, 10)}{t.error ? ` · ${t.error}` : ""}</td>
-                </tr>
-              ))}
-            </tbody></table>
+        {campaign!.platform === "META" && (
+          <div className="card flex flex-wrap items-center gap-3 text-sm">
+            <span>What to scale, stop and test next for this campaign — from your history, Claude and OpenAI.</span>
+            <Link className="btn ms-auto" href={`/audiences?v=suggest&camp=${id}`}>Suggestions for this campaign →</Link>
           </div>
         )}
+        <SplitTestsCard tests={testViews} currency={c.scope.currency} canPause={canEdit(c.viewer)} />
         <div className="card">
           <h3 className="mb-3 text-sm font-semibold">Full targeting per {unit}</h3>
           <div className="space-y-4">

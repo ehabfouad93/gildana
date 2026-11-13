@@ -6,6 +6,7 @@ import { toDate, type Range } from "@/lib/dates";
 import { ZERO, add, derive, type Totals } from "@/lib/metrics";
 import { advantageAudience } from "@/platforms/meta/normalize";
 import { SEGMENT_TYPES } from "@/lib/segments";
+import { splitTestStatus, type ArmResult, type History, type TestVerdict } from "@/lib/interest-advice";
 
 /**
  * Warehouse reads. Every function takes the already-scoped account ids (see
@@ -282,6 +283,83 @@ export async function leadSegments(scope: Scope, adSetIds: string[]): Promise<Ma
   for (const x of sets) {
     const items = x.targeting.filter((t) => SEGMENT_TYPES.has(t.type)).map((t) => t.value);
     out.set(x.id, { exact: items.length === 1 ? items[0] : null, mixed: items.length > 1 ? items : [] });
+  }
+  return out;
+}
+
+/**
+ * Everything the Meta ad sets in scope ever did, for the suggestion engine
+ * (src/lib/interest-advice.ts): each ad set's interests with its all-time
+ * spend and results. Ignores the page's date filter on purpose.
+ */
+export async function interestHistory(scope: Scope): Promise<History> {
+  const today = new Date().toISOString().slice(0, 10);
+  if (!scope.accountIds.length) return { currency: scope.currency, sets: [], today };
+  const [sets, raw, info, fx] = await Promise.all([
+    db.adSet.findMany({
+      where: { accountId: { in: scope.accountIds }, platform: "META" },
+      select: { id: true, name: true, accountId: true, campaignId: true, targetingRaw: true, campaign: { select: { name: true, objective: true } }, targeting: { where: { exclude: false } } },
+    }),
+    db.statDaily.groupBy({
+      by: ["accountId", "entityId"], where: { accountId: { in: scope.accountIds }, platform: "META", level: "ADSET" },
+      _sum: SUM, _min: { date: true }, _max: { date: true },
+    }),
+    accountInfo(scope.accountIds),
+    fxTable(),
+  ]);
+  const stat = new Map(raw.map((g) => [g.entityId, g]));
+  return {
+    currency: scope.currency, today,
+    sets: sets.map((x) => {
+      const g = stat.get(x.id);
+      const t = g ? toTotals(g._sum, info.get(x.accountId)?.currency ?? scope.currency, scope.currency, fx) : { ...ZERO };
+      return {
+        id: x.id, name: x.name, accountId: x.accountId, campaignId: x.campaignId, campaignName: x.campaign.name, objective: x.campaign.objective.replace(/^OUTCOME_/, ""),
+        interests: x.targeting.filter((ti) => SEGMENT_TYPES.has(ti.type)).map((ti) => ({ type: ti.type, value: ti.value, externalId: ti.externalId })),
+        widened: advantageAudience(x.targetingRaw as Record<string, unknown> | null),
+        spend: t.spend, results: t.leads || t.conversions,
+        firstDate: g?._min.date?.toISOString().slice(0, 10) ?? null, lastDate: g?._max.date?.toISOString().slice(0, 10) ?? null,
+      };
+    }),
+  };
+}
+
+export type SplitTestView = {
+  id: string; name: string; kind: string; status: string; createdAt: Date; endsAt: Date | null; campaignId: string | null; sourceAdSetId: string; accountId: string;
+  arms: (ArmResult & { adSetId: string | null; externalId: string; status: string; cpr: number | null })[];
+  verdict: TestVerdict;
+};
+
+/** Interest split tests of the accounts in scope, each arm with its exact results since the test was created. */
+export async function splitTests(scope: Scope, where: { campaignId?: string } = {}, fmt?: (n: number) => string): Promise<SplitTestView[]> {
+  if (!scope.accountIds.length) return [];
+  const tests = await db.interestTest.findMany({ where: { accountId: { in: scope.accountIds }, status: { not: "failed" } }, orderBy: { createdAt: "desc" }, take: 50 });
+  if (!tests.length) return [];
+  const ext = tests.flatMap((t) => (t.arms as { externalId: string }[]).map((a) => a.externalId));
+  const [sets, newCampaigns, info, fx] = await Promise.all([
+    db.adSet.findMany({ where: { accountId: { in: scope.accountIds }, externalId: { in: ext } }, select: { id: true, externalId: true, accountId: true, status: true, campaignId: true } }),
+    db.campaign.findMany({ where: { accountId: { in: scope.accountIds }, externalId: { in: tests.map((t) => t.newCampaignExternalId).filter(Boolean) } }, select: { id: true, externalId: true, accountId: true } }),
+    accountInfo(scope.accountIds),
+    fxTable(),
+  ]);
+  const setOf = new Map(sets.map((x) => [`${x.accountId}|${x.externalId}`, x]));
+  const out: SplitTestView[] = [];
+  for (const t of tests) {
+    const arms = t.arms as { externalId: string; interest: { value: string } }[];
+    const mine = arms.map((a) => setOf.get(`${t.accountId}|${a.externalId}`));
+    const newCampaign = newCampaigns.find((c) => c.accountId === t.accountId && c.externalId === t.newCampaignExternalId);
+    const shownIn = t.kind === "campaign" ? newCampaign?.id ?? null : t.campaignId;
+    if (where.campaignId && where.campaignId !== shownIn && where.campaignId !== t.campaignId) continue;
+    const raw = await db.statDaily.groupBy({
+      by: ["entityId"], where: { accountId: t.accountId, level: "ADSET", entityId: { in: mine.flatMap((x) => (x ? [x.id] : [])) }, date: { gte: toDate(t.createdAt.toISOString().slice(0, 10)) } }, _sum: SUM,
+    });
+    const totalsBy = new Map(raw.map((g) => [g.entityId, toTotals(g._sum, info.get(t.accountId)?.currency ?? scope.currency, scope.currency, fx)]));
+    const rows = arms.map((a, i) => {
+      const tot = mine[i] ? totalsBy.get(mine[i]!.id) : undefined;
+      const results = tot ? tot.leads || tot.conversions : 0;
+      return { id: a.externalId, externalId: a.externalId, adSetId: mine[i]?.id ?? null, status: mine[i]?.status ?? "not synced yet", value: a.interest.value, spend: tot?.spend ?? 0, results, cpr: results > 0 ? (tot?.spend ?? 0) / results : null };
+    });
+    out.push({ id: t.id, name: t.name, kind: t.kind, status: t.status, createdAt: t.createdAt, endsAt: t.endsAt, campaignId: shownIn, sourceAdSetId: t.sourceAdSetId, accountId: t.accountId, arms: rows.sort((a, b) => (a.cpr ?? Infinity) - (b.cpr ?? Infinity)), verdict: splitTestStatus(rows, fmt) });
   }
   return out;
 }

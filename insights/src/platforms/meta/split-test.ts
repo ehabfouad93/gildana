@@ -61,3 +61,99 @@ export async function createInterestSplit(token: string, accountExternalId: stri
   }
   return { arms, dailyBudget: src.daily_budget ? Number(src.daily_budget) / 100 : null };
 }
+
+// ───────── a new campaign with one ad set per interest ─────────
+
+/** Currencies Meta counts in whole units; every other currency is sent in hundredths. */
+const WHOLE_UNIT = new Set(["CLP", "COP", "CRC", "HUF", "ISK", "IDR", "JPY", "KRW", "PYG", "TWD", "VND"]);
+export const toMinor = (amount: number, currency: string) => Math.round(amount * (WHOLE_UNIT.has(currency.toUpperCase()) ? 1 : 100));
+
+export type SplitCampaignOptions = {
+  name: string;
+  /** Daily budget of each ad set, in the account's currency. */
+  dailyBudget: number;
+  currency: string;
+  /** Days to run; 0 = no end date. */
+  days: number;
+  /** false (default) creates everything paused. */
+  startNow: boolean;
+};
+
+/** One arm's targeting: the source's, with detailed targeting reduced to this interest and Advantage+ audience off so Meta stays inside it. Pure; unit-tested. */
+export function strictArmTargeting(targeting: Record<string, any>, item: RemoteTargetingItem): Record<string, any> {
+  const t = armTargeting(targeting, item);
+  delete t.targeting_optimization;
+  t.targeting_automation = { ...(t.targeting_automation ?? {}), advantage_audience: 0 };
+  return t;
+}
+
+/** The campaign and ad-set requests for a split-test campaign, before any call is made. Pure; unit-tested. */
+export function splitCampaignPlan(src: Record<string, any>, items: RemoteTargetingItem[], o: SplitCampaignOptions, now = new Date()) {
+  const status = o.startNow ? "ACTIVE" : "PAUSED";
+  const end = o.days > 0 ? new Date(now.getTime() + o.days * 86_400_000).toISOString() : undefined;
+  const c = src.campaign ?? {};
+  return {
+    campaign: {
+      name: o.name.slice(0, 250), objective: c.objective, status,
+      special_ad_categories: c.special_ad_categories ?? [], special_ad_category_country: c.special_ad_category_country,
+      buying_type: c.buying_type ?? "AUCTION",
+      // Each ad set keeps its own budget, so every interest gets the same spend.
+      is_adset_budget_sharing_enabled: false,
+    },
+    adSets: items.map((item) => ({
+      name: `${item.value}`.slice(0, 250), billing_event: src.billing_event, optimization_goal: src.optimization_goal,
+      bid_strategy: src.bid_strategy, bid_amount: src.bid_amount, daily_budget: toMinor(o.dailyBudget, o.currency), end_time: end,
+      promoted_object: src.promoted_object, attribution_spec: src.attribution_spec, destination_type: src.destination_type,
+      targeting: strictArmTargeting(src.targeting, item), status,
+    })),
+  };
+}
+
+/** Finds the Meta interest that matches a name (for AI-suggested interests the account has never used). */
+export async function findInterest(token: string, accountExternalId: string, name: string): Promise<RemoteTargetingItem | null> {
+  const act = accountExternalId.startsWith("act_") ? accountExternalId : `act_${accountExternalId}`;
+  const r: { data?: { id: string; name: string; type: string }[] } = await fetchJson(`${G()}/${act}/targetingsearch?` + new URLSearchParams({ access_token: token, q: name, limit: "10" }));
+  const list = (r.data ?? []).filter((x) => x.type === "interests");
+  const hit = list.find((x) => x.name.toLowerCase() === name.toLowerCase()) ?? list[0];
+  return hit ? { type: "interest", value: hit.name, externalId: String(hit.id) } : null;
+}
+
+/**
+ * Creates a new campaign with one ad set per interest, each a copy of the
+ * source ad set (ads, optimisation, placements, location, age) with its own
+ * equal daily budget. Paused unless `startNow`.
+ */
+export async function createSplitCampaign(token: string, accountExternalId: string, adSetExternalId: string, items: RemoteTargetingItem[], o: SplitCampaignOptions) {
+  const act = accountExternalId.startsWith("act_") ? accountExternalId : `act_${accountExternalId}`;
+  const fields = [...COPY_FIELDS, "campaign{objective,special_ad_categories,special_ad_category_country,buying_type}"].join(",");
+  const src: Record<string, any> = await fetchJson(`${G()}/${adSetExternalId}?` + new URLSearchParams({ access_token: token, fields }));
+  const ads: { data?: { id: string }[] } = await fetchJson(`${G()}/${adSetExternalId}/ads?` + new URLSearchParams({ access_token: token, fields: "id", limit: "50" }));
+  const plan = splitCampaignPlan(src, items, o);
+
+  let campaign: { id?: string };
+  try {
+    campaign = await post(`${act}/campaigns`, token, plan.campaign);
+  } catch (e) {
+    // Graph versions before the budget-sharing switch reject the parameter; the default there is already per-ad-set budgets.
+    if (!/is_adset_budget_sharing_enabled/i.test((e as Error).message)) throw e;
+    const { is_adset_budget_sharing_enabled: _drop, ...rest } = plan.campaign;
+    campaign = await post(`${act}/campaigns`, token, rest);
+  }
+  const campaignId = String(campaign.id);
+
+  const arms: { externalId: string; interest: RemoteTargetingItem; adErrors: string[] }[] = [];
+  for (const [i, item] of items.entries()) {
+    const created = await post(`${act}/adsets`, token, { ...plan.adSets[i], campaign_id: campaignId });
+    const adErrors: string[] = [];
+    for (const ad of ads.data ?? []) {
+      try { await post(`${ad.id}/copies`, token, { adset_id: created.id, status_option: o.startNow ? "ACTIVE" : "PAUSED" }); } catch (e) { adErrors.push((e as Error).message); }
+    }
+    arms.push({ externalId: String(created.id), interest: item, adErrors });
+  }
+  return { campaignExternalId: campaignId, arms };
+}
+
+/** Pauses ad sets (the losing arms of a finished test). */
+export async function pauseAdSets(token: string, adSetExternalIds: string[]) {
+  for (const id of adSetExternalIds) await post(id, token, { status: "PAUSED" });
+}

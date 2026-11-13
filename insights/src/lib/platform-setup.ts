@@ -131,7 +131,9 @@ export const GENERAL_FIELDS: Field[] = [
   { key: "SMTP_USER", label: "Mailbox (username)", placeholder: "noreply@gildana.net", help: "The full email address of the mailbox that sends." },
   { key: "SMTP_PASS", label: "Mailbox password", secret: true },
   { key: "MAIL_FROM", label: "Send emails as (optional)", placeholder: "Gildana Insights <noreply@gildana.net>", help: "Defaults to the mailbox above." },
-  { key: "ANTHROPIC_API_KEY", label: "Claude API key", secret: true, help: "GEO reviews and AI-visibility checks." },
+  { key: "ANTHROPIC_API_KEY", label: "Claude API key", secret: true, help: "GEO reviews, AI-visibility checks and Claude's interest suggestions." },
+  { key: "OPENAI_API_KEY", label: "OpenAI API key", secret: true, help: "Optional — adds OpenAI's interest suggestions next to Claude's. From platform.openai.com → API keys." },
+  { key: "OPENAI_MODEL", label: "OpenAI model (optional)", placeholder: "gpt-6-astra", help: "The model id from your OpenAI account. Leave empty for the default." },
   { key: "PAGESPEED_API_KEY", label: "PageSpeed Insights API key", secret: true, help: "Optional — higher quota for Core Web Vitals." },
 ];
 
