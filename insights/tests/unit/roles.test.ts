@@ -7,11 +7,11 @@ vi.mock("@/auth", () => ({ auth: async () => null }));
 vi.mock("@/lib/db", () => ({ db: {} }));
 vi.mock("@/lib/settings", () => ({ loadSettings: async () => undefined }));
 
-const { accountWhere, canEdit, canManageClient, canManageTeam, canUse, companyWhere } = await import("@/lib/tenancy");
+const { accountWhere, canEdit, canFeature, canManageClient, canManageTeam, canUse, companyWhere } = await import("@/lib/tenancy");
 const { homePath } = await import("@/lib/modules");
 type V = Parameters<typeof canEdit>[0];
 
-const base: V = { id: "u", role: "CLIENT", email: "", name: "", locale: "en", clientId: "c1", isAdmin: false, isGildana: false, access: null, companyIds: [], modules: [], clientIds: [] };
+const base: V = { id: "u", role: "CLIENT", email: "", name: "", locale: "en", clientId: "c1", isAdmin: false, isGildana: false, access: null, companyIds: [], modules: [], featuresOff: [], clientIds: [] };
 
 describe("roles", () => {
   it("admins manage every client; account managers only theirs", () => {
@@ -54,5 +54,15 @@ describe("roles", () => {
     expect(canUse(v, "sites")).toBe(false);
     expect(homePath(v.modules)).toBe("/spend");
     expect(homePath([])).toBe("/overview");
+  });
+
+  it("features: on unless switched off, and off when their section is closed", () => {
+    expect(canFeature(base, "campaigns.breakdowns")).toBe(true);
+    const v = { ...base, featuresOff: ["campaigns.breakdowns", "audiences.ai"] };
+    expect(canFeature(v, "campaigns.breakdowns")).toBe(false);
+    expect(canFeature(v, "campaigns.leads")).toBe(true);
+    expect(canFeature(v, "audiences.ai")).toBe(false);
+    expect(canFeature({ ...base, modules: ["spend"] }, "audiences.suggestions")).toBe(false);
+    expect(canFeature({ ...base, modules: ["spend"] }, "general.sync_breakdowns")).toBe(true);
   });
 });

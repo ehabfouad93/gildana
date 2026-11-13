@@ -9,7 +9,7 @@ import { AI_SYSTEM, advicePrompt, parseAiAdvice } from "@/lib/interest-advice";
 import { askOpenAI, openaiEnabled } from "@/lib/openai";
 import { interestHistory } from "@/lib/queries";
 import { adviceScope } from "@/lib/advice-scope";
-import { requireModule } from "@/lib/tenancy";
+import { canFeature, requireModule } from "@/lib/tenancy";
 
 export type AiKind = "claude" | "openai";
 
@@ -19,6 +19,7 @@ export type AiKind = "claude" | "openai";
  */
 export async function askAiAdviceAction(_: string | null, form: FormData): Promise<string | null> {
   const v = await requireModule("audiences");
+  if (!canFeature(v, "audiences.ai")) return "error:AI suggestions are switched off for your account.";
   const kind: AiKind = form.get("kind") === "openai" ? "openai" : "claude";
   if (kind === "claude" ? !claudeEnabled() : !openaiEnabled()) return `error:${kind === "claude" ? "Claude" : "OpenAI"} isn't connected — add its API key in Admin → Platforms.`;
   const { accountIds, campaign, scopeKey } = await adviceScope(v, String(form.get("campaignId") || "") || undefined);

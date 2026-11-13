@@ -18,7 +18,7 @@ import { money } from "@/lib/format";
 import { pageContext, qs, type SP } from "@/lib/page";
 import { PLATFORM_META } from "@/lib/platforms";
 import { adSetTable, adTable, audienceInsights, breakdown, daily, keywordTable, leadSegments, placementTable, searchTermTable, splitTests, totals } from "@/lib/queries";
-import { canEdit } from "@/lib/tenancy";
+import { canEdit, canFeature, canUse } from "@/lib/tenancy";
 import { SplitTestButton } from "@/components/split-test-button";
 import { mrow } from "@/lib/rows";
 import { toDate } from "@/lib/dates";
@@ -27,10 +27,10 @@ import { DIM_LABEL } from "@/lib/labels";
 export const metadata = { title: "Campaign" };
 
 
-const TABS = [
+const TABS: readonly (readonly ["adsets" | "ads" | "breakdowns" | "targeting" | "leads" | "keywords" | "search_terms" | "placements", string])[] = [
   ["adsets", "Ad sets"], ["ads", "Ads & creatives"], ["breakdowns", "Breakdowns"], ["targeting", "Targeting & audiences"],
   ["leads", "Leads"], ["keywords", "Keywords"], ["search_terms", "Search terms"], ["placements", "Placements"],
-] as const;
+];
 
 export default async function CampaignPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<SP> }) {
   const { id } = await params;
@@ -57,19 +57,22 @@ export default async function CampaignPage({ params, searchParams }: { params: P
   const plCount = isGoogle ? await db.placement.count({ where: { campaignId: id } }) : 0;
 
   const tabs = TABS.filter(([k]) => {
+    // Tabs switched off for this team member are not shown, and can't be opened by URL either.
+    if (!canFeature(c.viewer, `campaigns.${k}`)) return false;
     if (k === "leads") return leadCount > 0;
     if (k === "keywords" || k === "search_terms") return kwCount > 0;
     if (k === "placements") return plCount > 0;
     return true;
   });
-  const tab = tabs.some(([k]) => k === c.one("tab")) ? c.one("tab") : "adsets";
+  const tab = tabs.some(([k]) => k === c.one("tab")) ? c.one("tab") : tabs[0]?.[0] ?? "";
+  const mayTest = canEdit(c.viewer) && canFeature(c.viewer, "audiences.create_test");
   const keep = { days: c.one("days"), from: c.one("from"), to: c.one("to"), cur: c.one("cur") };
 
   return (
     <>
       <PageHeader title={campaign.name} sub={`${meta.label} · ${campaign.account.name} · ${campaign.account.company?.name ?? ""} · ${campaign.status} · ${campaign.objective}${campaign.dailyBudget ? ` · ${money(Number(campaign.dailyBudget), campaign.account.currency)}/day` : ""}`}>
         <Filters t={t} companies={[]} range={range} days={c.one("days")} showPlatform={false} extra={{ tab }} />
-        <Link href={`/reports?campaign=${id}`} className="btn-ghost no-print">Share report</Link>
+        {canFeature(c.viewer, "campaigns.share") && canUse(c.viewer, "reports") && <Link href={`/reports?campaign=${id}`} className="btn-ghost no-print">Share report</Link>}
       </PageHeader>
       <div className="mb-3"><CurrencySwitch sp={c.sp} mode={curMode} account={campaign.account.currency} reporting={c.scope.currency} rate={fxNote} /></div>
 
@@ -95,7 +98,7 @@ export default async function CampaignPage({ params, searchParams }: { params: P
 
         {tab === "adsets" && <AdSetsTab />}
         {tab === "ads" && <AdsTab />}
-        {tab === "breakdowns" && <><BreakdownSync accountIds={[campaign.accountId]} module="campaigns" path={`/campaigns/${id}`} /><BreakdownsTab /></>}
+        {tab === "breakdowns" && <>{canFeature(c.viewer, "general.sync_breakdowns") && <BreakdownSync accountIds={[campaign.accountId]} module="campaigns" path={`/campaigns/${id}`} />}<BreakdownsTab /></>}
         {tab === "targeting" && <TargetingTab />}
         {tab === "leads" && <LeadsTab />}
         {tab === "keywords" && <KeywordsTab />}
@@ -213,7 +216,7 @@ export default async function CampaignPage({ params, searchParams }: { params: P
               rows={segRows.filter((p) => p.type === ty).map((p) => ({ ...mrow(p.m), option: p.value, source: SOURCE_LABEL[p.source], note: p.note, adSets: p.adSets }))} />
           </div>
         ))}
-        <NotMeasuredList items={notMeasured} canTest={canEdit(c.viewer)} unit={unit} />
+        <NotMeasuredList items={notMeasured} canTest={mayTest} unit={unit} />
         {settings.length > 0 && (
           <div className="card">
             <h3 className="mb-2 text-sm font-semibold">Delivery settings</h3>
@@ -223,18 +226,18 @@ export default async function CampaignPage({ params, searchParams }: { params: P
               rows={settings.map((p) => ({ ...mrow(p.m), type: p.type.replace(/_/g, " "), option: p.value, adSets: p.adSets }))} />
           </div>
         )}
-        {campaign!.platform === "META" && (
+        {campaign!.platform === "META" && canFeature(c.viewer, "audiences.suggestions") && (
           <div className="card flex flex-wrap items-center gap-3 text-sm">
             <span>What to scale, stop and test next for this campaign — from your history, Claude and OpenAI.</span>
             <Link className="btn ms-auto" href={`/audiences?v=suggest&camp=${id}`}>Suggestions for this campaign →</Link>
           </div>
         )}
-        <SplitTestsCard tests={testViews} currency={c.scope.currency} canPause={canEdit(c.viewer)} />
+        <SplitTestsCard tests={testViews} currency={c.scope.currency} canPause={canEdit(c.viewer) && canFeature(c.viewer, "audiences.pause_losers")} />
         <div className="card">
           <h3 className="mb-3 text-sm font-semibold">Full targeting per {unit}</h3>
           <div className="space-y-4">
             {sets.map((s) => {
-              const splittable = campaign!.platform === "META" && canEdit(c.viewer) && !testedSource.has(s.id) && s.targeting.filter((x) => !x.exclude && (x.type === "interest" || x.type === "behavior")).length >= 2;
+              const splittable = campaign!.platform === "META" && mayTest && !testedSource.has(s.id) && s.targeting.filter((x) => !x.exclude && (x.type === "interest" || x.type === "behavior")).length >= 2;
               return (
                 <div key={s.id} className="rounded-lg border border-line p-3">
                   <div className="flex flex-wrap items-baseline justify-between gap-2">

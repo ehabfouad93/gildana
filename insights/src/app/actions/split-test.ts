@@ -7,12 +7,14 @@ import { decrypt } from "@/lib/crypto";
 import { lastNDays, ymd } from "@/lib/dates";
 import { enqueueSync, syncNow } from "@/lib/jobs";
 import { splitTests } from "@/lib/queries";
-import { accessWhere, canEdit, requireModule, scopedAccountIds } from "@/lib/tenancy";
+import { accessWhere, canEdit, canFeature, requireModule, scopedAccountIds } from "@/lib/tenancy";
 import { WRITE_SCOPE } from "@/platforms/meta";
 import { createInterestSplit, createSplitCampaign, findInterest, pauseAdSets } from "@/platforms/meta/split-test";
 import type { RemoteTargetingItem } from "@/platforms/types";
 
 export type SplitResult = { ok: boolean; message: string };
+
+const OFF = "This feature is switched off for your account. Ask a workspace owner to turn it on in Team.";
 
 /**
  * Splits a Meta ad set into one PAUSED ad set per selected interest. Demo
@@ -21,6 +23,7 @@ export type SplitResult = { ok: boolean; message: string };
 export async function splitAdSetAction(adSetId: string, targetingIds: string[]): Promise<SplitResult> {
   const v = await requireModule("campaigns");
   if (!canEdit(v)) return { ok: false, message: "Read-only users cannot create split tests." };
+  if (!canFeature(v, "audiences.create_test")) return { ok: false, message: OFF };
   const set = await db.adSet.findFirst({
     where: { id: adSetId, account: { connection: { clientId: v.clientId }, ...accessWhere(v.access) } },
     include: { targeting: true, account: { include: { connection: true } } },
@@ -84,6 +87,7 @@ export type SplitCampaignResult = { ok: boolean; message: string; campaignId?: s
 export async function createSplitCampaignAction(_: SplitCampaignResult | null, form: FormData): Promise<SplitCampaignResult> {
   const v = await requireModule("audiences");
   if (!canEdit(v)) return { ok: false, message: "Read-only users cannot create campaigns." };
+  if (!canFeature(v, "audiences.create_test")) return { ok: false, message: OFF };
   const set = await db.adSet.findFirst({
     where: { id: String(form.get("sourceAdSetId")), platform: "META", account: { connection: { clientId: v.clientId }, ...accessWhere(v.access) } },
     include: { account: { include: { connection: true } }, campaign: { select: { name: true } } },
@@ -162,6 +166,7 @@ export async function createSplitCampaignAction(_: SplitCampaignResult | null, f
 export async function pauseLosersAction(_: SplitResult | null, form: FormData): Promise<SplitResult> {
   const v = await requireModule("audiences");
   if (!canEdit(v)) return { ok: false, message: "Read-only users cannot pause ad sets." };
+  if (!canFeature(v, "audiences.pause_losers")) return { ok: false, message: OFF };
   const accountIds = await scopedAccountIds(v.clientId, { access: v.access, platform: "META" });
   const client = await db.client.findUniqueOrThrow({ where: { id: v.clientId }, select: { reportingCurrency: true } });
   const test = (await splitTests({ accountIds, currency: client.reportingCurrency })).find((t) => t.id === String(form.get("testId")));

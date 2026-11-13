@@ -24,3 +24,34 @@ export function hasModule(modules: string[], m: ModuleKey): boolean {
 export function homePath(modules: string[]): string {
   return MODULES.find((m) => hasModule(modules, m.key))?.path ?? "/account";
 }
+
+/**
+ * Sub-features inside the sections, which an owner can switch off for a team
+ * member (stored as a switched-off list, so new features start on).
+ */
+export const FEATURES = [
+  { key: "campaigns.adsets", module: "campaigns", label: "Ad sets tab" },
+  { key: "campaigns.ads", module: "campaigns", label: "Ads & creatives tab" },
+  { key: "campaigns.breakdowns", module: "campaigns", label: "Breakdowns tab (age, gender, country, placement…)" },
+  { key: "campaigns.targeting", module: "campaigns", label: "Targeting & audiences tab" },
+  { key: "campaigns.leads", module: "campaigns", label: "Leads tab (lead details)" },
+  { key: "campaigns.keywords", module: "campaigns", label: "Keywords tab" },
+  { key: "campaigns.search_terms", module: "campaigns", label: "Search terms tab" },
+  { key: "campaigns.placements", module: "campaigns", label: "Placements tab" },
+  { key: "campaigns.share", module: "campaigns", label: "Share report button" },
+  { key: "performance.breakdown", module: "performance", label: "Audience breakdown" },
+  { key: "audiences.results", module: "audiences", label: "Exact results" },
+  { key: "audiences.suggestions", module: "audiences", label: "Suggestions from history" },
+  { key: "audiences.ai", module: "audiences", label: "AI suggestions (Claude / OpenAI)" },
+  { key: "audiences.create_test", module: "audiences", label: "Create split tests and split-test campaigns" },
+  { key: "audiences.pause_losers", module: "audiences", label: "Pause losing ad sets" },
+  { key: "general.sync_breakdowns", module: "general", label: "“Sync breakdowns now” button" },
+] as const;
+
+export type FeatureKey = (typeof FEATURES)[number]["key"];
+export const FEATURE_KEYS: string[] = FEATURES.map((f) => f.key);
+
+/** Whether a feature is on, given the user's switched-off list. */
+export function hasFeature(off: string[], f: FeatureKey): boolean {
+  return !off.includes(f);
+}

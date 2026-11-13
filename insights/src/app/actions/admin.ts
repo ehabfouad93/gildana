@@ -9,7 +9,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { randomToken } from "@/lib/crypto";
 import { mailEnabled, sendMail } from "@/lib/mail";
-import { MODULE_KEYS } from "@/lib/modules";
+import { FEATURE_KEYS, MODULE_KEYS } from "@/lib/modules";
 import { createResetToken, passwordProblem } from "@/lib/password-reset";
 import { WORKSPACE_COOKIE, canManageClient, requireAdmin, requireGildana, requireViewer, type Viewer } from "@/lib/tenancy";
 
@@ -150,7 +150,7 @@ export async function addUserAction(_: Result, form: FormData): Promise<Result> 
     const problem = passwordProblem(password);
     if (problem) return fail(problem);
   }
-  const grant = clientId ? await clientGrant(clientId, d.data.role, form) : { companyIds: [], accountIds: [], modules: [] };
+  const grant = clientId ? await clientGrant(clientId, d.data.role, form) : { companyIds: [], accountIds: [], modules: [], featuresOff: [] };
   if (typeof grant === "string") return fail(grant);
   const clientIds = !clientId && d.data.role === "STAFF" ? await validClients(form.getAll("access").map(String)) : [];
   const user = await db.user.create({
@@ -210,8 +210,8 @@ async function validCompanies(clientId: string, ids: string[]): Promise<string[]
  * ticked companies / single accounts, and all sections or ticked ones.
  * Owners always get everything. Returns an error message when nothing is ticked.
  */
-async function clientGrant(clientId: string, role: Role, form: FormData): Promise<{ companyIds: string[]; accountIds: string[]; modules: string[] } | string> {
-  if (role === "OWNER") return { companyIds: [], accountIds: [], modules: [] };
+async function clientGrant(clientId: string, role: Role, form: FormData): Promise<{ companyIds: string[]; accountIds: string[]; modules: string[]; featuresOff: string[] } | string> {
+  if (role === "OWNER") return { companyIds: [], accountIds: [], modules: [], featuresOff: [] };
   let companyIds: string[] = [];
   let accountIds: string[] = [];
   if (form.get("accessMode") === "some") {
@@ -227,7 +227,10 @@ async function clientGrant(clientId: string, role: Role, form: FormData): Promis
     if (!modules.length) return "Tick at least one section, or choose “All sections”.";
     if (modules.length === MODULE_KEYS.length) modules = [];
   }
-  return { companyIds, accountIds, modules };
+  // Features: the form lists every feature with a tick box; unticked ones are switched off.
+  const on = new Set(form.getAll("featureOn").map(String));
+  const featuresOff = form.has("featuresShown") ? FEATURE_KEYS.filter((f) => !on.has(f)) : [];
+  return { companyIds, accountIds, modules, featuresOff };
 }
 
 async function validClients(ids: string[]): Promise<string[]> {

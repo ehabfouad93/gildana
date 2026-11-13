@@ -7,7 +7,7 @@ import { CopyButton } from "@/components/copy";
 export type ManagedUser = {
   id: string; email: string; name: string; role: string; active: boolean; lastLogin: string | null;
   /** Client users: whole companies, single ad accounts and sections (empty = all). */
-  companyIds: string[]; accountIds: string[]; modules: string[];
+  companyIds: string[]; accountIds: string[]; modules: string[]; featuresOff: string[];
   /** Account managers: assigned clients. */
   clientIds: string[];
 };
@@ -25,6 +25,8 @@ type Props = {
   companies?: PickCompany[];
   unassigned?: PickAccount[];
   modules?: { key: string; label: string }[];
+  /** Sub-features that can be switched off per user, grouped by their section. */
+  features?: { key: string; module: string; label: string }[];
   /** Gildana team: clients an account manager can be assigned. */
   clients?: { id: string; name: string }[];
 };
@@ -144,6 +146,44 @@ function SectionAccess({ p, u }: { p: Props; u?: ManagedUser }) {
   );
 }
 
+/** On/off switches for the sub-features inside the sections (tabs, breakdowns, AI, creating tests…). */
+function FeatureAccess({ p, u }: { p: Props; u?: ManagedUser }) {
+  const feats = p.features ?? [];
+  const [off, setOff] = useState(() => new Set(u?.featuresOff ?? []));
+  const [open, setOpen] = useState((u?.featuresOff.length ?? 0) > 0);
+  if (!feats.length) return null;
+  const groups = [...new Set(feats.map((f) => f.module))];
+  const title = (m: string) => (m === "general" ? "General" : p.modules?.find((x) => x.key === m)?.label ?? m);
+  const flip = (key: string, on: boolean) => setOff((s) => { const n = new Set(s); if (on) n.delete(key); else n.add(key); return n; });
+  return (
+    <div>
+      <input type="hidden" name="featuresShown" value="1" />
+      {/* Submitted even while the list is collapsed. */}
+      {feats.filter((f) => !off.has(f.key)).map((f) => <input key={f.key} type="hidden" name="featureOn" value={f.key} />)}
+      <button type="button" className="text-sm text-accent hover:underline" onClick={() => setOpen(!open)}>
+        {open ? "▾" : "▸"} Features inside the sections — {off.size ? `${off.size} switched off` : "all on"}
+      </button>
+      {open && (
+        <div className="mt-2 grid gap-3 rounded-lg border border-line bg-panel p-3 text-sm sm:grid-cols-2">
+          {groups.map((g) => (
+            <div key={g}>
+              <div className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted">
+                {title(g)}
+                <button type="button" className="font-normal normal-case text-accent hover:underline" onClick={() => setOff((s) => { const n = new Set(s); const mine = feats.filter((f) => f.module === g); const allOn = mine.every((f) => !n.has(f.key)); mine.forEach((f) => (allOn ? n.add(f.key) : n.delete(f.key))); return n; })}>
+                  {feats.filter((f) => f.module === g).every((f) => !off.has(f.key)) ? "all off" : "all on"}
+                </button>
+              </div>
+              {feats.filter((f) => f.module === g).map((f) => (
+                <label key={f.key} className="flex items-center gap-2 py-0.5"><input type="checkbox" checked={!off.has(f.key)} onChange={(e) => flip(f.key, e.target.checked)} />{f.label}</label>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Role-dependent access fields: sections + ad accounts for client users, clients for account managers. */
 function AccessFields({ p, u, role }: { p: Props; u?: ManagedUser; role: string }) {
   if (p.clientId) {
@@ -151,6 +191,7 @@ function AccessFields({ p, u, role }: { p: Props; u?: ManagedUser; role: string 
     return (
       <div className="space-y-4">
         <div><div className="label">Sections they can open</div><SectionAccess p={p} u={u} /></div>
+        <FeatureAccess p={p} u={u} />
         <div><div className="label">Ad accounts they can see</div><AccountAccess p={p} u={u} /></div>
       </div>
     );
@@ -182,8 +223,9 @@ function accessText(u: ManagedUser, p: Props) {
 }
 
 function sectionText(u: ManagedUser, p: Props) {
-  if (!LIMITABLE.includes(u.role) || !u.modules.length) return "All";
-  return `${u.modules.length} of ${p.modules?.length ?? 0}`;
+  if (!LIMITABLE.includes(u.role)) return "All";
+  const sections = u.modules.length ? `${u.modules.length} of ${p.modules?.length ?? 0}` : "All";
+  return u.featuresOff.length ? `${sections} · ${u.featuresOff.length} feature${u.featuresOff.length > 1 ? "s" : ""} off` : sections;
 }
 
 function UserRow({ u, p }: { u: ManagedUser; p: Props }) {

@@ -5,7 +5,7 @@ import type { Platform, Prisma } from "@prisma/client";
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
 import { loadSettings } from "@/lib/settings";
-import { hasModule, homePath, type ModuleKey } from "@/lib/modules";
+import { hasFeature, hasModule, homePath, type FeatureKey, type ModuleKey } from "@/lib/modules";
 
 export type Access = { companyIds: string[]; accountIds: string[] };
 
@@ -32,6 +32,8 @@ export type Viewer = {
   companyIds: string[];
   /** Sections the user may open (empty = all). */
   modules: string[];
+  /** Sub-features switched off for the user (see FEATURES). */
+  featuresOff: string[];
   /** STAFF: the clients they may open. */
   clientIds: string[];
 };
@@ -82,7 +84,7 @@ export async function getViewer(): Promise<Viewer | null> {
   }
   return {
     id: u.id, role: u.role, email: u.email, name: u.name, locale: u.locale, clientId, isAdmin, isGildana,
-    access, companyIds, modules: unrestricted ? [] : u.modules, clientIds: u.clientIds,
+    access, companyIds, modules: unrestricted ? [] : u.modules, featuresOff: unrestricted ? [] : u.featuresOff, clientIds: u.clientIds,
   };
 }
 
@@ -162,6 +164,12 @@ export async function shareWhere(v: Viewer & { clientId: string }): Promise<Pris
 /** Whether a viewer may open a section. */
 export function canUse(v: Viewer, m: ModuleKey): boolean {
   return hasModule(v.modules, m);
+}
+
+/** Whether a sub-feature is switched on for the viewer (its section must be open to them too). */
+export function canFeature(v: Viewer, f: FeatureKey): boolean {
+  const m = f.split(".")[0];
+  return hasFeature(v.featuresOff, f) && (m === "general" || canUse(v, m as ModuleKey));
 }
 
 /** A workspace page in section `m`; anyone without it goes to the first section they have. */

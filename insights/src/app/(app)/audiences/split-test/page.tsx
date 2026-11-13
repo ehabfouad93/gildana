@@ -4,7 +4,7 @@ import { PageHeader } from "@/components/shell";
 import { SplitCampaignForm, type PickOption, type SourceOption } from "@/components/split-campaign-form";
 import { db } from "@/lib/db";
 import type { SP } from "@/lib/page";
-import { accessWhere, canEdit, requireModule } from "@/lib/tenancy";
+import { accessWhere, canEdit, canFeature, requireModule } from "@/lib/tenancy";
 import { WRITE_SCOPE } from "@/platforms/meta";
 
 export const metadata = { title: "Split-test campaign" };
@@ -13,7 +13,7 @@ export const metadata = { title: "Split-test campaign" };
 export default async function SplitTestPage({ searchParams }: { searchParams: Promise<SP> }) {
   const sp = await searchParams;
   const v = await requireModule("audiences");
-  if (!canEdit(v)) redirect("/audiences?v=suggest");
+  if (!canEdit(v) || !canFeature(v, "audiences.create_test")) redirect("/audiences");
   const raw = (Array.isArray(sp.pick) ? sp.pick : sp.pick ? [sp.pick] : []).slice(0, 40);
   const picks: PickOption[] = [];
   for (const r of raw) {

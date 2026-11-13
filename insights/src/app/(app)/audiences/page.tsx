@@ -17,7 +17,7 @@ import { openaiEnabled } from "@/lib/openai";
 import { pageContext, qs, type SP } from "@/lib/page";
 import { audienceInsights, interestHistory, splitTests } from "@/lib/queries";
 import { mrow } from "@/lib/rows";
-import { canEdit } from "@/lib/tenancy";
+import { canEdit, canFeature } from "@/lib/tenancy";
 
 export const metadata = { title: "Audiences" };
 
@@ -36,7 +36,10 @@ const VIEWS = { results: "Exact results", suggest: "Suggestions" } as const;
 export default async function Audiences({ searchParams }: { searchParams: Promise<SP> }) {
   const c = await pageContext(searchParams, "audiences");
   const { t, range } = c;
-  const view = (c.one("v") in VIEWS ? c.one("v") : "results") as keyof typeof VIEWS;
+  // Views switched off for this team member are hidden and can't be opened by URL.
+  const allowed = (Object.keys(VIEWS) as (keyof typeof VIEWS)[]).filter((k) => canFeature(c.viewer, k === "results" ? "audiences.results" : "audiences.suggestions"));
+  const view = allowed.find((k) => k === c.one("v")) ?? allowed[0];
+  if (!view) return <><PageHeader title={t.audiences} /><div className="card text-sm text-muted">The audience views are switched off for your account. Ask a workspace owner to turn them on in Team.</div></>;
 
   return (
     <>
@@ -44,7 +47,7 @@ export default async function Audiences({ searchParams }: { searchParams: Promis
         {view === "results" && <Filters t={t} freshness={c.freshness} accounts={c.accounts} companies={c.companies} companyId={c.companyId} platform={c.platform} range={range} days={c.one("days")} extra={{ g: c.one("g") }} />}
       </PageHeader>
       <div className="mb-4 flex gap-4 border-b border-line">
-        {Object.entries(VIEWS).map(([k, label]) => (
+        {allowed.map((k) => [k, VIEWS[k]] as const).map(([k, label]) => (
           <Link key={k} href={qs(c.sp, { v: k === "results" ? undefined : k })} className={`-mb-px border-b-2 px-1 pb-2 text-sm ${k === view ? "border-accent font-semibold" : "border-transparent text-muted hover:text-ink"}`}>{label}</Link>
         ))}
       </div>
@@ -61,7 +64,7 @@ async function Results({ c }: { c: Ctx }) {
   const { rows, notMeasured } = await audienceInsights(scope, range, { types: GROUPS[g].types });
   return (
     <>
-      <BreakdownSync accountIds={scope.accountIds} module="audiences" path="/audiences" />
+      {canFeature(c.viewer, "general.sync_breakdowns") && <BreakdownSync accountIds={scope.accountIds} module="audiences" path="/audiences" />}
       <div className="mb-4 flex flex-wrap gap-1">
         {Object.entries(GROUPS).map(([k, v]) => (
           <Link key={k} href={qs(c.sp, { g: k })} className={`pill !px-3 !py-1.5 ${k === g ? "bg-accent text-white" : "bg-panel text-muted hover:text-ink"}`}>{v.label}</Link>
@@ -80,7 +83,7 @@ async function Results({ c }: { c: Ctx }) {
           ]}
           rows={rows.map((r) => ({ ...mrow(r.m), option: r.value, source: SOURCE_LABEL[r.source], note: r.note, type: r.type.replace(/_/g, " "), adSets: r.adSets }))} />
       </div>
-      <div className="mt-4"><NotMeasuredList items={notMeasured} canTest={canEdit(c.viewer)} /></div>
+      <div className="mt-4"><NotMeasuredList items={notMeasured} canTest={canEdit(c.viewer) && canFeature(c.viewer, "audiences.create_test")} /></div>
     </>
   );
 }
@@ -97,7 +100,8 @@ async function Suggestions({ c }: { c: Ctx }) {
   ]);
   const fromHistory = advise(history, { campaignId: campaign?.id, fmt }).filter((s) => s.action !== "keep");
   const ai = (kind: "claude" | "openai") => cached.find((x) => x.kind === kind);
-  const canCreate = canEdit(c.viewer);
+  const canCreate = canEdit(c.viewer) && canFeature(c.viewer, "audiences.create_test");
+  const showAi = canFeature(c.viewer, "audiences.ai");
   const measured = history.sets.filter((s) => s.interests.length === 1 && s.spend > 0).length;
   const mixed = history.sets.filter((s) => s.interests.length > 1 && s.spend > 0).length;
 
@@ -141,9 +145,9 @@ async function Suggestions({ c }: { c: Ctx }) {
         <SuggestionList items={fromHistory} currency={currency} canCreate={canCreate} campaignId={campaign?.id}
           empty="No Meta ad sets with interests and spend yet — connect a Meta account or wait for the first sync." />
       </section>
-      {aiCard("claude", "Claude", claudeEnabled())}
-      {aiCard("openai", "OpenAI", openaiEnabled())}
-      <SplitTestsCard tests={tests} currency={currency} canPause={canCreate} />
+      {showAi && aiCard("claude", "Claude", claudeEnabled())}
+      {showAi && aiCard("openai", "OpenAI", openaiEnabled())}
+      <SplitTestsCard tests={tests} currency={currency} canPause={canEdit(c.viewer) && canFeature(c.viewer, "audiences.pause_losers")} />
     </div>
   );
 }

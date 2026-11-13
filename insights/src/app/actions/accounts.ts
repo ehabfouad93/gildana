@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { enqueueInitialSync, syncAll, syncBreakdownsNow, syncNow } from "@/lib/jobs";
-import { accessWhere, canEdit, canSeeCompany, requireModule, scopedAccountIds, type Viewer } from "@/lib/tenancy";
+import { accessWhere, canEdit, canFeature, canSeeCompany, requireModule, scopedAccountIds, type Viewer } from "@/lib/tenancy";
 import type { ModuleKey } from "@/lib/modules";
 
 /** The signed-in editor's client — every mutation below is checked against it. */
@@ -152,6 +152,7 @@ export async function bulkAccountsAction(form: FormData) {
 export async function syncBreakdownsAction(form: FormData) {
   const m = (["audiences", "performance"] as const).find((x) => x === form.get("module")) ?? "campaigns";
   const v = await requireModule(m);
+  if (!canFeature(v, "general.sync_breakdowns")) return;
   const asked = form.getAll("accountId").map(String).slice(0, 300);
   const ids = asked.length ? await scopedAccountIds(v.clientId, { access: v.access, accountIds: asked }) : [];
   await syncBreakdownsNow(ids);

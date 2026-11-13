@@ -12,6 +12,7 @@ import { pageContext, qs, type SP } from "@/lib/page";
 import { PLATFORM_META } from "@/lib/platforms";
 import { breakdown, campaignTable, daily, splits, totals } from "@/lib/queries";
 import { mrow } from "@/lib/rows";
+import { canFeature } from "@/lib/tenancy";
 
 export const metadata = { title: "Performance" };
 
@@ -50,6 +51,7 @@ export default async function Performance({ searchParams }: { searchParams: Prom
           ])} />
         </div>
 
+        {canFeature(c.viewer, "performance.breakdown") && (
         <div className="card">
           <div className="mb-2 flex flex-wrap items-center gap-1">
             <h2 className="me-2 text-sm font-semibold">Audience breakdown</h2>
@@ -57,10 +59,11 @@ export default async function Performance({ searchParams }: { searchParams: Prom
               <Link key={d} href={qs(c.sp, { dim: d })} className={`pill ${d === dim ? "bg-accent text-white" : "bg-bg text-muted hover:text-ink"}`}>{DIM_LABEL[d]}</Link>
             ))}
           </div>
-          <BreakdownSync accountIds={scope.accountIds} module="performance" path="/performance" />
+          {canFeature(c.viewer, "general.sync_breakdowns") && <BreakdownSync accountIds={scope.accountIds} module="performance" path="/performance" />}
           <DataTable search={false} currency={scope.currency} initialSort={dim === "hour" ? "bucket" : "spend"}
             cols={[{ key: "bucket", label: DIM_LABEL[dim] }, ...METRIC_COLS]} rows={bd.map((r) => ({ ...mrow(r.m), bucket: r.value }))} />
         </div>
+        )}
 
         <div className="card">
           <h2 className="mb-2 text-sm font-semibold">{t.byAccount}</h2>
