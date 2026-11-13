@@ -50,6 +50,8 @@ export default async function Audiences({ searchParams }: { searchParams: Promis
         {allowed.map((k) => [k, VIEWS[k]] as const).map(([k, label]) => (
           <Link key={k} href={qs(c.sp, { v: k === "results" ? undefined : k })} className={`-mb-px border-b-2 px-1 pb-2 text-sm ${k === view ? "border-accent font-semibold" : "border-transparent text-muted hover:text-ink"}`}>{label}</Link>
         ))}
+        {canFeature(c.viewer, "audiences.mixer") && <Link href="/audiences/mixer" className="-mb-px border-b-2 border-transparent px-1 pb-2 text-sm text-muted hover:text-ink">Mixer</Link>}
+        {canFeature(c.viewer, "audiences.launcher") && <Link href="/audiences/launcher" className="-mb-px border-b-2 border-transparent px-1 pb-2 text-sm text-muted hover:text-ink">Ready-made audiences</Link>}
       </div>
       {view === "results" ? <Results c={c} /> : <Suggestions c={c} />}
     </>

@@ -11,7 +11,7 @@ import { accessWhere, canEdit, canFeature, requireModule } from "@/lib/tenancy";
 
 export const metadata = { title: "To-do" };
 
-const KIND = { pause: "Pause", start: "Switch on", budget: "Change budget of" } as const;
+const KIND = { pause: "Pause", start: "Switch on", budget: "Change budget of", launch: "New" } as const;
 const LEVEL: Record<string, string> = { CAMPAIGN: "campaign", ADSET: "ad set", AD: "ad" };
 const STATUS_TONE: Record<string, string> = { applied: "bg-green-100 text-good", dismissed: "bg-slate-100 text-slate-600", failed: "bg-red-100 text-bad", undone: "bg-amber-100 text-amber-800" };
 

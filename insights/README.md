@@ -135,6 +135,8 @@ Every change to a live ad account is a **proposal** first (`Action`, `src/lib/ac
 
 **Creatives** counts one creative together wherever it runs, ranks headlines, texts, buttons and formats, and flags tiring ads (last 7 delivery days against the ad's own first 7). **Tags** group campaigns; each ad set gets a **funnel stage** (prospecting, re-engagement, retargeting, retention) detected from its audiences and overridable; both filter every report and have their own tables on Performance.
 
+**Audience mixer** (`/audiences/mixer`) builds an ad set's audience from interests, behaviours and custom audiences — any item inside a group, every group required, minus exclusions — shows Meta's reach estimate and launches it as a new ad set copied from a source ad set (paused by default). **Ready-made audiences** (`/audiences/launcher`) creates website-visitor, page / Instagram-engager and video-viewer audiences and lookalikes in a few clicks, and stores per audience which funnel stages exclude it by default. **Ask AI** answers questions about the workspace's own numbers from a data pack built on the server.
+
 ## Filters
 
 Every analysis page (Overview, Spend, Performance, Campaigns, Audiences, Google Search) filters by company, platform, ad accounts, date range and **campaigns, ad sets or ads** (`?camp=` / `?set=` / `?ad=`). Meta breakdowns are stored per ad set and per campaign; an ad filter shows its ad set's breakdown.

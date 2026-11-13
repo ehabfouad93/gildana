@@ -353,7 +353,8 @@ export type SplitTestView = {
 /** Interest split tests of the accounts in scope, each arm with its exact results since the test was created. */
 export async function splitTests(scope: Scope, where: { campaignId?: string } = {}, fmt?: (n: number) => string): Promise<SplitTestView[]> {
   if (!scope.accountIds.length) return [];
-  const tests = await db.interestTest.findMany({ where: { accountId: { in: scope.accountIds }, status: { not: "failed" } }, orderBy: { createdAt: "desc" }, take: 50 });
+  // kind "audience" rows are ad sets launched from the mixer, not tests.
+  const tests = await db.interestTest.findMany({ where: { accountId: { in: scope.accountIds }, status: { not: "failed" }, kind: { in: ["adset", "campaign"] } }, orderBy: { createdAt: "desc" }, take: 50 });
   if (!tests.length) return [];
   const ext = tests.flatMap((t) => (t.arms as { externalId: string }[]).map((a) => a.externalId));
   const [sets, newCampaigns, info, fx] = await Promise.all([

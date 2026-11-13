@@ -76,7 +76,7 @@ export type SyncContext = {
   account: { externalId: string; currency: string; timezone: string; parentId?: string };
   /** Interest split tests created from this app; only the demo connector needs them (real platforms return the ad sets themselves). */
   /** Demo only. `campaign` set = the arms live in a new campaign of their own instead of the source's. */
-  splitTests?: { sourceAdSet: string; campaign?: { externalId: string; name: string }; arms: { externalId: string; interest: RemoteTargetingItem; paused?: boolean }[] }[];
+  splitTests?: { sourceAdSet: string; campaign?: { externalId: string; name: string }; /** an audience launched next to the source, which keeps running */ keepSource?: boolean; arms: { externalId: string; interest: RemoteTargetingItem; paused?: boolean; /** a mixed audience instead of one interest */ items?: RemoteTargetingItem[]; name?: string }[] }[];
 };
 
 export type StatsBundle = {

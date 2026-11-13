@@ -47,6 +47,8 @@ export const FEATURES = [
   { key: "audiences.ai", module: "audiences", label: "AI suggestions (Claude / OpenAI)" },
   { key: "audiences.create_test", module: "audiences", label: "Create split tests and split-test campaigns" },
   { key: "audiences.pause_losers", module: "audiences", label: "Pause losing ad sets" },
+  { key: "audiences.mixer", module: "audiences", label: "Audience mixer (build and launch audiences)" },
+  { key: "audiences.launcher", module: "audiences", label: "Ready-made audiences and lookalikes" },
   { key: "actions.apply", module: "actions", label: "Apply and undo changes in ad accounts" },
   { key: "actions.rules", module: "actions", label: "Create and edit automation rules" },
   { key: "campaigns.tags", module: "campaigns", label: "Tags and funnel stages" },

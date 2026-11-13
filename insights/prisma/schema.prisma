@@ -901,3 +901,23 @@ model EntityTag {
   @@unique([tagId, level, entityId])
   @@index([level, entityId])
 }
+
+/// A custom or lookalike audience of an ad account: the account's own (listed from the platform) and the ones created here.
+model SavedAudience {
+  id          String   @id @default(cuid())
+  accountId   String
+  externalId  String
+  name        String
+  /// website | page | instagram | lead_form | video | customer_list | lookalike | other
+  kind        String   @default("other")
+  /// Funnel stage this audience is for when targeted.
+  stage       String   @default("retargeting")
+  sizeLow     BigInt?
+  sizeHigh    BigInt?
+  /// Stages whose new ad sets exclude this audience by default (e.g. customers excluded from prospecting).
+  excludeFrom String[] @default([])
+  createdHere Boolean  @default(false)
+  updatedAt   DateTime @updatedAt
+
+  @@unique([accountId, externalId])
+}
