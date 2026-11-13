@@ -18,5 +18,5 @@ export const METRIC_COLS: Col[] = [
 
 /** Where a per-segment number comes from (see audienceInsights in src/lib/queries.ts). */
 export const SOURCE_LABEL: Record<string, string> = {
-  reported: "Reported", tested: "Tested", measured: "Measured", estimated: "Estimated", adset: "Ad-set ranking", setting: "Setting",
+  reported: "Reported", tested: "Tested", measured: "Measured", setting: "Setting",
 };

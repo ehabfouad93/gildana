@@ -1,12 +1,14 @@
 import Link from "next/link";
 import { BreakdownSync } from "@/components/breakdown-sync";
 import { Filters } from "@/components/filters";
+import { NotMeasuredList } from "@/components/not-measured";
 import { PageHeader } from "@/components/shell";
 import { DataTable } from "@/components/table";
 import { pageContext, qs, type SP } from "@/lib/page";
 import { SOURCE_LABEL } from "@/components/table-types";
 import { audienceInsights } from "@/lib/queries";
 import { mrow } from "@/lib/rows";
+import { canEdit } from "@/lib/tenancy";
 
 export const metadata = { title: "Audiences" };
 
@@ -24,9 +26,7 @@ export default async function Audiences({ searchParams }: { searchParams: Promis
   const c = await pageContext(searchParams, "audiences");
   const { scope, range, t } = c;
   const g = GROUPS[c.one("g")] ? c.one("g") : "interests";
-  const only = c.one("only") === "1";
-  const all = await audienceInsights(scope, range, { types: GROUPS[g].types });
-  const rows = only ? all.filter((r) => r.source === "reported" || r.source === "measured" || r.source === "tested") : all;
+  const { rows, notMeasured } = await audienceInsights(scope, range, { types: GROUPS[g].types });
 
   return (
     <>
@@ -39,9 +39,8 @@ export default async function Audiences({ searchParams }: { searchParams: Promis
           <Link key={k} href={qs(c.sp, { g: k })} className={`pill !px-3 !py-1.5 ${k === g ? "bg-accent text-white" : "bg-panel text-muted hover:text-ink"}`}>{v.label}</Link>
         ))}
       </div>
-      <div className="card mb-4 flex flex-wrap items-center gap-3 text-sm">
-        <span className="text-muted">Each number is labelled: <b>Reported</b> by the platform per segment, <b>Tested</b> / <b>Measured</b> from single-segment ad sets, <b>Estimated</b> by the model for mixed Meta ad sets, or an <b>Ad-set ranking</b> when there is too little variation.</span>
-        <a href={qs(c.sp, { only: only ? undefined : "1" })} className={`pill !px-3 !py-1.5 ms-auto ${only ? "bg-ink text-white" : "bg-bg text-muted"}`}>{only ? "✓ " : ""}Only measured per segment</a>
+      <div className="card mb-4 text-sm text-muted">
+        Only <b>exact</b> results are shown: <b>Reported</b> by the platform per segment, <b>Tested</b> in a split test, or <b>Measured</b> from an ad set that targets that one option alone. Nothing is estimated.
       </div>
       <div className="card">
         <DataTable currency={scope.currency} initialSort="spend" csvName={`audiences-${g}`}
@@ -51,8 +50,9 @@ export default async function Audiences({ searchParams }: { searchParams: Promis
             { key: "cpc", label: "CPC", fmt: "money2" }, { key: "leads", label: "Leads", fmt: "num" }, { key: "cpl", label: "CPL", fmt: "money2" },
             { key: "conversions", label: "Conv.", fmt: "num" }, { key: "cpa", label: "CPA", fmt: "money2" },
           ]}
-          rows={rows.map((r) => ({ ...mrow(r.m), option: r.value, source: SOURCE_LABEL[r.source], note: r.source === "estimated" || r.source === "adset" ? r.note : "", type: r.type.replace(/_/g, " "), adSets: r.adSets }))} />
+          rows={rows.map((r) => ({ ...mrow(r.m), option: r.value, source: SOURCE_LABEL[r.source], note: r.note, type: r.type.replace(/_/g, " "), adSets: r.adSets }))} />
       </div>
+      <div className="mt-4"><NotMeasuredList items={notMeasured} canTest={canEdit(c.viewer)} /></div>
     </>
   );
 }

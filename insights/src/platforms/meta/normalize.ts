@@ -78,6 +78,16 @@ export function flattenTargeting(t: Record<string, any> | null | undefined): Rem
   return out;
 }
 
+/**
+ * Whether Meta may deliver beyond the ad set's detailed targeting (Advantage+
+ * audience, or the older "Advantage detailed targeting" expansion). With it
+ * on, a single-interest ad set is not a clean measure of that interest.
+ */
+export function advantageAudience(t: Record<string, any> | null | undefined): boolean {
+  if (!t) return false;
+  return Number(t.targeting_automation?.advantage_audience) === 1 || t.targeting_optimization === "expansion_all";
+}
+
 /** Maps a Meta breakdown row to our dimension name + value. */
 export function breakdownValue(dimension: string, row: Record<string, any>): string {
   switch (dimension) {

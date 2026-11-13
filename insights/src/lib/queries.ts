@@ -4,7 +4,7 @@ import { db } from "@/lib/db";
 import { convert, fxTable, type FxTable } from "@/lib/fx";
 import { toDate, type Range } from "@/lib/dates";
 import { ZERO, add, derive, type Totals } from "@/lib/metrics";
-import { estimateInterests } from "@/lib/attribution";
+import { advantageAudience } from "@/platforms/meta/normalize";
 import { SEGMENT_TYPES } from "@/lib/segments";
 
 /**
@@ -164,7 +164,7 @@ export async function breakdown(scope: Scope, r: Range, dimension: string, where
   return [...out.entries()].map(([value, t]) => ({ value, m: derive(t) })).sort((a, b) => b.m.spend - a.m.spend);
 }
 
-export type AudienceSource = "reported" | "tested" | "measured" | "estimated" | "adset" | "setting";
+export type AudienceSource = "reported" | "tested" | "measured" | "setting";
 
 /** Ad-set-level breakdown dimensions that platforms report per targeted segment → the targeting type they describe. */
 export const SEGMENT_DIMS: Record<string, string> = {
@@ -173,57 +173,55 @@ export const SEGMENT_DIMS: Record<string, string> = {
 };
 
 export type AudienceRow = {
-  type: string; value: string; source: AudienceSource; adSets: number; leadsCollected: number; note: string; m: ReturnType<typeof derive>;
+  type: string; value: string; externalId: string; source: AudienceSource; adSets: number; leadsCollected: number; note: string; m: ReturnType<typeof derive>;
 };
 
-const scaleTotals = (t: Totals, delivery: number, results: number): Totals => ({
-  spend: t.spend * delivery, impressions: t.impressions * delivery, reach: t.reach * delivery, clicks: t.clicks * delivery, linkClicks: t.linkClicks * delivery,
-  videoViews: t.videoViews * delivery, conversions: t.conversions * results, leads: t.leads * results, purchases: t.purchases * results, value: t.value * results,
-});
+/** A targeting option that has never run alone, so no exact result exists for it. */
+export type NotMeasured = { type: string; value: string; externalId: string; platform: Platform; accountId: string; adSets: { id: string; name: string }[] };
 
 /**
- * Results per targeting option, each labelled with where the number comes from:
- *   reported  — the platform reports this segment's results itself (Google audiences/topics/keywords, TikTok interests, LinkedIn job titles…)
- *   tested    — an ad set created by an interest split test from this dashboard
- *   measured  — an ad set that targets this one segment only
- *   estimated — Meta-style ad sets with several interests, split by the attribution model (src/lib/attribution.ts)
- *   adset     — too little variation to estimate; the whole ad set's results, for ranking only
- *   setting   — age, gender, location, placement: delivery settings (see the Breakdowns tab for their split)
+ * Exact results per targeting option — nothing is estimated:
+ *   reported — the platform reports this segment's results itself (Google audiences/topics/keywords, TikTok interests, LinkedIn job titles…)
+ *   tested   — an ad set created by an interest split test from this dashboard
+ *   measured — an ad set that targets this one segment only
+ *   setting  — age, gender, location, placement: delivery settings (their split is on the Breakdowns tab)
+ * Segments that only ever share an ad set with others (Meta reports per ad
+ * set, not per interest) come back in `notMeasured`, without numbers.
  */
-export async function audienceInsights(scope: Scope, r: Range, where: { campaignId?: string; types?: string[] } = {}): Promise<AudienceRow[]> {
-  if (!scope.accountIds.length) return [];
-  // The model is fitted on every ad set of the accounts involved, then read for the ones in view.
-  const all = await db.adSet.findMany({
-    where: { accountId: { in: scope.accountIds } },
-    select: { id: true, campaignId: true, externalId: true, platform: true, accountId: true, targeting: { where: { exclude: false } } },
+export async function audienceInsights(scope: Scope, r: Range, where: { campaignId?: string; types?: string[] } = {}): Promise<{ rows: AudienceRow[]; notMeasured: NotMeasured[] }> {
+  if (!scope.accountIds.length) return { rows: [], notMeasured: [] };
+  const inView = await db.adSet.findMany({
+    where: { accountId: { in: scope.accountIds }, ...(where.campaignId ? { campaignId: where.campaignId } : {}) },
+    select: { id: true, name: true, externalId: true, platform: true, accountId: true, targetingRaw: true, targeting: { where: { exclude: false } } },
   });
-  const inView = all.filter((x) => !where.campaignId || x.campaignId === where.campaignId);
-  const viewIds = new Set(inView.map((x) => x.id));
+  const viewIds = inView.map((x) => x.id);
   const typeOk = (t: string) => !where.types || where.types.includes(t);
 
   const [{ rows: setTotals }, info, fx, tests, leadCounts] = await Promise.all([
-    grouped(scope, r, "ADSET", ["entityId"], { entityId: { in: all.map((x) => x.id) } }),
+    grouped(scope, r, "ADSET", ["entityId"], { entityId: { in: viewIds } }),
     accountInfo(scope.accountIds),
     fxTable(),
     db.interestTest.findMany({ where: { accountId: { in: scope.accountIds }, status: { not: "failed" } }, select: { arms: true } }),
-    db.lead.groupBy({ by: ["adSetId"], where: { adSetId: { in: [...viewIds] }, createdAt: { gte: toDate(r.from), lt: new Date(toDate(r.to).getTime() + 86_400_000) } }, _count: true }),
+    db.lead.groupBy({ by: ["adSetId"], where: { adSetId: { in: viewIds }, createdAt: { gte: toDate(r.from), lt: new Date(toDate(r.to).getTime() + 86_400_000) } }, _count: true }),
   ]);
   const leadsBySet = new Map(leadCounts.map((l) => [l.adSetId, l._count]));
   const testedExt = new Set(tests.flatMap((t) => (t.arms as { externalId: string }[]).map((a) => a.externalId)));
 
-  // ── reported by the platform ──
   const out = new Map<string, AudienceRow & { t: Totals; sets: Set<string> }>();
-  const bump = (type: string, value: string, source: AudienceSource, setId: string, t: Totals, note = "") => {
+  const bump = (type: string, value: string, externalId: string, source: AudienceSource, setId: string, t: Totals, note = "") => {
     const k = `${source}|${type}|${value}`;
-    const cur = out.get(k) ?? { type, value, source, adSets: 0, leadsCollected: 0, note, m: derive({ ...ZERO }), t: { ...ZERO }, sets: new Set<string>() };
+    const cur = out.get(k) ?? { type, value, externalId, source, adSets: 0, leadsCollected: 0, note, m: derive({ ...ZERO }), t: { ...ZERO }, sets: new Set<string>() };
     cur.t = add(cur.t, t);
+    if (note && !cur.note) cur.note = note;
     if (!cur.sets.has(setId)) { cur.sets.add(setId); cur.adSets++; cur.leadsCollected += source === "measured" || source === "tested" ? leadsBySet.get(setId) ?? 0 : 0; }
     out.set(k, cur);
   };
+
+  // ── reported by the platform ──
   const covered = new Set<string>(); // `${adSetId}|${type}` the platform reported
   const rep = await db.statBreakdown.groupBy({
     by: ["accountId", "entityId", "dimension", "value"],
-    where: { accountId: { in: scope.accountIds }, level: "ADSET", entityId: { in: [...viewIds] }, dimension: { in: Object.keys(SEGMENT_DIMS) }, date: dateWhere(r) },
+    where: { accountId: { in: scope.accountIds }, level: "ADSET", entityId: { in: viewIds }, dimension: { in: Object.keys(SEGMENT_DIMS) }, date: dateWhere(r) },
     _sum: { spend: true, impressions: true, reach: true, clicks: true, conversions: true, leads: true, convValue: true },
   });
   for (const g of rep) {
@@ -231,67 +229,59 @@ export async function audienceInsights(scope: Scope, r: Range, where: { campaign
     covered.add(`${g.entityId}|${type}`);
     if (!typeOk(type)) continue;
     const sum = g._sum as any;
-    bump(type, g.value, "reported", g.entityId, toTotals({ ...sum, value: sum.convValue }, info.get(g.accountId)?.currency ?? scope.currency, scope.currency, fx));
+    bump(type, g.value, "", "reported", g.entityId, toTotals({ ...sum, value: sum.convValue }, info.get(g.accountId)?.currency ?? scope.currency, scope.currency, fx));
   }
   if (typeOk("keyword")) {
     const kw = await db.keyword.groupBy({
-      by: ["accountId", "adSetId", "text"], where: { accountId: { in: scope.accountIds }, adSetId: { in: [...viewIds] }, date: dateWhere(r) },
+      by: ["accountId", "adSetId", "text"], where: { accountId: { in: scope.accountIds }, adSetId: { in: viewIds }, date: dateWhere(r) },
       _sum: { spend: true, impressions: true, clicks: true, conversions: true, value: true },
     });
     for (const g of kw) {
       covered.add(`${g.adSetId}|keyword`);
-      bump("keyword", g.text, "reported", g.adSetId, toTotals({ ...g._sum, leads: Number(g._sum.conversions ?? 0) }, info.get(g.accountId)?.currency ?? scope.currency, scope.currency, fx));
+      bump("keyword", g.text, "", "reported", g.adSetId, toTotals({ ...g._sum, leads: Number(g._sum.conversions ?? 0) }, info.get(g.accountId)?.currency ?? scope.currency, scope.currency, fx));
     }
   }
 
-  // ── everything the platform did not split ──
-  const segmentsOf = (x: (typeof all)[number]) => x.targeting.filter((t) => SEGMENT_TYPES.has(t.type) && !covered.has(`${x.id}|${t.type}`));
-  const { estimates, weights } = estimateInterests(all.map((x) => {
-    const t = setTotals.get(x.id) ?? { ...ZERO };
-    return { id: x.id, spend: t.spend, conversions: t.leads || t.conversions, interests: segmentsOf(x).map((i) => `${i.type}|${i.value}`) };
-  }));
-  const est = new Map(estimates.map((e) => [e.interest, e]));
-
+  // ── ad sets that target one segment only: exact. Mixed ad sets: listed, never split. ──
+  const mixed = new Map<string, NotMeasured>();
   for (const x of inView) {
     const t = setTotals.get(x.id) ?? { ...ZERO };
-    const segs = segmentsOf(x);
+    const segs = x.targeting.filter((ti) => SEGMENT_TYPES.has(ti.type) && !covered.has(`${x.id}|${ti.type}`));
     for (const ti of segs) {
       if (!typeOk(ti.type)) continue;
-      const key = `${ti.type}|${ti.value}`;
       if (segs.length === 1) {
-        bump(ti.type, ti.value, testedExt.has(x.externalId) ? "tested" : "measured", x.id, t);
-      } else if (est.get(key)?.identifiable) {
-        bump(ti.type, ti.value, "estimated", x.id, scaleTotals(t, 1 / segs.length, weights.get(x.id)?.get(key) ?? 1 / segs.length), est.get(key)!.reason);
+        const widened = x.platform === "META" && advantageAudience(x.targetingRaw as Record<string, unknown> | null);
+        bump(ti.type, ti.value, ti.externalId, testedExt.has(x.externalId) ? "tested" : "measured", x.id, t, widened ? "Advantage+ audience is on — Meta may go beyond this interest" : "");
       } else {
-        bump(ti.type, ti.value, "adset", x.id, t, est.get(key)?.reason ?? "");
+        const k = `${ti.type}|${ti.value}`;
+        const cur = mixed.get(k) ?? { type: ti.type, value: ti.value, externalId: ti.externalId, platform: x.platform, accountId: x.accountId, adSets: [] };
+        if (!cur.adSets.some((a) => a.id === x.id)) cur.adSets.push({ id: x.id, name: x.name });
+        mixed.set(k, cur);
       }
     }
-    for (const ti of x.targeting.filter((t) => !SEGMENT_TYPES.has(t.type))) if (typeOk(ti.type)) bump(ti.type, ti.value, "setting", x.id, t);
+    for (const ti of x.targeting.filter((ti) => !SEGMENT_TYPES.has(ti.type))) if (typeOk(ti.type)) bump(ti.type, ti.value, ti.externalId, "setting", x.id, t);
   }
 
-  const order: Record<AudienceSource, number> = { reported: 0, tested: 1, measured: 2, estimated: 3, adset: 4, setting: 5 };
-  return [...out.values()]
+  const order: Record<AudienceSource, number> = { reported: 0, tested: 1, measured: 2, setting: 3 };
+  const rows = [...out.values()]
     .map(({ t, sets, ...row }) => ({ ...row, m: derive(t) }))
     .sort((a, b) => order[a.source] - order[b.source] || b.m.spend - a.m.spend);
+  const exact = new Set(rows.filter((x) => x.source !== "setting").map((x) => `${x.type}|${x.value}`));
+  const notMeasured = [...mixed.entries()].filter(([k]) => !exact.has(k)).map(([, v]) => v).sort((a, b) => b.adSets.length - a.adSets.length || a.value.localeCompare(b.value));
+  return { rows, notMeasured };
 }
 
 /**
- * For each lead, how its ad set's targeting shares the credit: 100% for a
- * single-segment ad set, the model's weights for several interests.
+ * Which targeted segment each ad set's leads belong to. Only an ad set with a
+ * single segment gives an exact answer; a mixed one is reported as mixed —
+ * Meta does not say which of its interests a lead came from.
  */
-export async function leadSegmentShares(scope: Scope, r: Range, adSetIds: string[]): Promise<Map<string, { value: string; share: number }[]>> {
-  const sets = await db.adSet.findMany({ where: { accountId: { in: scope.accountIds } }, select: { id: true, targeting: { where: { exclude: false } } } });
-  const { rows: totals } = await grouped(scope, r, "ADSET", ["entityId"], { entityId: { in: sets.map((x) => x.id) } });
-  const segs = (x: (typeof sets)[number]) => x.targeting.filter((t) => SEGMENT_TYPES.has(t.type));
-  const { weights } = estimateInterests(sets.map((x) => {
-    const t = totals.get(x.id) ?? { ...ZERO };
-    return { id: x.id, spend: t.spend, conversions: t.leads || t.conversions, interests: segs(x).map((i) => `${i.type}|${i.value}`) };
-  }));
-  const out = new Map<string, { value: string; share: number }[]>();
-  for (const x of sets.filter((s) => adSetIds.includes(s.id))) {
-    const items = segs(x);
-    const w = weights.get(x.id);
-    out.set(x.id, items.map((i) => ({ value: i.value, share: items.length === 1 ? 1 : w?.get(`${i.type}|${i.value}`) ?? 1 / items.length })).sort((a, b) => b.share - a.share));
+export async function leadSegments(scope: Scope, adSetIds: string[]): Promise<Map<string, { exact: string | null; mixed: string[] }>> {
+  const sets = await db.adSet.findMany({ where: { id: { in: adSetIds }, accountId: { in: scope.accountIds } }, select: { id: true, targeting: { where: { exclude: false } } } });
+  const out = new Map<string, { exact: string | null; mixed: string[] }>();
+  for (const x of sets) {
+    const items = x.targeting.filter((t) => SEGMENT_TYPES.has(t.type)).map((t) => t.value);
+    out.set(x.id, { exact: items.length === 1 ? items[0] : null, mixed: items.length > 1 ? items : [] });
   }
   return out;
 }

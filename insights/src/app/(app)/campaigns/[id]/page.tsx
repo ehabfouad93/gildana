@@ -5,6 +5,7 @@ import { barOption, heatOption, lineOption } from "@/components/charts";
 import { CreativeCard } from "@/components/creative";
 import { Filters } from "@/components/filters";
 import { KpiGrid, fmtMetric } from "@/components/kpi";
+import { NotMeasuredList } from "@/components/not-measured";
 import { PageHeader } from "@/components/shell";
 import { DataTable } from "@/components/table";
 import { METRIC_COLS, SOURCE_LABEL } from "@/components/table-types";
@@ -15,7 +16,7 @@ import { convert, fxTable, fxUpdatedAt } from "@/lib/fx";
 import { money } from "@/lib/format";
 import { pageContext, qs, type SP } from "@/lib/page";
 import { PLATFORM_META } from "@/lib/platforms";
-import { adSetTable, adTable, audienceInsights, breakdown, daily, keywordTable, leadSegmentShares, placementTable, searchTermTable, totals } from "@/lib/queries";
+import { adSetTable, adTable, audienceInsights, breakdown, daily, keywordTable, leadSegments, placementTable, searchTermTable, totals } from "@/lib/queries";
 import { canEdit } from "@/lib/tenancy";
 import { SplitTestButton } from "@/components/split-test-button";
 import { mrow } from "@/lib/rows";
@@ -185,7 +186,7 @@ export default async function CampaignPage({ params, searchParams }: { params: P
   }
 
   async function TargetingTab() {
-    const [rows, sets, tests] = await Promise.all([
+    const [{ rows, notMeasured }, sets, tests] = await Promise.all([
       audienceInsights(scope, range, { campaignId: id }), adSetTable(scope, range, id),
       db.interestTest.findMany({ where: { campaignId: id }, orderBy: { createdAt: "desc" } }),
     ]);
@@ -197,25 +198,20 @@ export default async function CampaignPage({ params, searchParams }: { params: P
     const testedSource = new Set(tests.filter((t) => t.status !== "failed").map((t) => t.sourceAdSetId));
     return (
       <div className="space-y-4">
-        <div className="card text-sm">
-          <b>Where each number comes from</b>
-          {campaign!.platform === "META" && <p className="mt-1 text-muted">Meta does not report results per interest, so interests are measured from single-interest ad sets, tested with a split, or estimated.</p>}
-          <ul className="mt-1 grid gap-x-6 gap-y-1 text-muted md:grid-cols-2">
-            {campaign!.platform !== "META" && <li><span className="pill bg-green-100 text-good">Reported</span> {meta.label} reports this segment&apos;s results itself.</li>}
-            <li><span className="pill bg-blue-100 text-blue-800">Tested</span> from an interest split test created here.</li>
-            <li><span className="pill bg-emerald-100 text-emerald-800">Measured</span> the {unit} targets this one segment only.</li>
-            <li><span className="pill bg-amber-100 text-amber-800">Estimated</span> several interests in one {unit}; split by a model fitted across all your {meta.adSetLabel.toLowerCase()}.</li>
-            <li className="md:col-span-2"><span className="pill bg-slate-100 text-slate-600">Ad-set ranking</span> not enough variation to separate it — the whole {unit}&apos;s results, for ranking only.{campaign!.platform === "META" ? " Use “Split test” below to measure it." : ""}</li>
-          </ul>
+        <div className="card text-sm text-muted">
+          Only <b className="text-ink">exact</b> results are shown{campaign!.platform === "META" ? `. Meta reports results per ${unit}, not per interest, so an interest has a number only when a ${unit} targets it alone` : ""}:
+          {campaign!.platform !== "META" && <> <span className="pill bg-green-100 text-good">Reported</span> by {meta.label} per segment,</>}
+          {" "}<span className="pill bg-blue-100 text-blue-800">Tested</span> in a split test created here, or <span className="pill bg-emerald-100 text-emerald-800">Measured</span> from a {unit} with that one option. Nothing is estimated.
         </div>
         {types.map((ty) => (
           <div key={ty} className="card">
             <h3 className="mb-2 text-sm font-semibold capitalize">{ty.replace(/_/g, " ")}</h3>
             <DataTable search={false} currency={scope.currency} initialSort="spend"
-              cols={[{ key: "option", label: "Option", wrap: true, sub: "note" }, { key: "source", label: "Source", fmt: "badge" }, { key: "adSets", label: meta.adSetLabel, fmt: "num" }, { key: "spend", label: "Spend", fmt: "money" }, { key: "ctr", label: "CTR", fmt: "pct" }, { key: "cpc", label: "CPC", fmt: "money2" }, { key: "leads", label: "Leads", fmt: "dec" }, { key: "cpl", label: "CPL", fmt: "money2" }, { key: "conversions", label: "Conv.", fmt: "dec" }, { key: "cpa", label: "CPA", fmt: "money2" }]}
-              rows={segRows.filter((p) => p.type === ty).map((p) => ({ ...mrow(p.m), option: p.value, source: SOURCE_LABEL[p.source], note: p.source === "estimated" || p.source === "adset" ? p.note : "", adSets: p.adSets }))} />
+              cols={[{ key: "option", label: "Option", wrap: true, sub: "note" }, { key: "source", label: "Source", fmt: "badge" }, { key: "adSets", label: meta.adSetLabel, fmt: "num" }, { key: "spend", label: "Spend", fmt: "money" }, { key: "ctr", label: "CTR", fmt: "pct" }, { key: "cpc", label: "CPC", fmt: "money2" }, { key: "leads", label: "Leads", fmt: "num" }, { key: "cpl", label: "CPL", fmt: "money2" }, { key: "conversions", label: "Conv.", fmt: "num" }, { key: "cpa", label: "CPA", fmt: "money2" }]}
+              rows={segRows.filter((p) => p.type === ty).map((p) => ({ ...mrow(p.m), option: p.value, source: SOURCE_LABEL[p.source], note: p.note, adSets: p.adSets }))} />
           </div>
         ))}
+        <NotMeasuredList items={notMeasured} canTest={canEdit(c.viewer)} unit={unit} />
         {settings.length > 0 && (
           <div className="card">
             <h3 className="mb-2 text-sm font-semibold">Delivery settings</h3>
@@ -283,15 +279,22 @@ export default async function CampaignPage({ params, searchParams }: { params: P
     });
     const sets = await db.adSet.findMany({ where: { campaignId: id }, select: { id: true, name: true } });
     const ads = await db.ad.findMany({ where: { campaignId: id }, select: { id: true, name: true } });
-    const shares = await leadSegmentShares(scope, range, sets.map((x) => x.id));
+    const segs = await leadSegments(scope, sets.map((x) => x.id));
     const setName = new Map(sets.map((s) => [s.id, s.name]));
     const adName = new Map(ads.map((a) => [a.id, a.name]));
     const fieldKeys = [...new Set(leads.flatMap((l) => Object.keys(l.fields as object)))].slice(0, 6);
-    const shareText = (sid: string | null) => (sid ? (shares.get(sid) ?? []).map((x) => `${x.value} ${Math.round(x.share * 100)}%`).join(" · ") : "");
-
-    // Leads per segment: each lead credited to its ad set's segments by share.
+    // Exact when the ad set has one interest; otherwise the lead belongs to the mix as a whole.
+    const segText = (sid: string | null) => {
+      const x = sid ? segs.get(sid) : undefined;
+      return !x ? "" : x.exact ?? (x.mixed.length ? `Mixed: ${x.mixed.join(" · ")}` : "");
+    };
     const perSegment = new Map<string, number>();
-    for (const l of leads) for (const x of l.adSetId ? shares.get(l.adSetId) ?? [] : []) perSegment.set(x.value, (perSegment.get(x.value) ?? 0) + x.share);
+    let mixedLeads = 0;
+    for (const l of leads) {
+      const x = l.adSetId ? segs.get(l.adSetId) : undefined;
+      if (x?.exact) perSegment.set(x.exact, (perSegment.get(x.exact) ?? 0) + 1);
+      else if (x?.mixed.length) mixedLeads++;
+    }
     const bySet = new Map<string, number>();
     leads.forEach((l) => l.adSetId && bySet.set(l.adSetId, (bySet.get(l.adSetId) ?? 0) + 1));
     return (
@@ -299,23 +302,23 @@ export default async function CampaignPage({ params, searchParams }: { params: P
         <div className="grid gap-4 lg:grid-cols-2">
           <div className="card">
             <h3 className="mb-2 text-sm font-semibold">Leads by interest / audience</h3>
-            <p className="mb-2 text-xs text-muted">A lead from a single-segment {meta.adSetLabel.toLowerCase().replace(/s$/, "")} counts fully for that segment; from a mixed one it is shared by each segment&apos;s modelled contribution.</p>
-            <DataTable search={false} initialSort="n" cols={[{ key: "seg", label: "Segment", wrap: true }, { key: "n", label: "Leads", fmt: "dec" }]}
+            <p className="mb-2 text-xs text-muted">Exact counts only: leads from a {meta.adSetLabel.toLowerCase().replace(/s$/, "")} that targets one interest or audience.{mixedLeads > 0 && ` ${mixedLeads} lead${mixedLeads > 1 ? "s" : ""} came from mixed ${meta.adSetLabel.toLowerCase()} and can't be assigned to a single interest.`}</p>
+            <DataTable search={false} initialSort="n" cols={[{ key: "seg", label: "Segment", wrap: true }, { key: "n", label: "Leads", fmt: "num" }]}
               rows={[...perSegment.entries()].map(([seg, n]) => ({ seg, n }))} />
           </div>
           <div className="card">
             <h3 className="mb-2 text-sm font-semibold">Leads by {meta.adSetLabel.toLowerCase().replace(/s$/, "")}</h3>
             <DataTable search={false} cols={[{ key: "set", label: meta.adSetLabel, sub: "targeting", wrap: true }, { key: "n", label: "Leads", fmt: "num" }]}
-              initialSort="n" rows={[...bySet.entries()].map(([sid, n]) => ({ set: setName.get(sid) ?? "—", n, targeting: shareText(sid) }))} />
+              initialSort="n" rows={[...bySet.entries()].map(([sid, n]) => ({ set: setName.get(sid) ?? "—", n, targeting: segText(sid) }))} />
           </div>
         </div>
         <div className="card">
           <h3 className="mb-2 text-sm font-semibold">Leads ({leads.length})</h3>
           <DataTable csvName="leads" limit={100}
-            cols={[{ key: "createdAt", label: "Received" }, ...fieldKeys.map((k) => ({ key: k, label: k.replace(/_/g, " ") })), { key: "set", label: meta.adSetLabel }, { key: "ad", label: "Ad" }, { key: "interests", label: "Likely came from", wrap: true }]}
+            cols={[{ key: "createdAt", label: "Received" }, ...fieldKeys.map((k) => ({ key: k, label: k.replace(/_/g, " ") })), { key: "set", label: meta.adSetLabel }, { key: "ad", label: "Ad" }, { key: "interests", label: "Targeting", wrap: true }]}
             rows={leads.map((l) => ({
               createdAt: l.createdAt.toISOString().replace("T", " ").slice(0, 16), ...(l.fields as Record<string, string>),
-              set: l.adSetId ? setName.get(l.adSetId) ?? "" : "", ad: l.adId ? adName.get(l.adId) ?? "" : "", interests: shareText(l.adSetId),
+              set: l.adSetId ? setName.get(l.adSetId) ?? "" : "", ad: l.adId ? adName.get(l.adId) ?? "" : "", interests: segText(l.adSetId),
             }))} />
         </div>
       </div>

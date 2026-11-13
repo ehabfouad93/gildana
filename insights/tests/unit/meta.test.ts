@@ -42,3 +42,13 @@ describe("meta normalize", () => {
     expect(breakdownValue("hour", { hourly_stats_aggregated_by_advertiser_time_zone: "13:00:00 - 13:59:59" })).toBe("13");
   });
 });
+
+describe("advantageAudience", () => {
+  it("detects Advantage+ audience and the older detailed-targeting expansion", async () => {
+    const { advantageAudience } = await import("@/platforms/meta/normalize");
+    expect(advantageAudience({ targeting_automation: { advantage_audience: 1 } })).toBe(true);
+    expect(advantageAudience({ targeting_optimization: "expansion_all" })).toBe(true);
+    expect(advantageAudience({ targeting_automation: { advantage_audience: 0 }, flexible_spec: [] })).toBe(false);
+    expect(advantageAudience(null)).toBe(false);
+  });
+});
