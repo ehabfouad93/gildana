@@ -1,0 +1,1 @@
+ALTER TABLE "Client" ADD COLUMN "lastAuditAt" TIMESTAMP(3);

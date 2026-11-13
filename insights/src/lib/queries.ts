@@ -8,6 +8,7 @@ import { advantageAudience } from "@/platforms/meta/normalize";
 import { SEGMENT_TYPES } from "@/lib/segments";
 import { applyEntity, type EntityFilter } from "@/lib/entity-filter";
 import { STAGES, STAGE_LABEL, stageOf } from "@/lib/funnel";
+import type { AdDay, AdInput } from "@/lib/creative-insights";
 import { splitTestStatus, type ArmResult, type History, type TestVerdict } from "@/lib/interest-advice";
 
 /**
@@ -381,6 +382,44 @@ export async function splitTests(scope: Scope, where: { campaignId?: string } = 
     out.push({ id: t.id, name: t.name, kind: t.kind, status: t.status, createdAt: t.createdAt, endsAt: t.endsAt, campaignId: shownIn, sourceAdSetId: t.sourceAdSetId, accountId: t.accountId, arms: rows.sort((a, b) => (a.cpr ?? Infinity) - (b.cpr ?? Infinity)), verdict: splitTestStatus(rows, fmt) });
   }
   return out;
+}
+
+/**
+ * Every ad in scope with its totals for the range and its recent days (up to
+ * 60, whatever the range) for the fatigue trend — input of src/lib/creative-insights.ts.
+ */
+export async function creativeData(scope: Scope, r: Range, filter: { platform?: Platform } = {}): Promise<AdInput[]> {
+  if (!scope.accountIds.length) return [];
+  const e = scope.entity;
+  const ads = await db.ad.findMany({
+    where: {
+      accountId: { in: scope.accountIds }, ...(filter.platform ? { platform: filter.platform } : {}),
+      ...(e ? (e.level === "CAMPAIGN" ? { campaignId: { in: e.ids } } : e.level === "ADSET" ? { adSetId: { in: e.ids } } : { id: { in: e.ids } }) : {}),
+    },
+    select: { id: true, name: true, status: true, platform: true, format: true, creativeExternalId: true, headline: true, body: true, cta: true, thumbUrl: true, adSetId: true, campaignId: true, adSet: { select: { name: true } }, campaign: { select: { name: true } } },
+  });
+  if (!ads.length) return [];
+  const today = new Date().toISOString().slice(0, 10);
+  const recent = { from: new Date(Date.now() - 60 * 86_400_000).toISOString().slice(0, 10), to: today };
+  const [{ rows }, { rows: daily }] = await Promise.all([
+    grouped(scope, r, "AD", ["entityId"]),
+    grouped(scope, recent, "AD", ["entityId", "date"]),
+  ]);
+  const days = new Map<string, AdDay[]>();
+  for (const [k, t] of daily) {
+    const [id, date] = k.split("|");
+    days.set(id, [...(days.get(id) ?? []), { date, spend: t.spend, impressions: t.impressions, reach: t.reach, clicks: t.clicks, results: t.leads || t.conversions }]);
+  }
+  return ads.flatMap((a) => {
+    const t = rows.get(a.id);
+    if (!t || (t.impressions === 0 && t.spend === 0)) return [];
+    return [{
+      id: a.id, name: a.name, status: a.status, platform: a.platform, format: a.format, creativeExternalId: a.creativeExternalId, headline: a.headline, body: a.body, cta: a.cta, thumbUrl: a.thumbUrl,
+      adSetId: a.adSetId, adSetName: a.adSet.name, campaignId: a.campaignId, campaignName: a.campaign.name,
+      spend: t.spend, impressions: t.impressions, reach: t.reach, clicks: t.clicks, results: t.leads || t.conversions,
+      days: (days.get(a.id) ?? []).sort((x, y) => x.date.localeCompare(y.date)),
+    }];
+  });
 }
 
 /** Results per funnel stage: every ad set's numbers under its stage. */

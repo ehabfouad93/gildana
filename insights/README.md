@@ -129,6 +129,12 @@ Meta reports results per ad set, never per interest inside an ad set that mixes 
 
 **Audiences → Suggestions** reads all Meta history (ignoring the date filter) and gives three opinions: rules from the account's own exact results (`src/lib/interest-advice.ts`: Scale / Stop / Test alone / Use here / Test again), Claude, and OpenAI — the AI ones on request, when `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` (+ optional `OPENAI_MODEL`) are set in Admin → Platforms. Ticked suggestions become a **split-test campaign**: one ad set per interest, copied from a chosen ad set, equal budgets, Advantage+ audience off, created paused unless "Start now" is ticked (needs a Meta login connected with split tests). Tests are read automatically (winner / too early / no clear winner); "Pause losing ad sets" is a manual button.
 
+## To-do, audit and automation rules
+
+Every change to a live ad account is a **proposal** first (`Action`, `src/lib/actions-engine.ts`). Once a day the worker runs the **audit** (`src/lib/optimise.ts`: spend without results, clear losers, tired ads, winners held back by budget) and the workspace's **automation rules** (presets Stop Loss, Revive, Surf, Sunsetting, or custom conditions) over its Meta accounts and files what they find under **To-do**. Nothing is changed until a person presses Apply; applied pauses, starts and budget changes (capped at ±20%) keep the previous state and can be undone from History. Applying needs a Meta login connected with split tests.
+
+**Creatives** counts one creative together wherever it runs, ranks headlines, texts, buttons and formats, and flags tiring ads (last 7 delivery days against the ad's own first 7). **Tags** group campaigns; each ad set gets a **funnel stage** (prospecting, re-engagement, retargeting, retention) detected from its audiences and overridable; both filter every report and have their own tables on Performance.
+
 ## Filters
 
 Every analysis page (Overview, Spend, Performance, Campaigns, Audiences, Google Search) filters by company, platform, ad accounts, date range and **campaigns, ad sets or ads** (`?camp=` / `?set=` / `?ad=`). Meta breakdowns are stored per ad set and per campaign; an ad filter shows its ad set's breakdown.

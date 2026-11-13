@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { SelectAll } from "@/components/auto-refresh";
 import { PageHeader } from "@/components/shell";
+import { RunAuditButton } from "@/components/rule-forms";
 import { TodoBulk, TodoButtons } from "@/components/todo-row";
 import { db } from "@/lib/db";
 import { money } from "@/lib/format";
@@ -46,6 +47,7 @@ export default async function Actions({ searchParams }: { searchParams: Promise<
     <>
       <PageHeader title="To-do" sub="Changes suggested for your ad accounts. Nothing happens until someone presses Apply.">
         {canFeature(v, "actions.rules") && <Link className="btn-ghost" href="/actions/rules">Automation rules</Link>}
+        {canEdit(v) && <RunAuditButton />}
       </PageHeader>
       <div className="mb-4 flex gap-4 border-b border-line">
         {([["open", `Open (${open.length})`], ["history", "History"]] as const).map(([k, label]) => (

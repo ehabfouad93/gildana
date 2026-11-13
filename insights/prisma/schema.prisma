@@ -95,6 +95,8 @@ model Client {
   defaultDays       Int      @default(30)
   /// Campaign pages: "account" = each ad account's own currency, "reporting" = converted.
   campaignCurrency  String   @default("account")
+  /// When the daily audit last ran for this workspace.
+  lastAuditAt       DateTime?
   active            Boolean  @default(true)
   onboardedAt       DateTime?
   createdAt         DateTime @default(now())

@@ -7,6 +7,7 @@
 import { db } from "@/lib/db";
 import { lastNDays, ymd } from "@/lib/dates";
 import { refreshFxRates } from "@/lib/fx";
+import { auditDue, backfillStages, runAudit, runRules } from "@/lib/optimise-run";
 import { RateLimitError } from "@/platforms/types";
 import { enqueueInitialSync, enqueueLive, enqueueSync, liveMinutes } from "@/lib/jobs";
 import { runGeoAudit, runVisibility } from "./geo";
@@ -130,6 +131,17 @@ async function schedule() {
   await db.adConnection.updateMany({ where: { isDemo: false, status: "active", refreshEnc: null, expiresAt: { lt: new Date() } }, data: { status: "expired", lastError: "Access token expired — reconnect this login." } });
 }
 
+/** Once a day per workspace: the audit and the automation rules add their suggestions to the to-do list. They never change an account. */
+async function dailyOptimise() {
+  const filled = await backfillStages();
+  if (filled) console.log(`[audit] funnel stage set for ${filled} ad sets`);
+  for (const clientId of await auditDue()) {
+    const a = await runAudit(clientId);
+    const r = await runRules(clientId);
+    if (a || r) console.log(`[audit] ${clientId}: ${a} audit and ${r} rule suggestions`);
+  }
+}
+
 /** Parallel job slots; each account's jobs still run one at a time. */
 const SLOTS = Math.max(1, Math.min(10, Number(process.env.WORKER_CONCURRENCY) || 5));
 
@@ -147,6 +159,7 @@ async function main() {
         lastSchedule = Date.now();
         await schedule().catch((e) => console.error("[schedule]", e));
         await scheduleVisibility().catch((e) => console.error("[visibility]", e));
+        await dailyOptimise().catch((e) => console.error("[audit]", e.message));
         await refreshFxRates().then((n) => n && console.log(`[fx] stored ${n} exchange rates`)).catch((e) => console.error("[fx]", e.message));
       }
       const job = await claim().catch((e) => (console.error("[claim]", e), null));
