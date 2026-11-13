@@ -11,6 +11,7 @@ import { accessWhere, canEdit, canFeature, requireModule, type Viewer } from "@/
 import { WRITE_SCOPE } from "@/platforms/meta";
 import { PRESETS, createAudience, launchAdSets, listAudiences, listSources, lookalikeAudience, mixName, mixTargeting, presetAudience, reachEstimate, searchTargeting, type MixItem } from "@/platforms/meta/audiences";
 import type { FeatureKey } from "@/lib/modules";
+import { parseCustomerList, uploadCustomerList } from "@/platforms/meta/customer-list";
 
 export type ToolResult = { ok: boolean; message: string };
 
@@ -217,4 +218,29 @@ export async function loadSourcesAction(accountId: string) {
   if (a.demo) return { ok: true as const, sources: { pixels: [{ id: "demo-pixel", name: "Demo pixel" }], pages: [{ id: "demo-page", name: "Demo page" }], instagram: [{ id: "demo-ig", name: "@demo" }], videos: ["demo-v1", "demo-v2"] } };
   try { return { ok: true as const, sources: await listSources(a.token, a.account.externalId) }; }
   catch (e) { return { ok: false as const, message: (e as Error).message }; }
+}
+
+/** A customer list (emails / phones, pasted or as a CSV file) becomes a Meta custom audience. Only hashes leave this server. */
+export async function uploadCustomerListAction(_: ToolResult | null, form: FormData): Promise<ToolResult> {
+  const a = await accountFor("audiences.launcher", String(form.get("accountId")), true);
+  if ("error" in a) return { ok: false, message: a.error! };
+  const name = String(form.get("name") ?? "").trim().slice(0, 120);
+  if (!name) return { ok: false, message: "Give the audience a name." };
+  const file = form.get("file");
+  let text = String(form.get("text") ?? "");
+  if (file instanceof File && file.size) {
+    if (file.size > 8_000_000) return { ok: false, message: "The file is larger than 8 MB — split it." };
+    text += "\n" + (await file.text());
+  }
+  const list = parseCustomerList(text, String(form.get("countryCode") ?? "").replace(/\D/g, "").slice(0, 4));
+  const total = list.emails.length + list.phones.length;
+  if (total < 100) return { ok: false, message: `Found ${list.emails.length} emails and ${list.phones.length} phone numbers. Meta needs at least 100 people to build an audience.` };
+  try {
+    const externalId = a.demo ? `demo-list-${Date.now().toString(36)}` : await uploadCustomerList(a.token, a.account.externalId, name, list);
+    await db.savedAudience.create({ data: { accountId: a.account.id, externalId, name, kind: "customer_list", stage: "retention", excludeFrom: ["prospecting"], createdHere: true } });
+  } catch (e) {
+    return { ok: false, message: `Meta refused: ${(e as Error).message}` };
+  }
+  revalidatePath("/audiences/launcher");
+  return { ok: true, message: `“${name}” created${a.demo ? " (demo)" : ""} from ${list.emails.length} emails and ${list.phones.length} phone numbers, hashed before sending. It is excluded from prospecting by default; Meta takes up to a few hours to match the people.` };
 }

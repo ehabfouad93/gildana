@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { setAudienceDefaultsAction } from "@/app/actions/audience-tools";
-import { LookalikeForm, PresetsForm, RefreshAudiences } from "@/components/launcher-forms";
+import { CustomerListForm, LookalikeForm, PresetsForm, RefreshAudiences } from "@/components/launcher-forms";
 import { pickKey } from "@/components/not-measured";
 import { PageHeader } from "@/components/shell";
 import { db } from "@/lib/db";
@@ -80,6 +80,11 @@ export default async function Launcher({ searchParams }: { searchParams: Promise
             <h2 className="mb-1 font-semibold">Create lookalikes</h2>
             <p className="mb-3 text-xs text-muted">New people who resemble one of your audiences — for prospecting. Meta needs the source audience to have at least 100 people from the country.</p>
             <LookalikeForm accountId={account.id} audiences={saved.filter((s) => s.kind !== "lookalike").map((s) => ({ id: s.id, name: s.name }))} />
+          </div>
+          <div className="card lg:col-span-2">
+            <h2 className="mb-1 font-semibold">Audience from a customer list</h2>
+            <p className="mb-3 text-xs text-muted">Your existing customers or leads as an audience — to exclude them from prospecting, sell to them again, or model lookalikes on them.</p>
+            <CustomerListForm accountId={account.id} />
           </div>
         </div>
       )}

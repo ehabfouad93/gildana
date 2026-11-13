@@ -2,7 +2,7 @@ import { createCompanyAction, deleteCompanyAction, setBudgetAction, updateCompan
 import { PageHeader } from "@/components/shell";
 import { db } from "@/lib/db";
 import { PLATFORM_META } from "@/lib/platforms";
-import { accessWhere, canEdit, companyWhere, requireModule } from "@/lib/tenancy";
+import { accessWhere, canEdit, canFeature, companyWhere, requireModule } from "@/lib/tenancy";
 
 export const metadata = { title: "Companies" };
 
@@ -23,7 +23,9 @@ export default async function Companies() {
 
   return (
     <>
-      <PageHeader title="Companies" sub={client.isAgency ? "Each brand you manage. Ad accounts and websites belong to a company." : "Your brands. Ad accounts and websites belong to a company."} />
+      <PageHeader title="Companies" sub={client.isAgency ? "Each brand you manage. Ad accounts and websites belong to a company." : "Your brands. Ad accounts and websites belong to a company."}>
+        {canFeature(v, "companies.leads_sync") && <a className="btn-ghost" href="/leads-sync">Leads sync</a>}
+      </PageHeader>
       <div className="space-y-3">
         {companies.map((c) => {
           const counts = c.accounts.reduce<Record<string, number>>((m, a) => ((m[a.platform] = (m[a.platform] ?? 0) + 1), m), {});

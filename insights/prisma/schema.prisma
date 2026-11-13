@@ -419,6 +419,8 @@ model Lead {
   createdAt  DateTime
   fields     Json
 
+  deliveries LeadDelivery[]
+
   @@unique([accountId, externalId])
   @@index([adSetId])
   @@index([campaignId])
@@ -946,4 +948,40 @@ model Approval {
   createdAt   DateTime  @default(now())
 
   @@index([clientId, status])
+}
+
+/// Where new leads are sent as they arrive: a webhook (CRM, Zapier, Make, a Google Sheet script).
+model LeadDestination {
+  id         String    @id @default(cuid())
+  clientId   String
+  /// Only this company's leads; null = every company of the client.
+  companyId  String?
+  name       String
+  urlEnc     String
+  secretEnc  String
+  enabled    Boolean   @default(true)
+  lastError  String    @default("")
+  lastSentAt DateTime?
+  createdAt  DateTime  @default(now())
+  createdById String?
+
+  deliveries LeadDelivery[]
+
+  @@index([clientId])
+}
+
+model LeadDelivery {
+  id            String          @id @default(cuid())
+  leadId        String
+  lead          Lead            @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  destinationId String
+  destination   LeadDestination @relation(fields: [destinationId], references: [id], onDelete: Cascade)
+  status        String          @default("failed") // sent | failed
+  attempts      Int             @default(0)
+  error         String          @default("")
+  nextTryAt     DateTime?
+  sentAt        DateTime?
+
+  @@unique([leadId, destinationId])
+  @@index([destinationId, status])
 }

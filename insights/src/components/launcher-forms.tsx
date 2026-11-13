@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useState, useTransition } from "react";
-import { createLookalikesAction, createPresetsAction, loadSourcesAction, refreshAudiencesAction } from "@/app/actions/audience-tools";
+import { createLookalikesAction, createPresetsAction, loadSourcesAction, refreshAudiencesAction, uploadCustomerListAction } from "@/app/actions/audience-tools";
 
 type Sources = { pixels: { id: string; name: string }[]; pages: { id: string; name: string }[]; instagram: { id: string; name: string }[]; videos: string[] };
 const STAGE: Record<string, string> = { reengagement: "Re-engagement", retargeting: "Retargeting" };
@@ -77,6 +77,25 @@ export function LookalikeForm({ accountId, audiences }: { accountId: string; aud
         {[1, 2, 5].map((p) => <label key={p} className="flex items-center gap-1"><input type="checkbox" name="percent" value={p} defaultChecked={p === 1} /> {p}% <span className="text-xs text-muted">{p === 1 ? "(closest)" : p === 5 ? "(widest)" : ""}</span></label>)}
       </div>
       <button className="btn" disabled={pending}>{pending ? "Creating…" : "Create lookalikes"}</button>
+      <Note r={res} />
+    </form>
+  );
+}
+
+/** Upload or paste a customer list; it is hashed on the server and becomes a Meta custom audience. */
+export function CustomerListForm({ accountId }: { accountId: string }) {
+  const [res, action, pending] = useActionState(uploadCustomerListAction, null);
+  return (
+    <form action={action} className="space-y-3">
+      <input type="hidden" name="accountId" value={accountId} />
+      <div className="grid gap-3 sm:grid-cols-[2fr_1fr]">
+        <div><label className="label">Audience name</label><input className="input" name="name" required maxLength={120} placeholder="e.g. Customers 2026" /></div>
+        <div><label className="label">Country code for local numbers</label><input className="input" name="countryCode" placeholder="20" maxLength={4} /></div>
+      </div>
+      <div><label className="label">CSV file of emails and/or phone numbers</label><input className="input" type="file" name="file" accept=".csv,.txt,text/csv,text/plain" /></div>
+      <div><label className="label">…or paste them (one per line or comma-separated)</label><textarea className="input min-h-20 font-mono text-xs" name="text" /></div>
+      <button className="btn" disabled={pending}>{pending ? "Uploading…" : "Create audience from list"}</button>
+      <p className="text-xs text-muted">Emails and numbers are hashed (SHA-256) on this server; only the hashes go to Meta, and the list is not stored here. Upload only people who agreed to be contacted. At least 100 are needed.</p>
       <Note r={res} />
     </form>
   );

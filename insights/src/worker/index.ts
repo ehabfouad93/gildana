@@ -7,6 +7,7 @@
 import { db } from "@/lib/db";
 import { lastNDays, ymd } from "@/lib/dates";
 import { refreshFxRates } from "@/lib/fx";
+import { deliverLeads } from "@/lib/lead-sync";
 import { auditDue, backfillStages, runAudit, runRules } from "@/lib/optimise-run";
 import { RateLimitError } from "@/platforms/types";
 import { enqueueInitialSync, enqueueLive, enqueueSync, liveMinutes } from "@/lib/jobs";
@@ -160,6 +161,7 @@ async function main() {
         await schedule().catch((e) => console.error("[schedule]", e));
         await scheduleVisibility().catch((e) => console.error("[visibility]", e));
         await dailyOptimise().catch((e) => console.error("[audit]", e.message));
+        await deliverLeads().then((r) => (r.sent || r.failed) && console.log(`[leads] sent ${r.sent}, failed ${r.failed}`)).catch((e) => console.error("[leads]", e.message));
         await refreshFxRates().then((n) => n && console.log(`[fx] stored ${n} exchange rates`)).catch((e) => console.error("[fx]", e.message));
       }
       const job = await claim().catch((e) => (console.error("[claim]", e), null));
