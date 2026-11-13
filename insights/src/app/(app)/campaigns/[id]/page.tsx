@@ -17,7 +17,9 @@ import { convert, fxTable, fxUpdatedAt } from "@/lib/fx";
 import { money } from "@/lib/format";
 import { pageContext, qs, type SP } from "@/lib/page";
 import { PLATFORM_META } from "@/lib/platforms";
-import { adSetTable, adTable, audienceInsights, breakdown, daily, keywordTable, leadSegments, placementTable, searchTermTable, splitTests, totals } from "@/lib/queries";
+import { adSetTable, adTable, audienceInsights, breakdown, daily, keywordTable, leadSegments, placementTable, searchTermTable, splitTests, totals, campaignTags } from "@/lib/queries";
+import { STAGES, STAGE_LABEL, stageOf } from "@/lib/funnel";
+import { setCampaignTagsAction, setStageAction } from "@/app/actions/tags";
 import { canEdit, canFeature, canUse } from "@/lib/tenancy";
 import { SplitTestButton } from "@/components/split-test-button";
 import { mrow } from "@/lib/rows";
@@ -66,6 +68,8 @@ export default async function CampaignPage({ params, searchParams }: { params: P
   });
   const tab = tabs.some(([k]) => k === c.one("tab")) ? c.one("tab") : tabs[0]?.[0] ?? "";
   const mayTest = canEdit(c.viewer) && canFeature(c.viewer, "audiences.create_test");
+  const mayTag = canEdit(c.viewer) && canFeature(c.viewer, "campaigns.tags");
+  const myTags = (await campaignTags(c.client.id, [id])).get(id) ?? [];
   const keep = { days: c.one("days"), from: c.one("from"), to: c.one("to"), cur: c.one("cur") };
 
   return (
@@ -74,7 +78,21 @@ export default async function CampaignPage({ params, searchParams }: { params: P
         <Filters t={t} companies={[]} range={range} days={c.one("days")} showPlatform={false} extra={{ tab }} />
         {canFeature(c.viewer, "campaigns.share") && canUse(c.viewer, "reports") && <Link href={`/reports?campaign=${id}`} className="btn-ghost no-print">Share report</Link>}
       </PageHeader>
-      <div className="mb-3"><CurrencySwitch sp={c.sp} mode={curMode} account={campaign.account.currency} reporting={c.scope.currency} rate={fxNote} /></div>
+      <div className="mb-3 flex flex-wrap items-center gap-x-6 gap-y-2">
+        <CurrencySwitch sp={c.sp} mode={curMode} account={campaign.account.currency} reporting={c.scope.currency} rate={fxNote} />
+        {canFeature(c.viewer, "campaigns.tags") && (c.tags.length > 0 || myTags.length > 0) && (
+          <form action={setCampaignTagsAction} className="no-print flex flex-wrap items-center gap-2 text-xs">
+            <input type="hidden" name="campaignId" value={id} />
+            <span className="text-muted">Tags</span>
+            {c.tags.map((g) => (
+              <label key={g.id} className="pill cursor-pointer bg-bg">
+                <input type="checkbox" className="me-1" name="tagId" value={g.id} defaultChecked={myTags.some((x) => x.id === g.id)} disabled={!mayTag} />{g.name}
+              </label>
+            ))}
+            {mayTag && <button className="btn-ghost !py-0.5">Save</button>}
+          </form>
+        )}
+      </div>
 
       <div className="space-y-4">
         <KpiGrid cur={cur} prev={before} currency={scope.currency} t={t} keys={["spend", "impressions", "reach", "clicks", "ctr", "cpc", "cpm", "frequency", "conversions", "leads", "cpl", "roas"]} />
@@ -241,7 +259,19 @@ export default async function CampaignPage({ params, searchParams }: { params: P
               return (
                 <div key={s.id} className="rounded-lg border border-line p-3">
                   <div className="flex flex-wrap items-baseline justify-between gap-2">
-                    <div className="font-medium">{s.name}</div>
+                    <div className="flex flex-wrap items-center gap-2 font-medium">
+                      {s.name}
+                      {canFeature(c.viewer, "campaigns.tags") && (
+                        <form action={setStageAction} className="flex items-center gap-1 text-xs font-normal">
+                          <input type="hidden" name="adSetId" value={s.id} />
+                          <select name="stage" defaultValue={s.funnelStageManual} className="rounded border border-line bg-panel px-1 py-0.5" disabled={!mayTag} aria-label="Funnel stage">
+                            <option value="">{STAGE_LABEL[stageOf({ funnelStage: s.funnelStage, funnelStageManual: "" })]} (detected)</option>
+                            {STAGES.map((k) => <option key={k} value={k}>{STAGE_LABEL[k]}</option>)}
+                          </select>
+                          {mayTag && <button className="text-accent hover:underline">Set</button>}
+                        </form>
+                      )}
+                    </div>
                     <div className="text-xs text-muted tabular-nums">
                       {fmtMetric("spend", s.m.spend, scope.currency)} · {fmtMetric("leads", s.m.leads, scope.currency)} leads · CPL {fmtMetric("cpl", s.m.cpl, scope.currency)} · CTR {fmtMetric("ctr", s.m.ctr, scope.currency)}
                     </div>

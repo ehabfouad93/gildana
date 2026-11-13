@@ -22,7 +22,7 @@ export default async function Overview({ searchParams }: { searchParams: Promise
   return (
     <>
       <PageHeader title={t.overview} sub={`${c.client.name} · ${range.from} → ${range.to} · ${scope.currency}`}>
-        <Filters t={t} entity={c.entityPick} freshness={c.freshness} accounts={c.accounts} companies={c.companies} companyId={c.companyId} platform={c.platform} range={range} days={c.one("days")} />
+        <Filters t={t} entity={c.entityPick} tags={c.tags} freshness={c.freshness} accounts={c.accounts} companies={c.companies} companyId={c.companyId} platform={c.platform} range={range} days={c.one("days")} />
       </PageHeader>
 
       {!scope.accountIds.length ? (

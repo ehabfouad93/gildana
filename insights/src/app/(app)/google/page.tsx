@@ -23,7 +23,7 @@ export default async function Google({ searchParams }: { searchParams: Promise<S
   return (
     <>
       <PageHeader title={t.google} sub="Keyword, search-term and placement performance across every Google Ads account">
-        <Filters t={t} entity={c.entityPick} freshness={c.freshness} accounts={c.accounts.filter((a) => a.platform === "GOOGLE")} companies={c.companies} companyId={c.companyId} range={range} days={c.one("days")} showPlatform={false} extra={{ tab }} />
+        <Filters t={t} entity={c.entityPick} tags={c.tags} freshness={c.freshness} accounts={c.accounts.filter((a) => a.platform === "GOOGLE")} companies={c.companies} companyId={c.companyId} range={range} days={c.one("days")} showPlatform={false} extra={{ tab }} />
       </PageHeader>
       <nav className="mb-4 flex gap-1 border-b border-line">
         {Object.entries(TABS).map(([k, label]) => (

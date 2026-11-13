@@ -24,13 +24,17 @@ type Props = {
   range: { from: string; to: string };
   /** Shows the campaign / ad set / ad picker; null = on with nothing picked, undefined = off. */
   entity?: EntityPick | null;
+  /** Tags of the workspace; with `entity` on, adds a tag / funnel-stage filter. */
+  tags?: { id: string; name: string }[];
 };
+
+const STAGE_OPTIONS: [string, string][] = [["prospecting", "Prospecting"], ["reengagement", "Re-engagement"], ["retargeting", "Retargeting"], ["retention", "Retention"]];
 
 /**
  * Filters for every report page, kept in the URL so views can be bookmarked
  * and shared: company, platform, any set of ad accounts, and a preset or custom date range.
  */
-export function FilterBar({ labels, companies, accounts = [], showPlatform = true, range, entity }: Props) {
+export function FilterBar({ labels, companies, accounts = [], showPlatform = true, range, entity, tags = [] }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const sp = useSearchParams();
@@ -47,6 +51,8 @@ export function FilterBar({ labels, companies, accounts = [], showPlatform = tru
   const [picked, setPicked] = useState<string[] | null>(() => { const a = (sp.get("acc") ?? "").split(",").filter(Boolean); return a.length ? a : null; });
 
   const [ent, setEnt] = useState<EntityPick>(entity ?? { level: "CAMPAIGN", items: [] });
+  const [tag, setTag] = useState(sp.get("tag") ?? "");
+  const [stage, setStage] = useState(sp.get("stage") ?? "");
   const companyName = company === "none" ? "Unassigned" : companies.find((c) => c.id === company)?.name;
   const visible = useMemo(() => accounts.filter((a) => (!platform || SLUG[a.platform] === platform) && (!company || a.company === companyName)), [accounts, platform, company, companyName]);
 
@@ -54,8 +60,9 @@ export function FilterBar({ labels, companies, accounts = [], showPlatform = tru
     const q = new URLSearchParams(sp.toString());
     for (const k of ["company", "platform", "acc", "days", "period", "from", "to"]) q.delete(k);
     if (entity !== undefined) {
-      for (const k of Object.values(ENTITY_PARAM)) q.delete(k);
+      for (const k of [...Object.values(ENTITY_PARAM), "tag", "stage"]) q.delete(k);
       if (ent.items.length) q.set(ENTITY_PARAM[ent.level], ent.items.map((x) => x.id).join(","));
+      else { if (tag) q.set("tag", tag); if (stage) q.set("stage", stage); }
     }
     if (company) q.set("company", company);
     if (platform) q.set("platform", platform);
@@ -84,6 +91,18 @@ export function FilterBar({ labels, companies, accounts = [], showPlatform = tru
       )}
       {accounts.length > 1 && <AccountPicker accounts={visible} picked={picked} setPicked={setPicked} />}
       {entity !== undefined && <EntityPicker value={ent} onChange={setEnt} query={{ company, platform, acc: (picked ?? []).join(",") }} />}
+      {entity !== undefined && !ent.items.length && (
+        <select value={stage} onChange={(e) => setStage(e.target.value)} className="input w-auto" aria-label="Funnel stage">
+          <option value="">All funnel stages</option>
+          {STAGE_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select>
+      )}
+      {entity !== undefined && !ent.items.length && tags.length > 0 && (
+        <select value={tag} onChange={(e) => setTag(e.target.value)} className="input w-auto" aria-label="Tag">
+          <option value="">All tags</option>
+          {tags.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+        </select>
+      )}
       <select value={preset} onChange={(e) => setPreset(e.target.value)} className="input w-auto" aria-label="Date range">
         {PRESETS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
       </select>

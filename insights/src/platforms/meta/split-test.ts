@@ -1,6 +1,9 @@
 import { fetchJson } from "@/lib/http";
 import type { RemoteTargetingItem } from "../types";
 import { setting } from "@/lib/settings";
+import { metaPost, toMinor } from "./write";
+
+export { toMinor };
 
 /**
  * Interest split test on Meta: copies one ad set into one ad set per
@@ -32,11 +35,7 @@ export function splitBudget(minorUnits: number, n: number): number[] {
 
 const COPY_FIELDS = ["campaign_id", "billing_event", "optimization_goal", "bid_strategy", "bid_amount", "daily_budget", "lifetime_budget", "end_time", "promoted_object", "attribution_spec", "destination_type", "targeting", "name"];
 
-async function post(path: string, token: string, params: Record<string, unknown>) {
-  const body = new URLSearchParams({ access_token: token });
-  for (const [k, v] of Object.entries(params)) if (v != null && v !== "") body.set(k, typeof v === "string" ? v : JSON.stringify(v));
-  return fetchJson<{ id?: string; copied_ad_id?: string }>(`${G()}/${path}`, { method: "POST", body, tries: 1 });
-}
+const post = metaPost;
 
 export async function createInterestSplit(token: string, accountExternalId: string, adSetExternalId: string, items: RemoteTargetingItem[]) {
   const act = accountExternalId.startsWith("act_") ? accountExternalId : `act_${accountExternalId}`;
@@ -63,10 +62,6 @@ export async function createInterestSplit(token: string, accountExternalId: stri
 }
 
 // ───────── a new campaign with one ad set per interest ─────────
-
-/** Currencies Meta counts in whole units; every other currency is sent in hundredths. */
-const WHOLE_UNIT = new Set(["CLP", "COP", "CRC", "HUF", "ISK", "IDR", "JPY", "KRW", "PYG", "TWD", "VND"]);
-export const toMinor = (amount: number, currency: string) => Math.round(amount * (WHOLE_UNIT.has(currency.toUpperCase()) ? 1 : 100));
 
 export type SplitCampaignOptions = {
   name: string;

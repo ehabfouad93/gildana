@@ -9,17 +9,18 @@ import { LiveBadge } from "./live-badge";
  * `days` are accepted for older call sites; the bar keeps every other
  * parameter already in the URL (tab, metric, path…).
  */
-export function Filters({ t, companies, range, accounts, showPlatform = true, freshness, entity }: {
+export function Filters({ t, companies, range, accounts, showPlatform = true, freshness, entity, tags }: {
   t: Dict; companies: { id: string; name: string }[]; companyId?: string; platform?: string; range: Range; days?: string;
   extra?: Record<string, string>; showPlatform?: boolean; accounts?: PickAccount[];
   freshness?: { updatedAt: string | null; syncing: boolean };
   /** Pass the page context's `entityPick` to show the campaign / ad set / ad filter. */
   entity?: EntityPick | null;
+  tags?: { id: string; name: string }[];
 }) {
   return (
     <Suspense>
       {freshness && <LiveBadge updatedAt={freshness.updatedAt} syncing={freshness.syncing} />}
-      <FilterBar labels={{ allCompanies: t.allCompanies, allPlatforms: t.allPlatforms, apply: t.apply }} companies={companies} accounts={accounts} showPlatform={showPlatform} range={range} entity={entity} />
+      <FilterBar labels={{ allCompanies: t.allCompanies, allPlatforms: t.allPlatforms, apply: t.apply }} companies={companies} accounts={accounts} showPlatform={showPlatform} range={range} entity={entity} tags={tags} />
     </Suspense>
   );
 }

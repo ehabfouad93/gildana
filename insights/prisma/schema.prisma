@@ -226,6 +226,10 @@ model AdSet {
   bidStrategy      String    @default("")
   dailyBudget      Decimal?  @db.Decimal(14, 2)
   targetingRaw     Json?
+  /// prospecting | reengagement | retargeting | retention — detected from the targeting on sync.
+  funnelStage      String    @default("")
+  /// Set by a person; wins over the detected stage.
+  funnelStageManual String   @default("")
   updatedAt        DateTime  @updatedAt
 
   ads       Ad[]
@@ -255,6 +259,8 @@ model Ad {
   landingUrl  String    @default("")
   previewUrl  String    @default("")
   previewHtml String?
+  /// The platform's creative id: the same creative reused in several ad sets shares it.
+  creativeExternalId String @default("")
   updatedAt   DateTime  @updatedAt
 
   @@unique([accountId, externalId])
@@ -816,4 +822,80 @@ model AccountClaim {
 
   @@unique([clientId, platform, externalId])
   @@index([status])
+}
+
+// ───────────────────────── Optimisation: proposals, rules, tags ─────────────────────────
+
+/// A change to a live ad account. Audits and rules only propose; a person applies.
+model Action {
+  id          String    @id @default(cuid())
+  clientId    String
+  accountId   String
+  kind        String // pause | start | budget
+  level       String // CAMPAIGN | ADSET | AD
+  entityId    String
+  entityName  String    @default("")
+  /// budget: { from, to, percent }
+  payload     Json?
+  reason      String    @default("")
+  /// audit | rule:<id> | user
+  source      String    @default("audit")
+  priority    Int       @default(0)
+  status      String    @default("proposed") // proposed | applied | dismissed | failed | undone
+  before      Json?
+  after       Json?
+  /// Same key = same suggestion; stops the audit proposing it again.
+  dedupeKey   String    @default("")
+  error       String    @default("")
+  createdAt   DateTime  @default(now())
+  createdById String?
+  decidedById String?
+  decidedAt   DateTime?
+
+  @@index([clientId, status])
+  @@index([accountId, dedupeKey])
+}
+
+/// An automation rule. It never changes an account itself — it adds proposals to the to-do list.
+model Rule {
+  id         String   @id @default(cuid())
+  clientId   String
+  name       String
+  preset     String   @default("") // stop_loss | revive | surf | sunset | ""
+  enabled    Boolean  @default(true)
+  level      String   @default("ADSET") // ADSET | AD
+  /// { accountIds?, campaignIds?, tagIds?, stages? } — empty = every Meta account of the client
+  scope      Json
+  /// [{ metric, op, value, valueOf? }] — all must hold
+  conditions Json
+  windowDays Int      @default(7)
+  /// { kind: pause | start | budget, percent?, cap? }
+  action     Json
+  lastRunAt  DateTime?
+  createdAt  DateTime @default(now())
+  createdById String?
+
+  @@index([clientId])
+}
+
+model Tag {
+  id       String @id @default(cuid())
+  clientId String
+  name     String
+  color    String @default("#64748b")
+
+  entities EntityTag[]
+
+  @@unique([clientId, name])
+}
+
+model EntityTag {
+  id       String @id @default(cuid())
+  tagId    String
+  tag      Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  level    String // CAMPAIGN | ADSET
+  entityId String
+
+  @@unique([tagId, level, entityId])
+  @@index([level, entityId])
 }

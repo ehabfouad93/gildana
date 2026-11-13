@@ -9,6 +9,7 @@ import type { Scope } from "@/lib/queries";
 import { accessWhere, companyWhere, requireModule, scopedAccountIds } from "@/lib/tenancy";
 import type { ModuleKey } from "@/lib/modules";
 import type { EntityFilter } from "@/lib/entity-filter";
+import { STAGES, stageOf } from "@/lib/funnel";
 
 export type SP = Record<string, string | string[] | undefined>;
 
@@ -30,7 +31,10 @@ export async function pageContext(spP: Promise<SP>, module: ModuleKey) {
   const acc = (Array.isArray(sp.acc) ? sp.acc.join(",") : sp.acc ?? "").split(",").filter(Boolean).slice(0, 500);
   let accountIds = await scopedAccountIds(client.id, { companyId, platform, accountIds: acc.length ? acc : undefined, access: viewer.access });
   // ?camp= / ?set= / ?ad= — a campaign, ad set or ad filter (the most specific one given wins).
-  const picked = await entityFromParams(sp, accountIds);
+  // …or ?tag= / ?stage= — campaigns carrying a tag, ad sets in a funnel stage.
+  const tags = await db.tag.findMany({ where: { clientId: client.id }, orderBy: { name: "asc" }, select: { id: true, name: true, color: true } });
+  const byEntity = await entityFromParams(sp, accountIds);
+  const picked = byEntity ?? (await entityFromTags(sp, accountIds, tags.map((x) => x.id)));
   if (picked) accountIds = picked.accountIds;
   // Opening a report refreshes any of its accounts whose numbers are more than five minutes old.
   await refreshIfStale(accountIds);
@@ -42,7 +46,8 @@ export async function pageContext(spP: Promise<SP>, module: ModuleKey) {
   const scope: Scope = { accountIds, currency: client.reportingCurrency, ...(picked ? { entity: picked.filter } : {}) };
 
   return {
-    sp, one: (k: string) => one(sp[k]), viewer, client, companies, limited, entityPick: picked ? { level: picked.filter.level, items: picked.items } : null, companyId, platform, range, acc, freshness: fresh,
+    sp, one: (k: string) => one(sp[k]), viewer, client, companies, limited, entityPick: byEntity ? { level: byEntity.filter.level, items: byEntity.items } : null,
+    tags, tagPick: !byEntity && picked ? { tag: one(sp.tag), stage: one(sp.stage) } : { tag: "", stage: "" }, companyId, platform, range, acc, freshness: fresh,
     accounts: accounts.map((a) => ({ id: a.id, name: a.name, platform: a.platform, externalId: a.externalId, company: a.company?.name ?? "Unassigned" })),
     prev: previousRange(range), scope, t: await getDict(),
   };
@@ -68,6 +73,28 @@ async function entityFromParams(sp: SP, accountIds: string[]): Promise<{ filter:
   const rows = await db.campaign.findMany({ where: { id: { in: camp }, accountId: { in: accountIds } }, select: { id: true, name: true, accountId: true } });
   if (!rows.length) return null;
   return { filter: { level: "CAMPAIGN", ids: rows.map((x) => x.id), adSetIds: [], campaignIds: rows.map((x) => x.id) }, items: rows.map((x) => ({ id: x.id, name: x.name })), accountIds: uniq(rows.map((x) => x.accountId)) };
+}
+
+/** ?tag= (campaigns carrying it) and ?stage= (ad sets in that funnel stage), as an entity filter. */
+async function entityFromTags(sp: SP, accountIds: string[], clientTagIds: string[]): Promise<{ filter: EntityFilter; items: { id: string; name: string }[]; accountIds: string[] } | null> {
+  const tagIds = ids(sp.tag).filter((t) => clientTagIds.includes(t));
+  const stage = (STAGES as readonly string[]).includes(one(sp.stage)) ? one(sp.stage) : "";
+  if (!accountIds.length || (!tagIds.length && !stage)) return null;
+  const uniq = (a: string[]) => [...new Set(a)];
+  // "-" matches nothing: a tag or stage with no campaigns must show an empty report, not everything.
+  const none = { filter: { level: "CAMPAIGN" as const, ids: ["-"], campaignIds: ["-"], adSetIds: [] }, items: [], accountIds };
+  let campaignIds: string[] | null = null;
+  if (tagIds.length) {
+    const tagged = await db.entityTag.findMany({ where: { tagId: { in: tagIds }, level: "CAMPAIGN" }, select: { entityId: true } });
+    const rows = await db.campaign.findMany({ where: { id: { in: tagged.map((x) => x.entityId) }, accountId: { in: accountIds } }, select: { id: true, accountId: true } });
+    if (!rows.length) return none;
+    campaignIds = rows.map((x) => x.id);
+    if (!stage) return { filter: { level: "CAMPAIGN", ids: campaignIds, campaignIds, adSetIds: [] }, items: [], accountIds: uniq(rows.map((x) => x.accountId)) };
+  }
+  const sets = (await db.adSet.findMany({ where: { accountId: { in: accountIds }, ...(campaignIds ? { campaignId: { in: campaignIds } } : {}) }, select: { id: true, campaignId: true, accountId: true, funnelStage: true, funnelStageManual: true } }))
+    .filter((x) => stageOf(x) === stage);
+  if (!sets.length) return none;
+  return { filter: { level: "ADSET", ids: sets.map((x) => x.id), adSetIds: sets.map((x) => x.id), campaignIds: uniq(sets.map((x) => x.campaignId)) }, items: [], accountIds: uniq(sets.map((x) => x.accountId)) };
 }
 
 /** Rebuilds the current query string with some keys replaced, for links that keep filters. */

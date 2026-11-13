@@ -1,9 +1,11 @@
 /** Dashboard sections a client user can be given. Owners and Gildana staff always have all. */
 export const MODULES = [
   { key: "overview", label: "Overview", path: "/overview" },
+  { key: "actions", label: "To-do (audit, rules, changes)", path: "/actions" },
   { key: "spend", label: "Spend", path: "/spend" },
   { key: "performance", label: "Performance", path: "/performance" },
   { key: "campaigns", label: "Campaigns", path: "/campaigns" },
+  { key: "creatives", label: "Creatives", path: "/creatives" },
   { key: "audiences", label: "Audiences", path: "/audiences" },
   { key: "google", label: "Google Search", path: "/google" },
   { key: "sites", label: "Websites (analytics, heatmaps, SEO, GEO)", path: "/sites" },
@@ -45,6 +47,9 @@ export const FEATURES = [
   { key: "audiences.ai", module: "audiences", label: "AI suggestions (Claude / OpenAI)" },
   { key: "audiences.create_test", module: "audiences", label: "Create split tests and split-test campaigns" },
   { key: "audiences.pause_losers", module: "audiences", label: "Pause losing ad sets" },
+  { key: "actions.apply", module: "actions", label: "Apply and undo changes in ad accounts" },
+  { key: "actions.rules", module: "actions", label: "Create and edit automation rules" },
+  { key: "campaigns.tags", module: "campaigns", label: "Tags and funnel stages" },
   { key: "general.sync_breakdowns", module: "general", label: "“Sync breakdowns now” button" },
 ] as const;
 

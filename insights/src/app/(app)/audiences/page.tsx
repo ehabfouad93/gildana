@@ -44,7 +44,7 @@ export default async function Audiences({ searchParams }: { searchParams: Promis
   return (
     <>
       <PageHeader title={t.audiences} sub={view === "results" ? "Exact results of every targeting choice, across every campaign" : "What to scale, stop and test next — read from all your Meta history"}>
-        {view === "results" && <Filters t={t} entity={c.entityPick} freshness={c.freshness} accounts={c.accounts} companies={c.companies} companyId={c.companyId} platform={c.platform} range={range} days={c.one("days")} extra={{ g: c.one("g") }} />}
+        {view === "results" && <Filters t={t} entity={c.entityPick} tags={c.tags} freshness={c.freshness} accounts={c.accounts} companies={c.companies} companyId={c.companyId} platform={c.platform} range={range} days={c.one("days")} extra={{ g: c.one("g") }} />}
       </PageHeader>
       <div className="mb-4 flex gap-4 border-b border-line">
         {allowed.map((k) => [k, VIEWS[k]] as const).map(([k, label]) => (

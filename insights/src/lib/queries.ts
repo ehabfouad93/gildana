@@ -7,6 +7,7 @@ import { ZERO, add, derive, type Totals } from "@/lib/metrics";
 import { advantageAudience } from "@/platforms/meta/normalize";
 import { SEGMENT_TYPES } from "@/lib/segments";
 import { applyEntity, type EntityFilter } from "@/lib/entity-filter";
+import { STAGES, STAGE_LABEL, stageOf } from "@/lib/funnel";
 import { splitTestStatus, type ArmResult, type History, type TestVerdict } from "@/lib/interest-advice";
 
 /**
@@ -379,6 +380,45 @@ export async function splitTests(scope: Scope, where: { campaignId?: string } = 
     });
     out.push({ id: t.id, name: t.name, kind: t.kind, status: t.status, createdAt: t.createdAt, endsAt: t.endsAt, campaignId: shownIn, sourceAdSetId: t.sourceAdSetId, accountId: t.accountId, arms: rows.sort((a, b) => (a.cpr ?? Infinity) - (b.cpr ?? Infinity)), verdict: splitTestStatus(rows, fmt) });
   }
+  return out;
+}
+
+/** Results per funnel stage: every ad set's numbers under its stage. */
+export async function stageTable(scope: Scope, r: Range) {
+  if (!scope.accountIds.length) return [];
+  const [sets, { rows }] = await Promise.all([
+    db.adSet.findMany({ where: { accountId: { in: scope.accountIds } }, select: { id: true, funnelStage: true, funnelStageManual: true } }),
+    grouped(scope, r, "ADSET", ["entityId"]),
+  ]);
+  const out = new Map<string, { t: Totals; adSets: number }>();
+  for (const s of sets) {
+    const t = rows.get(s.id);
+    if (!t) continue;
+    const k = stageOf(s);
+    const cur = out.get(k) ?? { t: { ...ZERO }, adSets: 0 };
+    out.set(k, { t: add(cur.t, t), adSets: cur.adSets + 1 });
+  }
+  return STAGES.flatMap((k) => (out.has(k) ? [{ stage: k, label: STAGE_LABEL[k], adSets: out.get(k)!.adSets, m: derive(out.get(k)!.t) }] : []));
+}
+
+/** Results per tag: a campaign with two tags counts under both. */
+export async function tagTable(scope: Scope, r: Range, clientId: string) {
+  if (!scope.accountIds.length) return [];
+  const tags = await db.tag.findMany({ where: { clientId }, include: { entities: { where: { level: "CAMPAIGN" }, select: { entityId: true } } }, orderBy: { name: "asc" } });
+  if (!tags.length) return [];
+  const { rows } = await grouped(scope, r, "CAMPAIGN", ["entityId"]);
+  return tags.map((t) => {
+    let sum = { ...ZERO }, n = 0;
+    for (const e of t.entities) { const x = rows.get(e.entityId); if (x) { sum = add(sum, x); n++; } }
+    return { id: t.id, name: t.name, color: t.color, campaigns: n, m: derive(sum) };
+  }).filter((t) => t.campaigns > 0).sort((a, b) => b.m.spend - a.m.spend);
+}
+
+/** Tags of a set of campaigns, for showing next to their names. */
+export async function campaignTags(clientId: string, campaignIds: string[]): Promise<Map<string, { id: string; name: string; color: string }[]>> {
+  const rows = await db.entityTag.findMany({ where: { level: "CAMPAIGN", entityId: { in: campaignIds }, tag: { clientId } }, select: { entityId: true, tag: { select: { id: true, name: true, color: true } } } });
+  const out = new Map<string, { id: string; name: string; color: string }[]>();
+  for (const r of rows) out.set(r.entityId, [...(out.get(r.entityId) ?? []), r.tag]);
   return out;
 }
 

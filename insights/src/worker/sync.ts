@@ -2,6 +2,7 @@ import { Prisma, type AdConnection, type Level } from "@prisma/client";
 import { db } from "@/lib/db";
 import { decrypt, encrypt } from "@/lib/crypto";
 import { toDate } from "@/lib/dates";
+import { detectStage } from "@/lib/funnel";
 import { connectorFor } from "@/platforms";
 import { RateLimitError, type Connector, type Metrics, type RemoteTargetingItem, type SyncContext } from "@/platforms/types";
 
@@ -65,6 +66,7 @@ export async function syncAccount(accountId: string, from: string, to: string, l
     const data = {
       campaignId, name: x.name, status: x.status, optimizationGoal: x.optimizationGoal ?? "", bidStrategy: x.bidStrategy ?? "",
       dailyBudget: x.dailyBudget ?? null, targetingRaw: (x.targetingRaw ?? Prisma.JsonNull) as Prisma.InputJsonValue,
+      funnelStage: detectStage(x.targeting),
     };
     const row = await db.adSet.upsert({
       where: { accountId_externalId: { accountId, externalId: x.externalId } },
@@ -84,6 +86,7 @@ export async function syncAccount(accountId: string, from: string, to: string, l
     const data = {
       campaignId, adSetId, name: a.name, status: a.status, format: a.format ?? "", headline: a.headline ?? "", body: a.body ?? "",
       cta: a.cta ?? "", thumbUrl: a.thumbUrl ?? "", landingUrl: a.landingUrl ?? "", previewUrl: a.previewUrl ?? "", previewHtml: a.previewHtml ?? null,
+      creativeExternalId: a.creativeExternalId ?? "",
     };
     const row = await db.ad.upsert({
       where: { accountId_externalId: { accountId, externalId: a.externalId } },

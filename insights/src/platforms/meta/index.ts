@@ -139,7 +139,7 @@ export const meta: Connector & { preview(token: string, adId: string, format?: s
       const video = cr.object_story_spec?.video_data ?? {};
       return {
         externalId: x.id, adSetExternalId: x.adset_id, campaignExternalId: x.campaign_id, name: x.name, status: x.effective_status ?? "",
-        format: String(cr.object_type ?? "").toLowerCase(),
+        format: String(cr.object_type ?? "").toLowerCase(), creativeExternalId: String(cr.id ?? ""),
         headline: cr.title ?? link.name ?? video.title ?? "", body: cr.body ?? link.message ?? video.message ?? "",
         cta: cr.call_to_action_type ?? "", thumbUrl: cr.thumbnail_url ?? cr.image_url ?? "",
         landingUrl: cr.link_url ?? link.link ?? "",

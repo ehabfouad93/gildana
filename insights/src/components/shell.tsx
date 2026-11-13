@@ -9,7 +9,7 @@ import { NavLink } from "./nav-link";
 
 type Dict = Awaited<ReturnType<typeof getDict>>;
 const NAV_LABEL: Record<ModuleKey, (t: Dict) => string> = {
-  overview: (t) => t.overview, spend: (t) => t.spend, performance: (t) => t.performance, campaigns: (t) => t.campaigns,
+  overview: (t) => t.overview, actions: () => "To-do", creatives: () => "Creatives", spend: (t) => t.spend, performance: (t) => t.performance, campaigns: (t) => t.campaigns,
   audiences: (t) => t.audiences, google: (t) => t.google, sites: (t) => t.sites, reports: (t) => t.reports,
   connections: (t) => t.connections, companies: (t) => t.companies,
 };

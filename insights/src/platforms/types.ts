@@ -32,6 +32,8 @@ export type RemoteAdSet = {
 
 export type RemoteAd = {
   externalId: string; adSetExternalId: string; campaignExternalId: string; name: string; status: string;
+  /** The platform's creative id, shared by ads that reuse one creative. */
+  creativeExternalId?: string;
   format?: string; headline?: string; body?: string; cta?: string; thumbUrl?: string; landingUrl?: string;
   previewUrl?: string; previewHtml?: string;
 };

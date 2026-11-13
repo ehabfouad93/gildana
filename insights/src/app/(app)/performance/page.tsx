@@ -10,7 +10,7 @@ import { METRIC_COLS } from "@/components/table-types";
 import { DIM_LABEL } from "@/lib/labels";
 import { pageContext, qs, type SP } from "@/lib/page";
 import { PLATFORM_META } from "@/lib/platforms";
-import { breakdown, campaignTable, daily, splits, totals } from "@/lib/queries";
+import { breakdown, campaignTable, daily, splits, stageTable, tagTable, totals } from "@/lib/queries";
 import { mrow } from "@/lib/rows";
 import { canFeature } from "@/lib/tenancy";
 
@@ -26,15 +26,16 @@ export default async function Performance({ searchParams }: { searchParams: Prom
   const dim = DIMS.includes(c.one("dim")) ? c.one("dim") : "age";
   const labels = METRIC_LABEL(t);
 
-  const [cur, before, series, prevSeries, sp, camps, bd] = await Promise.all([
+  const [cur, before, series, prevSeries, sp, camps, bd, stages, byTag] = await Promise.all([
     totals(scope, range), totals(scope, prev), daily(scope, range), daily(scope, prev), splits(scope, range),
     campaignTable(scope, range, { platform: c.platform }), breakdown(scope, range, dim),
+    stageTable(scope, range), tagTable(scope, range, c.client.id),
   ]);
 
   return (
     <>
       <PageHeader title={t.performance} sub={`${range.from} → ${range.to}`}>
-        <Filters t={t} entity={c.entityPick} freshness={c.freshness} accounts={c.accounts} companies={c.companies} companyId={c.companyId} platform={c.platform} range={range} days={c.one("days")} extra={{ metric, dim }} />
+        <Filters t={t} entity={c.entityPick} tags={c.tags} freshness={c.freshness} accounts={c.accounts} companies={c.companies} companyId={c.companyId} platform={c.platform} range={range} days={c.one("days")} extra={{ metric, dim }} />
       </PageHeader>
       <div className="space-y-4">
         <KpiGrid cur={cur} prev={before} currency={scope.currency} t={t} keys={["spend", "impressions", "reach", "frequency", "clicks", "ctr", "cpc", "cpm", "conversions", "convRate", "cpa", "roas"]} />
@@ -77,6 +78,26 @@ export default async function Performance({ searchParams }: { searchParams: Prom
             cols={[{ key: "name", label: t.account, sub: "sub" }, { key: "company", label: t.company }, ...METRIC_COLS]}
             rows={sp.byAccount.map((a) => ({ name: a.name, sub: PLATFORM_META[a.platform].label, company: a.company, ...mrow(a.m) }))} />
         </div>
+
+        {canFeature(c.viewer, "campaigns.tags") && (
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="card">
+              <h2 className="mb-2 text-sm font-semibold">By funnel stage</h2>
+              <DataTable search={false} currency={scope.currency} initialSort="spend"
+                cols={[{ key: "name", label: "Stage", href: "href", sub: "sub" }, { key: "spend", label: "Spend", fmt: "money" }, { key: "leads", label: "Leads", fmt: "num" }, { key: "cpl", label: "CPL", fmt: "money2" }, { key: "conversions", label: "Conv.", fmt: "num" }, { key: "ctr", label: "CTR", fmt: "pct" }, { key: "roas", label: "ROAS", fmt: "ratio" }]}
+                rows={stages.map((s) => ({ name: s.label, href: qs(c.sp, { stage: s.stage, camp: undefined, set: undefined, ad: undefined }), sub: `${s.adSets} ad sets`, ...mrow(s.m) }))} />
+              <p className="mt-2 text-xs text-muted">Detected from each ad set&apos;s audiences (new people, engagers, visitors, customers); change it per ad set on the campaign&apos;s Targeting tab.</p>
+            </div>
+            <div className="card">
+              <h2 className="mb-2 text-sm font-semibold">By tag</h2>
+              {byTag.length ? (
+                <DataTable search={false} currency={scope.currency} initialSort="spend"
+                  cols={[{ key: "name", label: "Tag", href: "href", sub: "sub" }, { key: "spend", label: "Spend", fmt: "money" }, { key: "leads", label: "Leads", fmt: "num" }, { key: "cpl", label: "CPL", fmt: "money2" }, { key: "conversions", label: "Conv.", fmt: "num" }, { key: "ctr", label: "CTR", fmt: "pct" }, { key: "roas", label: "ROAS", fmt: "ratio" }]}
+                  rows={byTag.map((x) => ({ name: x.name, href: qs(c.sp, { tag: x.id, camp: undefined, set: undefined, ad: undefined }), sub: `${x.campaigns} campaigns`, ...mrow(x.m) }))} />
+              ) : <p className="text-sm text-muted">No tagged campaigns in this view. Create tags on the <Link className="text-accent underline" href="/campaigns">Campaigns</Link> page and tick them on a campaign.</p>}
+            </div>
+          </div>
+        )}
 
         <div className="card">
           <h2 className="mb-2 text-sm font-semibold">{t.campaigns}</h2>

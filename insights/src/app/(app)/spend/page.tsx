@@ -32,7 +32,7 @@ export default async function SpendPage({ searchParams }: { searchParams: Promis
   return (
     <>
       <PageHeader title={t.spend} sub={`${range.from} → ${range.to} · ${money(cur.spend, scope.currency)} · avg ${money(cur.spend / nDays, scope.currency)}/day`}>
-        <Filters t={t} entity={c.entityPick} freshness={c.freshness} accounts={c.accounts} companies={c.companies} companyId={c.companyId} platform={c.platform} range={range} days={c.one("days")} />
+        <Filters t={t} entity={c.entityPick} tags={c.tags} freshness={c.freshness} accounts={c.accounts} companies={c.companies} companyId={c.companyId} platform={c.platform} range={range} days={c.one("days")} />
       </PageHeader>
       <div className="space-y-4">
         <div className="card">
