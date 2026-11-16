@@ -2193,6 +2193,15 @@ onTrig(true); render();
 // Open with the whole flow visible instead of scrolled off the right edge.
 zoomFit();
 window.addEventListener('resize',()=>redraw());
+<?php if (($_GET['embed'] ?? '') === '1'): ?>
+/* Opened inside the campaign form: only the board, full size. The campaign page around it has
+   the title and the Done button, and asks this page to save before it closes. */
+document.body.classList.add('canvas-focus', 'embed');
+{ const fb = document.getElementById('btn-focus'); if (fb) fb.hidden = true; }
+toggleFocus = function(){};
+window.addEventListener('resize', () => redraw());
+setTimeout(() => { window.dispatchEvent(new Event('resize')); zoomFit(); }, 50);
+<?php endif; ?>
 </script>
 
 <?php layout_footer(); ?>

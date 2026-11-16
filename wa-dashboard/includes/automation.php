@@ -906,6 +906,11 @@ function auto_inbound_decide(array $client, array $contact, array $message, stri
     $adSource    = trim((string) ($referral['source_id'] ?? ''));
     $seedFields  = $referral ? ads_seed_fields($referral) : [];
 
+    /* It answers a campaign that continues into an automation: that campaign's trigger comes
+       first — ahead of a conversation left waiting from before the campaign, and of a takeover
+       from the Inbox that happened before the campaign went out (see automation_campaign_claim). */
+    if ($channel === 'whatsapp' && ($claim = automation_campaign_claim($client, $contact, $text, $buttonId))) return $claim;
+
     // A human is handling this chat (they replied from the Inbox) — stay out of the way.
     // The inbound is still logged by webhook.php, so nothing is lost.
     if (auto_bot_paused($contact)) return 'bot_paused|A human took over this chat from the Inbox';
@@ -997,9 +1002,6 @@ function auto_inbound_decide(array $client, array $contact, array $message, stri
         auto_start($client, $contact, $flow, $text, [], $channel, ['trigger_kind' => (string) ($flow['trig_kind'] ?? '')]);
         return 'started|' . ($flow['trig_kind'] ?? $channel) . ': ' . (string) $flow['name'];
     }
-
-    // It answers a campaign that continues into an automation: that campaign's trigger comes first.
-    if ($claim = automation_campaign_claim($client, $contact, $text, $buttonId)) return $claim;
 
     // No waiting run → try to start one (text triggers only).
     if ($text === '') {
@@ -1890,7 +1892,28 @@ function automation_campaign_claim(array $client, array $contact, string $text, 
     $cm = db_row("SELECT * FROM campaign_messages WHERE id=? AND follow_enrolled_at IS NULL", [(int) $ev['campaign_message_id']]);
     if (!$cm) return null;                             // already followed up
     $flow = db_row("SELECT * FROM flows WHERE id=? AND client_id=? AND status NOT IN ('archived','paused')", [$flowId, (int) $client['id']]);
-    if (!$flow || !$flow['first_step_id']) return null;
+    if (!$flow) return null;
+    if (!$flow['first_step_id']) {
+        // Said plainly in Settings → Diagnostics (inbound log) and in the campaign report, not silently skipped.
+        return 'flow_broken|The campaign\'s automation "' . $flow['name'] . '" has no first step connected to its trigger, so it cannot start';
+    }
+    $sentAt = strtotime((string) ($cm['sent_at'] ?? '')) ?: 0;
+    /* Someone took the chat over from the Inbox: that wins — unless it was before this campaign
+       went out and nobody has written by hand since. A new campaign is a new conversation. */
+    if (auto_bot_paused($contact)) {
+        $lastHand = strtotime((string) db_val("SELECT MAX(created_at) FROM messages WHERE client_id=? AND contact_id=? AND direction='out' AND source='manual'",
+                                              [(int) $client['id'], (int) $contact['id']])) ?: 0;
+        if ($lastHand >= $sentAt) return null;
+        db_run("UPDATE contacts SET bot_paused_until=NULL WHERE id=?", [(int) $contact['id']]);
+        $contact['bot_paused_until'] = null;
+    }
+    /* A conversation still waiting from before the campaign (another automation's question) is
+       closed: the answer is to the campaign. One that started after it keeps the answer. */
+    $open = auto_active_run((int) $contact['id']);
+    if ($open) {
+        if ((strtotime((string) ($open['updated_at'] ?? $open['created_at'])) ?: 0) > $sentAt) return null;
+        db_run("UPDATE flow_runs SET status='stopped', updated_at=NOW() WHERE id=?", [(int) $open['id']]);
+    }
     if ((int) $camp['follow_delay_minutes'] > 0) {
         return 'campaign_wait|Answers the campaign "' . $camp['name'] . '": its automation starts after the wait set there';
     }

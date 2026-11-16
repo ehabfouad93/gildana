@@ -15,7 +15,10 @@ require __DIR__ . '/auth.php';
 /* Security headers, emitted here so every page gets them regardless of which web server
    is in front — the Docker/Traefik deployment and the nginx template alike. */
 if (PHP_SAPI !== 'cli' && !headers_sent()) {
-    header('X-Frame-Options: DENY');                    // no embedding: clickjacking on the send controls
+    /* No embedding: clickjacking on the send controls. The one exception is the automation
+       canvas opened inside the campaign form (automation_edit.php?embed=1) — by this site only. */
+    $selfFrame = basename((string) ($_SERVER['SCRIPT_NAME'] ?? '')) === 'automation_edit.php' && ($_GET['embed'] ?? '') === '1';
+    header('X-Frame-Options: ' . ($selfFrame ? 'SAMEORIGIN' : 'DENY'));
     header('X-Content-Type-Options: nosniff');
     header('Referrer-Policy: strict-origin-when-cross-origin');
     header('Cross-Origin-Opener-Policy: same-origin');
@@ -33,7 +36,7 @@ if (PHP_SAPI !== 'cli' && !headers_sent()) {
          . "img-src 'self' data: blob: https:; "
          . "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
          . "font-src 'self' https://fonts.gstatic.com data:; "
-         . "connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
+         . "connect-src 'self'; frame-ancestors " . ($selfFrame ? "'self'" : "'none'") . "; base-uri 'self'; form-action 'self'");
 }
 
 if (session_status() !== PHP_SESSION_ACTIVE) {

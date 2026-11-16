@@ -172,6 +172,31 @@ if ($t0 && $counts['read']) {
 <?php endif; ?>
 
 <?php
+/* The follow-up automation(s): how many people each one started for, and anything that stops it. */
+if (!empty($camp['follow_flow_id'])):
+    require_once __DIR__ . '/../includes/automation.php';
+    $rulesF = ((string) $camp['follow_trigger'] === 'button' && ($bm = automation_campaign_buttons($camp))) ? $bm : ['' => (int) $camp['follow_flow_id']];
+    $trigWords = ['replied' => 'when they reply', 'button' => 'when they tap', 'read' => 'when they read it', 'delivered' => 'when it is delivered',
+                  'sent' => 'a set time after sending', 'no_reply' => 'when they have not replied'][(string) $camp['follow_trigger']] ?? (string) $camp['follow_trigger'];
+?>
+<div class="card" style="margin-bottom:16px" id="camp-follow">
+  <h2>Follow-up automation</h2>
+  <?php foreach ($rulesF as $btn => $fidF): $fl = db_row("SELECT id, name, status, first_step_id FROM flows WHERE id=? AND client_id=?", [$fidF, $cid]);
+        $started = (int) db_val("SELECT COUNT(*) FROM flow_runs WHERE flow_id=? AND enrol_key LIKE ?", [$fidF, 'camp:' . $id . ':%']);
+        $problem = !$fl ? 'This automation was deleted.' : ($fl['status'] === 'archived' ? 'This automation is archived.' : ($fl['status'] === 'paused' ? 'This automation is paused — switch it on to start it.'
+                 : (!$fl['first_step_id'] ? 'Nothing is connected to its start, so it cannot send anything. Open it and connect the first step.' : ''))); ?>
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px">
+      <span><?= $btn !== '' ? 'Tapped <span class="pill blue">' . e((string) $btn) . '</span> →' : 'Starts ' . e($trigWords) . (((int) $camp['follow_delay_minutes']) ? ' (after ' . (int) $camp['follow_delay_minutes'] . ' min)' : '') . ' →' ?></span>
+      <strong><?= $fl ? '<a href="automation_edit.php?id=' . (int) $fl['id'] . '">' . e((string) $fl['name']) . '</a>' : '—' ?></strong>
+      <span class="text-muted"><?= number_format($started) ?> started</span>
+      <?php if ($problem !== ''): ?><span class="pill red"><?= e($problem) ?></span><?php endif; ?>
+    </div>
+  <?php endforeach; ?>
+  <p class="viz-note">A person who wrote from the Inbox to them after this campaign went out is left to that conversation, and is not started.</p>
+</div>
+<?php endif; ?>
+
+<?php
 /* Why did messages fail? Group the top reasons so "0 sent / N failed" is never a mystery. */
 $failReasons = db_all(
     "SELECT COALESCE(NULLIF(error_title,''),'Unknown error') AS reason, error_code, COUNT(*) AS n

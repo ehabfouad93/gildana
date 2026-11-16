@@ -522,4 +522,5 @@ return [
     'How far leads get' => 'إلى أين يصل العملاء المحتملون', 'Where leads stopped' => 'أين توقف العملاء المحتملون', 'The question they stopped at' => 'السؤال الذي توقفوا عنده', 'What leads told us' => 'ماذا أخبرنا العملاء المحتملون', 'Where they stopped' => 'أين توقفوا', 'Last reply' => 'آخر رد', 'Told us' => 'أخبرونا', 'Report' => 'تقرير',
     'When they tap a button' => 'عندما يضغطون على زر', 'When they read it' => 'عندما يقرؤونها', 'When it is delivered' => 'عند التسليم', 'A set time after sending' => 'بعد وقت محدد من الإرسال', 'Which button' => 'أي زر', 'Any button' => 'أي زر من الأزرار',
     'An automation for each button' => 'أتمتة لكل زر', 'starts' => 'يبدأ', '— nothing —' => '— لا شيء —',
+    'Follow-up automation' => 'الأتمتة بعد الحملة', 'Saved as you go' => 'يُحفظ تلقائياً', '+ New' => '+ جديد',
 ];

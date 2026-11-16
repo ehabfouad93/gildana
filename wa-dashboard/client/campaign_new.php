@@ -26,7 +26,23 @@ if (isset($_GET['count'])) {
 $templates = db_all("SELECT * FROM templates WHERE client_id=? AND status='APPROVED' ORDER BY wa_name", [$cid]);
 $lists     = db_all("SELECT l.*, (SELECT COUNT(*) FROM contact_list_members m WHERE m.list_id=l.id) AS members FROM contact_lists l WHERE l.client_id=? ORDER BY l.name", [$cid]);
 // Flows this campaign can hand its recipients to once the message has landed.
-$flows     = db_all("SELECT id, name, kind FROM flows WHERE client_id=? AND status <> 'archived' ORDER BY name", [$cid]);
+$flows     = db_all("SELECT id, name, kind, status, first_step_id FROM flows WHERE client_id=? AND status <> 'archived' ORDER BY name", [$cid]);
+
+/* ── The automation canvas, from the campaign: make a new automation for this campaign, and list
+   them again (with whether each can start) after one was built or changed in the canvas. ── */
+if (($_GET['ajax'] ?? '') === 'flows') {
+    json_out(['ok' => true, 'flows' => array_map(fn($f) => ['id' => (int) $f['id'], 'name' => (string) $f['name'], 'ready' => (bool) $f['first_step_id'], 'status' => (string) $f['status']],
+        db_all("SELECT id, name, status, first_step_id FROM flows WHERE client_id=? AND status <> 'archived' AND kind='bot' ORDER BY name", [$cid]))]);
+}
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['ajax'] ?? '') === 'new_flow') {
+    verify_csrf();
+    if (!can_write() || (function_exists('can_use') && !can_use('automations'))) json_out(['ok' => false, 'error' => 'You cannot create automations.']);
+    $nm = mb_substr(trim((string) ($_POST['name'] ?? '')), 0, 120) ?: 'Campaign follow-up';
+    // A keyword automation with no keywords: it answers nothing by itself, only what the campaign hands it.
+    $newId = db_insert("INSERT INTO flows (client_id,name,kind,status,trigger_type,trigger_config,created_at) VALUES (?,?, 'bot','active','keyword',?,NOW())",
+                       [$cid, $nm, json_encode(['keywords' => [], 'match_type' => 'contains'])]);
+    json_out(['ok' => true, 'id' => $newId, 'name' => $nm]);
+}
 $err = '';
 
 /* ── Duplicate: open this form already filled in from an existing campaign ──
@@ -392,11 +408,16 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
         <div class="grid3">
           <div class="field" id="follow-flow-wrap">
             <span class="lbl">Automation</span>
-            <select name="follow_flow_id" id="follow_flow_id">
+            <div style="display:flex;gap:6px;align-items:center">
+            <select name="follow_flow_id" id="follow_flow_id" style="flex:1;min-width:0" onchange="flowWarn()">
               <?php foreach ($flows as $f): ?>
-                <option value="<?= (int) $f['id'] ?>" <?= (int) ($copy['follow_flow'] ?? 0) === (int) $f['id'] ? 'selected' : '' ?>><?= e((string) $f['name']) ?></option>
+                <option value="<?= (int) $f['id'] ?>" data-ready="<?= $f['first_step_id'] ? 1 : 0 ?>" <?= (int) ($copy['follow_flow'] ?? 0) === (int) $f['id'] ? 'selected' : '' ?>><?= e((string) $f['name'] . ($f['first_step_id'] ? '' : ' — no steps yet')) ?></option>
               <?php endforeach; ?>
             </select>
+              <button type="button" class="btn btn-ghost btn-sm" onclick="canvasOpen(document.getElementById('follow_flow_id'))" title="Open this automation on the canvas">Edit</button>
+              <button type="button" class="btn btn-ghost btn-sm" onclick="canvasNew(document.getElementById('follow_flow_id'))" title="Build a new automation for this campaign">+ New</button>
+            </div>
+            <span class="text-muted" style="font-size:11.5px;color:var(--danger)" id="follow-flow-warn" hidden></span>
           </div>
           <div class="field">
             <span class="lbl">Start it</span>
@@ -690,8 +711,11 @@ function onFollow(){
     const flowOpts = document.getElementById('follow_flow_id').innerHTML.replace(/ selected(="[^"]*")?/g, '');
     rows.innerHTML = names.map(n => `<div style="display:flex;gap:10px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
         <span class="pill blue" style="min-width:90px;text-align:center">${eatt(n)}</span><span class="text-muted">starts</span>
-        <select name="follow_btn_flow[${eatt(n)}]" data-btn="${eatt(n)}" style="flex:1;min-width:200px"><option value="">— nothing —</option>${flowOpts}</select></div>`).join('');
+        <select name="follow_btn_flow[${eatt(n)}]" data-btn="${eatt(n)}" style="flex:1;min-width:200px" onchange="flowWarn()"><option value="">— nothing —</option>${flowOpts}</select>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="canvasOpen(this.parentElement.querySelector('select'))">Edit</button>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="canvasNew(this.parentElement.querySelector('select'), ${JSON.stringify(n).replace(/"/g,'&quot;')})">+ New</button></div>`).join('');
     rows.querySelectorAll('select').forEach(sl => { if (chosen[sl.dataset.btn]) sl.value = String(chosen[sl.dataset.btn]); });
+    if (typeof flowWarn === 'function') flowWarn();
     document.getElementById('follow-btn-note').textContent = !sp ? 'Choose the template first.'
       : (names.length ? 'Choose a different automation for each button, the same one for several, or nothing. Website and call buttons are not listed: WhatsApp does not report those taps.'
                       : 'This template has no quick-reply buttons — choose another trigger or template.');
@@ -746,6 +770,75 @@ const PREFILL = <?= json_encode($copy['fields'] ?? null, JSON_UNESCAPED_UNICODE)
 // Set the follow-up controls to their correct initial state — in particular the flow select
 // starts disabled, so a campaign saved without choosing one posts no id at all.
 onFollow();
+</script>
+
+<!-- The automation canvas, inside the campaign: build or change the follow-up without leaving. -->
+<div class="modal-back" id="m-canvas" style="z-index:200">
+  <div class="modal" style="width:min(1400px,96vw);max-width:none;height:92vh;display:flex;flex-direction:column;padding:12px">
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:8px">
+      <h2 style="margin:0;font-size:16px;flex:1" id="m-canvas-title">Automation</h2>
+      <span class="text-muted" style="font-size:12px">Saved as you go</span>
+      <button type="button" class="btn btn-primary btn-sm" onclick="canvasClose()" style="margin-inline-end:38px">Done</button>
+    </div>
+    <!-- Its own ✕ (the page's usual one would close it without saving or refreshing the lists). -->
+    <button type="button" class="modal-x" aria-label="Close" onclick="canvasClose()">&times;</button>
+    <iframe id="m-canvas-frame" title="Automation canvas" style="flex:1;width:100%;border:1px solid var(--line);border-radius:10px;background:var(--surface)"></iframe>
+  </div>
+</div>
+<script>
+let CANVAS_FOR = null;
+function flowWarn(){
+  // An automation with nothing connected to its start cannot send anything: say so here.
+  const msgs = [];
+  const check = sel => { if (!sel || sel.disabled || !sel.value) return; const o = sel.selectedOptions[0]; if (o && o.dataset.ready === '0') msgs.push('“' + o.textContent.replace(/ — no steps yet$/, '') + '” has no steps connected to its start yet, so it will not send anything. Click Edit to build it.'); };
+  const byBtn = document.getElementById('follow_trigger') && document.getElementById('follow_trigger').value === 'button';
+  if (byBtn) document.querySelectorAll('#follow-btn-rows select').forEach(check); else check(document.getElementById('follow_flow_id'));
+  const w = document.getElementById('follow-flow-warn'), bw = document.getElementById('follow-btn-note');
+  if (w) { w.hidden = byBtn || !msgs.length; w.textContent = msgs.join(' '); }
+  if (byBtn && bw && msgs.length) bw.textContent = msgs.join(' ');
+}
+function canvasOpen(sel, name){
+  if (!sel || !sel.value) { alert('Choose an automation first, or click + New.'); return; }
+  CANVAS_FOR = sel;
+  document.getElementById('m-canvas-title').textContent = name || sel.selectedOptions[0].textContent.replace(/ — no steps yet$/, '');
+  document.getElementById('m-canvas-frame').src = 'automation_edit.php?embed=1&id=' + encodeURIComponent(sel.value);
+  document.getElementById('m-canvas').classList.add('open');
+}
+async function canvasNew(sel, btn){
+  const camp = (document.querySelector('input[name=name]').value || 'Campaign').trim();
+  const nm = prompt('Name of the new automation', camp + (btn ? ' — ' + btn : ' — follow-up'));
+  if (nm === null) return;
+  const fd = new FormData(); fd.append('ajax', 'new_flow'); fd.append('csrf_token', CSRF); fd.append('name', nm);
+  const d = await (await fetch('campaign_new.php', {method: 'POST', body: fd})).json();
+  if (!d.ok) { alert(d.error || 'Could not create it.'); return; }
+  await canvasRefresh(d.id, sel);
+  canvasOpen(sel, d.name);
+}
+/* After the canvas: reload the automation lists (names, and whether each now has steps), keeping every choice. */
+async function canvasRefresh(pickId, pickSel){
+  const d = await (await fetch('campaign_new.php?ajax=flows')).json();
+  if (!d.ok) return;
+  const opts = d.flows.map(f => `<option value="${f.id}" data-ready="${f.ready ? 1 : 0}">${eatt(f.name + (f.ready ? '' : ' — no steps yet'))}</option>`).join('');
+  const main = document.getElementById('follow_flow_id');
+  const keep = new Map([...document.querySelectorAll('#follow_flow_id, #follow-btn-rows select')].map(s => [s, s.value]));
+  if (main) main.innerHTML = opts;
+  document.querySelectorAll('#follow-btn-rows select').forEach(s => { s.innerHTML = '<option value="">— nothing —</option>' + opts; });
+  keep.forEach((v, s) => { s.value = v; });
+  if (pickSel && pickId) pickSel.value = String(pickId);
+  flowWarn();
+}
+async function canvasClose(){
+  const fr = document.getElementById('m-canvas-frame');
+  try { const w = fr.contentWindow; if (w && w.saveNow) { clearTimeout(w.SAVE_T); await w.saveNow(); } } catch (e) {}
+  document.getElementById('m-canvas').classList.remove('open');
+  fr.src = 'about:blank';
+  await canvasRefresh(null, null);
+}
+// Escape and a click outside close it the same way — saved, and the lists refreshed — not the page's usual way.
+window.addEventListener('keydown', e => { if (e.key === 'Escape' && document.getElementById('m-canvas').classList.contains('open')) { e.stopPropagation(); canvasClose(); } }, true);
+document.getElementById('m-canvas')._xClose = 1;
+document.getElementById('m-canvas').addEventListener('mousedown', e => { if (e.target.id === 'm-canvas') canvasClose(); });
+flowWarn();
 </script>
 
 <?php layout_footer(); ?>

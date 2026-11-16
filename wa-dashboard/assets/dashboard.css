@@ -733,6 +733,8 @@ body.canvas-focus .card:not(.canvas-card) { display: none !important; }
 body.canvas-focus .canvas-card { margin: 0; border-radius: 0; height: 100vh; display: flex; flex-direction: column; }
 body.canvas-focus .canvas-wrap { flex: 1; height: auto !important; min-height: 0 !important; border-radius: 0; }
 body.canvas-focus { overflow: hidden; }
+/* The canvas inside the campaign form: the board only — no help button, tour or install bar over it. */
+body.embed .help-dock, body.embed .help-fab, body.embed .guide-panel, body.embed .install-bar, body.embed .tour { display: none !important; }
 
 /* Steps gathered with shift-click. Distinct from the one open in the panel (.sel). */
 /* The step a connection being dragged would attach to, and the box drawn to select steps. */
