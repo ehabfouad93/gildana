@@ -51,6 +51,7 @@ if (($copyId = (int) ($_GET['copy'] ?? 0)) > 0) {
             'follow_trig' => (string) $src['follow_trigger'],
             'follow_del'  => (int) $src['follow_delay_minutes'],
             'follow_aud'  => (string) $src['follow_audience'],
+            'follow_btn'  => (string) ($src['follow_button'] ?? ''),
         ];
     } else {
         $err = 'That campaign could not be found, so there was nothing to copy.';
@@ -81,8 +82,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
         $ff = db_row("SELECT id FROM flows WHERE id=? AND client_id=? AND status <> 'archived'", [$followFlowId, $cid]);
         if (!$ff) $followFlowId = null;
     }
-    $followTrigger  = in_array(($_POST['follow_trigger'] ?? ''), ['sent','delivered','read','replied','no_reply'], true)
+    $followTrigger  = in_array(($_POST['follow_trigger'] ?? ''), ['sent','delivered','read','replied','no_reply','button'], true)
                     ? (string) $_POST['follow_trigger'] : 'replied';
+    // "When they tap a button": which one ('' = any of the template's quick-reply buttons).
+    $followButton   = $followTrigger === 'button' ? mb_substr(trim((string) ($_POST['follow_button'] ?? '')), 0, 60) : '';
     $followAudience = in_array(($_POST['follow_audience'] ?? ''), ['all','delivered','replied','not_replied'], true)
                     ? (string) $_POST['follow_audience'] : 'all';
     $followDelay    = max(0, min(43200, (int) ($_POST['follow_delay_minutes'] ?? 0)));   // cap at 30 days
@@ -197,6 +200,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
                      $followFlowId, $followTrigger, $followDelay, $followAudience,
                      count($recipients), $scheduledAt ? null : date('Y-m-d H:i:s')]
                 );
+                if ($followFlowId !== null && $followTrigger === 'button' && db_has_column('campaigns', 'follow_button')) {
+                    db_run("UPDATE campaigns SET follow_button=? WHERE id=?", [$followButton !== '' ? $followButton : null, $campaignId]);
+                }
                 if ($fromLine !== '' && wa_lines_ready()) db_run("UPDATE campaigns SET line=? WHERE id=?", [$fromLine, $campaignId]);
 
                 $ins = $pdo->prepare(
@@ -381,11 +387,17 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
             <?php $ft = (string) ($copy['follow_trig'] ?? 'replied'); $fsel = fn(string $v) => $ft === $v ? 'selected' : ''; ?>
             <select name="follow_trigger" id="follow_trigger" onchange="onFollow()">
               <option value="replied" <?= $fsel('replied') ?>>When they reply</option>
-              <option value="delivered" <?= $fsel('delivered') ?>>After the message is delivered</option>
-              <option value="read" <?= $fsel('read') ?>>After they read it</option>
-              <option value="sent" <?= $fsel('sent') ?>>As soon as it's sent</option>
+              <?php if (!$PERSONAL): ?><option value="button" <?= $fsel('button') ?>>When they tap a button</option><?php endif; ?>
+              <option value="read" <?= $fsel('read') ?>>When they read it</option>
+              <option value="delivered" <?= $fsel('delivered') ?>>When it is delivered</option>
+              <option value="sent" <?= $fsel('sent') ?>>A set time after sending</option>
               <option value="no_reply" <?= $fsel('no_reply') ?>>When they haven't replied</option>
             </select>
+          </div>
+          <div class="field" id="follow-btn-wrap" style="display:none">
+            <span class="lbl">Which button</span>
+            <select name="follow_button" id="follow_button" data-want="<?= e((string) ($copy['follow_btn'] ?? '')) ?>"></select>
+            <span class="text-muted" style="font-size:11.5px" id="follow-btn-note"></span>
           </div>
           <div class="field">
             <span class="lbl" id="delay-label">Wait first (minutes)</span>
@@ -403,6 +415,10 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
             <option value="not_replied" <?= $asel('not_replied') ?>>Only those who didn't reply</option>
           </select>
           <span class="text-muted" style="font-size:11.5px">Messages that failed are never followed up.</span>
+        </div>
+        <div class="alert info" style="font-size:12.5px">
+          For this campaign's recipients, the automation starts on <strong>this</strong> trigger — whatever trigger it has of its own (a keyword, a welcome, an ad).
+          A reply or a button tap that belongs to this campaign goes to this automation, not to your keyword or default automations.
         </div>
         <div class="alert warn" id="follow-window-warn" style="display:none">
           Starting before they reply means WhatsApp's 24-hour rule still applies, so only
@@ -639,8 +655,22 @@ function onFollow(){
   if (isNoReply && Number(delay.value) === 0) delay.value = 1440;
   delay.min = isNoReply ? 1 : 0;
 
-  // Only "when they reply" opens the 24-hour window; everything else starts before it.
-  const beforeReply = on && ON_CLOUD && trig !== 'replied';
+  // "When they tap a button": the quick-reply buttons of the chosen template (carousel cards too).
+  const bw = document.getElementById('follow-btn-wrap');
+  if (bw) {
+    bw.style.display = on && trig === 'button' ? '' : 'none';
+    const sel = document.getElementById('follow_button');
+    const sp = (typeof SPECS !== 'undefined' && document.getElementById('template_id')) ? SPECS[document.getElementById('template_id').value] : null;
+    const names = [];
+    if (sp) [...(sp.buttons||[]), ...((sp.cards||[]).flatMap(c => c.buttons||[]))].forEach(b => { if (b.type === 'QUICK_REPLY' && b.text && !names.includes(b.text)) names.push(b.text); });
+    const want = sel.value || sel.dataset.want || '';
+    sel.innerHTML = '<option value="">Any button</option>' + names.map(n => `<option value="${eatt(n)}">${eatt(n)}</option>`).join('');
+    if (names.includes(want)) sel.value = want;
+    document.getElementById('follow-btn-note').textContent = !sp ? 'Choose the template first.'
+      : (names.length ? 'Website and call buttons cannot be used: WhatsApp does not report those taps.' : 'This template has no quick-reply buttons — choose another trigger or template.');
+  }
+  // A reply or a button tap opens the 24-hour window; everything else starts before it.
+  const beforeReply = on && ON_CLOUD && trig !== 'replied' && trig !== 'button';
   document.getElementById('follow-window-warn').style.display = beforeReply ? 'block' : 'none';
 }
 

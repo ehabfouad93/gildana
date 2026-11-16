@@ -998,6 +998,9 @@ function auto_inbound_decide(array $client, array $contact, array $message, stri
         return 'started|' . ($flow['trig_kind'] ?? $channel) . ': ' . (string) $flow['name'];
     }
 
+    // It answers a campaign that continues into an automation: that campaign's trigger comes first.
+    if ($claim = automation_campaign_claim($client, $contact, $text, $buttonId)) return $claim;
+
     // No waiting run → try to start one (text triggers only).
     if ($text === '') {
         return 'no_text|Nothing to match on: a photo or voice note with no caption';
@@ -1775,7 +1778,12 @@ function automation_campaign_followups(int $cap = 500): int
         $replied = "EXISTS (SELECT 1 FROM messages m
                              WHERE m.client_id = cm.client_id AND m.contact_id = cm.contact_id
                                AND m.direction = 'in' AND m.created_at > cm.sent_at)";
+        // Tapped one of the template's quick-reply buttons (reply_events) — a named one, or any.
+        $btn = trim((string) ($camp['follow_button'] ?? ''));
+        $tapped = "EXISTS (SELECT 1 FROM reply_events re WHERE re.campaign_message_id = cm.id AND re.kind = 'button'"
+                . ($btn !== '' ? " AND re.body = " . db()->quote($btn) : '') . ")";
         $due = match ((string) $camp['follow_trigger']) {
+            'button'    => (function_exists('replies_ready') && replies_ready() ? $tapped : '0') . " AND cm.sent_at <= (NOW() - INTERVAL {$delay} MINUTE)",
             'delivered' => "cm.delivered_at IS NOT NULL AND cm.delivered_at <= (NOW() - INTERVAL {$delay} MINUTE)",
             'read'      => "cm.read_at IS NOT NULL AND cm.read_at <= (NOW() - INTERVAL {$delay} MINUTE)",
             'replied'   => "{$replied} AND cm.sent_at <= (NOW() - INTERVAL {$delay} MINUTE)",
@@ -1819,6 +1827,53 @@ function automation_campaign_followups(int $cap = 500): int
         }
     }
     return $total;
+}
+
+/**
+ * An inbound message that answers a campaign with a follow-up automation: the campaign's own
+ * trigger decides, ahead of the account's keyword / welcome / default automations.
+ *
+ * Called from automation_handle_inbound() when no conversation is waiting. Looks at the newest
+ * campaign message this person's answer was matched to (reply_events, a moment ago) and, when the
+ * campaign continues into an automation "when they reply" or "when they tap a button" and this
+ * answer fits, starts that automation at once — the person has just written, so the 24-hour
+ * window is open. With a wait set, it leaves the start to the worker but still keeps the other
+ * automations out of it.
+ *
+ * Returns the decision string for the inbound log, or null when the campaign has no claim.
+ */
+function automation_campaign_claim(array $client, array $contact, string $text, string $buttonId): ?string
+{
+    if (!function_exists('replies_ready') || !replies_ready()) return null;
+    $ev = db_row("SELECT re.kind, re.body, re.campaign_id, re.campaign_message_id FROM reply_events re
+                   WHERE re.client_id=? AND re.contact_id=? AND re.campaign_id IS NOT NULL AND re.created_at >= NOW() - INTERVAL 2 MINUTE
+                   ORDER BY re.id DESC LIMIT 1", [(int) $client['id'], (int) $contact['id']]);
+    if (!$ev || $ev['kind'] === 'stop') return null;
+    $camp = db_row("SELECT * FROM campaigns WHERE id=? AND client_id=? AND follow_flow_id IS NOT NULL", [(int) $ev['campaign_id'], (int) $client['id']]);
+    if (!$camp) return null;
+    $trig = (string) $camp['follow_trigger'];
+    if ($trig === 'button') {
+        $want = trim((string) ($camp['follow_button'] ?? ''));
+        if ($ev['kind'] !== 'button' || ($want !== '' && mb_strtolower($want) !== mb_strtolower(trim((string) $ev['body'])))) return null;
+    } elseif ($trig !== 'replied') {
+        return null;                                   // read / delivered / timed / no-reply: the worker's business
+    }
+    if ((string) $camp['follow_audience'] === 'not_replied') return null;
+    $cm = db_row("SELECT * FROM campaign_messages WHERE id=? AND follow_enrolled_at IS NULL", [(int) $ev['campaign_message_id']]);
+    if (!$cm) return null;                             // already followed up
+    $flow = db_row("SELECT * FROM flows WHERE id=? AND client_id=? AND status NOT IN ('archived','paused')", [(int) $camp['follow_flow_id'], (int) $client['id']]);
+    if (!$flow || !$flow['first_step_id']) return null;
+    if ((int) $camp['follow_delay_minutes'] > 0) {
+        return 'campaign_wait|Answers the campaign "' . $camp['name'] . '": its automation starts after the wait set there';
+    }
+    // Once per campaign and person, whichever of this and the worker gets there first.
+    if (db_run("UPDATE campaign_messages SET follow_enrolled_at=NOW() WHERE id=? AND follow_enrolled_at IS NULL", [(int) $cm['id']]) === 0) return null;
+    auto_start($client, $contact, $flow, $text !== '' ? $text : $buttonId, [], 'whatsapp', ['trigger_kind' => 'campaign']);
+    try {      // the same mark the worker's enrolment carries, so the run shows where it came from
+        db_run("UPDATE flow_runs SET enrol_key=? WHERE flow_id=? AND contact_id=? AND enrol_key IS NULL ORDER BY id DESC LIMIT 1",
+               ['camp:' . (int) $camp['id'] . ':' . (int) $contact['id'], (int) $flow['id'], (int) $contact['id']]);
+    } catch (Throwable $e) {}
+    return 'started|campaign: ' . (string) $flow['name'];
 }
 
 /**
