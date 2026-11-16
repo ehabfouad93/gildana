@@ -51,7 +51,7 @@ if (($copyId = (int) ($_GET['copy'] ?? 0)) > 0) {
             'follow_trig' => (string) $src['follow_trigger'],
             'follow_del'  => (int) $src['follow_delay_minutes'],
             'follow_aud'  => (string) $src['follow_audience'],
-            'follow_btn'  => (string) ($src['follow_button'] ?? ''),
+            'follow_btns' => json_decode((string) ($src['follow_buttons'] ?? ''), true) ?: (trim((string) ($src['follow_button'] ?? '')) !== '' ? [(string) $src['follow_button'] => (int) $src['follow_flow_id']] : []),
         ];
     } else {
         $err = 'That campaign could not be found, so there was nothing to copy.';
@@ -84,8 +84,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
     }
     $followTrigger  = in_array(($_POST['follow_trigger'] ?? ''), ['sent','delivered','read','replied','no_reply','button'], true)
                     ? (string) $_POST['follow_trigger'] : 'replied';
-    // "When they tap a button": which one ('' = any of the template's quick-reply buttons).
-    $followButton   = $followTrigger === 'button' ? mb_substr(trim((string) ($_POST['follow_button'] ?? '')), 0, 60) : '';
+    /* "When they tap a button": an automation for each quick-reply button of the template (a button
+       left on "nothing" starts none). Only this account's automations, only that template's buttons. */
+    $followButtons = [];
+    if ($followTrigger === 'button' && !empty($_POST['has_follow'])) {
+        $tplRow = db_row("SELECT components FROM templates WHERE id=? AND client_id=?", [(int) ($_POST['template_id'] ?? 0), $cid]);
+        $tsp = wa_template_spec($tplRow ? (json_decode((string) $tplRow['components'], true) ?: []) : []);
+        $names = [];
+        foreach (array_merge($tsp['buttons'], ...array_map(fn($c) => $c['buttons'], $tsp['cards'] ?: [[ 'buttons' => [] ]])) as $b) {
+            if (($b['type'] ?? '') === 'QUICK_REPLY' && ($b['text'] ?? '') !== '') $names[(string) $b['text']] = true;
+        }
+        foreach ((array) ($_POST['follow_btn_flow'] ?? []) as $btn => $fidv) {
+            $btn = (string) $btn; $fidv = (int) $fidv;
+            if ($fidv <= 0 || !isset($names[$btn])) continue;
+            if (db_val("SELECT 1 FROM flows WHERE id=? AND client_id=? AND status <> 'archived'", [$fidv, $cid])) $followButtons[$btn] = $fidv;
+        }
+        $followFlowId = $followButtons ? (int) reset($followButtons) : null;      // marks the campaign as having a follow-up
+        if (!$followButtons) $err = 'Choose an automation for at least one button — or pick another trigger under "Start it".';
+    }
     $followAudience = in_array(($_POST['follow_audience'] ?? ''), ['all','delivered','replied','not_replied'], true)
                     ? (string) $_POST['follow_audience'] : 'all';
     $followDelay    = max(0, min(43200, (int) ($_POST['follow_delay_minutes'] ?? 0)));   // cap at 30 days
@@ -200,8 +216,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
                      $followFlowId, $followTrigger, $followDelay, $followAudience,
                      count($recipients), $scheduledAt ? null : date('Y-m-d H:i:s')]
                 );
-                if ($followFlowId !== null && $followTrigger === 'button' && db_has_column('campaigns', 'follow_button')) {
-                    db_run("UPDATE campaigns SET follow_button=? WHERE id=?", [$followButton !== '' ? $followButton : null, $campaignId]);
+                if ($followButtons && db_has_column('campaigns', 'follow_buttons')) {
+                    db_run("UPDATE campaigns SET follow_buttons=? WHERE id=?", [json_encode($followButtons, JSON_UNESCAPED_UNICODE), $campaignId]);
                 }
                 if ($fromLine !== '' && wa_lines_ready()) db_run("UPDATE campaigns SET line=? WHERE id=?", [$fromLine, $campaignId]);
 
@@ -374,7 +390,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 
       <div id="follow-box" style="display:none;margin-top:12px">
         <div class="grid3">
-          <div class="field">
+          <div class="field" id="follow-flow-wrap">
             <span class="lbl">Automation</span>
             <select name="follow_flow_id" id="follow_flow_id">
               <?php foreach ($flows as $f): ?>
@@ -394,16 +410,16 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
               <option value="no_reply" <?= $fsel('no_reply') ?>>When they haven't replied</option>
             </select>
           </div>
-          <div class="field" id="follow-btn-wrap" style="display:none">
-            <span class="lbl">Which button</span>
-            <select name="follow_button" id="follow_button" data-want="<?= e((string) ($copy['follow_btn'] ?? '')) ?>"></select>
-            <span class="text-muted" style="font-size:11.5px" id="follow-btn-note"></span>
-          </div>
           <div class="field">
             <span class="lbl" id="delay-label">Wait first (minutes)</span>
             <input type="number" name="follow_delay_minutes" id="follow_delay" min="0" max="43200" value="<?= (int) ($copy['follow_del'] ?? 0) ?>">
             <span class="text-muted" style="font-size:11.5px">60 = an hour · 1440 = a day</span>
           </div>
+        </div>
+        <div class="field" id="follow-btn-wrap" style="display:none">
+          <span class="lbl">An automation for each button</span>
+          <div id="follow-btn-rows"></div>
+          <span class="text-muted" style="font-size:11.5px" id="follow-btn-note"></span>
         </div>
         <div class="field">
           <span class="lbl">Who goes in</span>
@@ -444,6 +460,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 
 <script src="../assets/tpl_preview.js?v=1"></script>
 <script>
+const FOLLOW_BTNS = <?= json_encode((object) ($copy['follow_btns'] ?? []), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG) ?>;
 const BALANCE = <?= (int) $CLIENT['credits_balance'] ?>;
 const CSRF = <?= json_encode(csrf_token()) ?>;
 // Full parameter spec per template: what the send payload must supply.
@@ -562,6 +579,7 @@ function onTemplate(){
 
   card.style.display = any ? 'block' : 'none';
   bindUpload();
+  if (typeof onFollow === 'function') onFollow();      // the button list follows the template
 }
 async function cardUpload(i, f){
   if(!f.files || !f.files[0]) return;
@@ -655,19 +673,28 @@ function onFollow(){
   if (isNoReply && Number(delay.value) === 0) delay.value = 1440;
   delay.min = isNoReply ? 1 : 0;
 
-  // "When they tap a button": the quick-reply buttons of the chosen template (carousel cards too).
+  /* "When they tap a button": one row per quick-reply button of the chosen template (carousel
+     cards too), each with its own automation — or nothing. */
   const bw = document.getElementById('follow-btn-wrap');
   if (bw) {
-    bw.style.display = on && trig === 'button' ? '' : 'none';
-    const sel = document.getElementById('follow_button');
+    const byBtn = on && trig === 'button';
+    bw.style.display = byBtn ? '' : 'none';
+    document.getElementById('follow-flow-wrap').style.display = byBtn ? 'none' : '';
+    const rows = document.getElementById('follow-btn-rows');
     const sp = (typeof SPECS !== 'undefined' && document.getElementById('template_id')) ? SPECS[document.getElementById('template_id').value] : null;
     const names = [];
     if (sp) [...(sp.buttons||[]), ...((sp.cards||[]).flatMap(c => c.buttons||[]))].forEach(b => { if (b.type === 'QUICK_REPLY' && b.text && !names.includes(b.text)) names.push(b.text); });
-    const want = sel.value || sel.dataset.want || '';
-    sel.innerHTML = '<option value="">Any button</option>' + names.map(n => `<option value="${eatt(n)}">${eatt(n)}</option>`).join('');
-    if (names.includes(want)) sel.value = want;
+    // Keep what was already chosen when the list is redrawn (another trigger and back, another template with the same button).
+    const chosen = Object.assign({}, FOLLOW_BTNS);
+    rows.querySelectorAll('select').forEach(sl => { chosen[sl.dataset.btn] = sl.value; });
+    const flowOpts = document.getElementById('follow_flow_id').innerHTML.replace(/ selected(="[^"]*")?/g, '');
+    rows.innerHTML = names.map(n => `<div style="display:flex;gap:10px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+        <span class="pill blue" style="min-width:90px;text-align:center">${eatt(n)}</span><span class="text-muted">starts</span>
+        <select name="follow_btn_flow[${eatt(n)}]" data-btn="${eatt(n)}" style="flex:1;min-width:200px"><option value="">— nothing —</option>${flowOpts}</select></div>`).join('');
+    rows.querySelectorAll('select').forEach(sl => { if (chosen[sl.dataset.btn]) sl.value = String(chosen[sl.dataset.btn]); });
     document.getElementById('follow-btn-note').textContent = !sp ? 'Choose the template first.'
-      : (names.length ? 'Website and call buttons cannot be used: WhatsApp does not report those taps.' : 'This template has no quick-reply buttons — choose another trigger or template.');
+      : (names.length ? 'Choose a different automation for each button, the same one for several, or nothing. Website and call buttons are not listed: WhatsApp does not report those taps.'
+                      : 'This template has no quick-reply buttons — choose another trigger or template.');
   }
   // A reply or a button tap opens the 24-hour window; everything else starts before it.
   const beforeReply = on && ON_CLOUD && trig !== 'replied' && trig !== 'button';

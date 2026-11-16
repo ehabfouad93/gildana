@@ -1757,17 +1757,25 @@ function automation_campaign_followups(int $cap = 500): int
     $campaigns = db_all(
         "SELECT c.*, cl.name AS client_name FROM campaigns c
            JOIN clients cl ON cl.id = c.client_id AND cl.status='active'
-           JOIN flows f    ON f.id = c.follow_flow_id AND f.status NOT IN ('archived','paused')
           WHERE c.follow_flow_id IS NOT NULL
             AND c.status IN ('sending','completed')"
     );
     if (!$campaigns) return 0;
 
-    $total = 0;
+    /* One campaign can have several rules: an automation per button. Each rule is run as the
+       same campaign with that button and that automation in place. */
+    $rules = [];
     foreach ($campaigns as $camp) {
+        $map = (string) $camp['follow_trigger'] === 'button' ? automation_campaign_buttons($camp) : [];
+        if ($map) { foreach ($map as $btn => $fidv) $rules[] = ['follow_flow_id' => $fidv, 'follow_button' => $btn] + $camp; }
+        else $rules[] = $camp;
+    }
+
+    $total = 0;
+    foreach ($rules as $camp) {
         if ($total >= $cap) break;
         $client = db_row("SELECT * FROM clients WHERE id=?", [(int) $camp['client_id']]);
-        $flow   = db_row("SELECT * FROM flows WHERE id=?", [(int) $camp['follow_flow_id']]);
+        $flow   = db_row("SELECT * FROM flows WHERE id=? AND client_id=? AND status NOT IN ('archived','paused')", [(int) $camp['follow_flow_id'], (int) $camp['client_id']]);
         if (!$client || !$flow) continue;
 
         $delay = max(0, (int) $camp['follow_delay_minutes']);
@@ -1829,6 +1837,16 @@ function automation_campaign_followups(int $cap = 500): int
     return $total;
 }
 
+/** A campaign's "automation for each button": [button text => automation id], or [] when it has one automation. */
+function automation_campaign_buttons(array $camp): array
+{
+    $m = json_decode((string) ($camp['follow_buttons'] ?? ''), true);
+    if (!is_array($m)) return [];
+    $out = [];
+    foreach ($m as $btn => $fid) if ((string) $btn !== '' && (int) $fid > 0) $out[(string) $btn] = (int) $fid;
+    return $out;
+}
+
 /**
  * An inbound message that answers a campaign with a follow-up automation: the campaign's own
  * trigger decides, ahead of the account's keyword / welcome / default automations.
@@ -1852,16 +1870,26 @@ function automation_campaign_claim(array $client, array $contact, string $text, 
     $camp = db_row("SELECT * FROM campaigns WHERE id=? AND client_id=? AND follow_flow_id IS NOT NULL", [(int) $ev['campaign_id'], (int) $client['id']]);
     if (!$camp) return null;
     $trig = (string) $camp['follow_trigger'];
+    $flowId = (int) $camp['follow_flow_id'];
     if ($trig === 'button') {
-        $want = trim((string) ($camp['follow_button'] ?? ''));
-        if ($ev['kind'] !== 'button' || ($want !== '' && mb_strtolower($want) !== mb_strtolower(trim((string) $ev['body'])))) return null;
+        if ($ev['kind'] !== 'button') return null;
+        $tapped = mb_strtolower(trim((string) $ev['body']));
+        if ($map = automation_campaign_buttons($camp)) {
+            // An automation for each button: the one for the button they tapped, if it has one.
+            $flowId = 0;
+            foreach ($map as $btn => $fidv) if (mb_strtolower(trim($btn)) === $tapped) { $flowId = $fidv; break; }
+            if (!$flowId) return null;
+        } else {
+            $want = trim((string) ($camp['follow_button'] ?? ''));
+            if ($want !== '' && mb_strtolower($want) !== $tapped) return null;
+        }
     } elseif ($trig !== 'replied') {
         return null;                                   // read / delivered / timed / no-reply: the worker's business
     }
     if ((string) $camp['follow_audience'] === 'not_replied') return null;
     $cm = db_row("SELECT * FROM campaign_messages WHERE id=? AND follow_enrolled_at IS NULL", [(int) $ev['campaign_message_id']]);
     if (!$cm) return null;                             // already followed up
-    $flow = db_row("SELECT * FROM flows WHERE id=? AND client_id=? AND status NOT IN ('archived','paused')", [(int) $camp['follow_flow_id'], (int) $client['id']]);
+    $flow = db_row("SELECT * FROM flows WHERE id=? AND client_id=? AND status NOT IN ('archived','paused')", [$flowId, (int) $client['id']]);
     if (!$flow || !$flow['first_step_id']) return null;
     if ((int) $camp['follow_delay_minutes'] > 0) {
         return 'campaign_wait|Answers the campaign "' . $camp['name'] . '": its automation starts after the wait set there';
