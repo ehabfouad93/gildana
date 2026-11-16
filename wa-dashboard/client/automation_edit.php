@@ -729,7 +729,7 @@ client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
         </optgroup>
       </select>
       <button type="button" class="btn btn-ghost btn-sm" onclick="addNode(document.getElementById('add-type').value)">+ Add node</button>
-      <span class="canvas-hint canvas-hint-desk">Drag node headers to move · drag a right-side port onto another node to connect · click a node to edit · <strong>right-click a connection to delete it</strong> · Ctrl/⌘+scroll or the +/− buttons to zoom · middle-drag or space-drag to pan · shift-click to select several, then Ctrl/⌘+C and V to copy them.</span>
+      <span class="canvas-hint canvas-hint-desk">Drag a step by its header to move it · drag the dot on its right onto another step to connect · click a step to edit · <strong>click a connection to delete it</strong> · drag on the empty board to select several (or Ctrl / Shift + click) · Ctrl/⌘+scroll or the +/− buttons to zoom · middle-drag or space-drag to pan · shift-click to select several, then Ctrl/⌘+C and V to copy them.</span>
     </div>
     <!-- The ordered list. On a phone this is where editing happens: no dragging, no wires. -->
     <div class="canvas-outline" id="outline">
@@ -1175,7 +1175,7 @@ function render(){
 let SEL = new Set(), CLIP = [];
 
 function paintSel(){
-  canvas.querySelectorAll('.node').forEach(el => el.classList.toggle('multi', SEL.has(el.dataset.id)));
+  canvas.querySelectorAll('.node').forEach(el => el.classList.toggle('multi', SEL.size > 1 && SEL.has(el.dataset.id)));
   const n = document.getElementById('sel-count');
   if(n) n.textContent = SEL.size > 1 ? SEL.size + ' selected' : '';
 }
@@ -1379,7 +1379,9 @@ function setZoom(z, anchor){
   document.getElementById('zlevel').textContent = Math.round(Z*100)+'%';
   redraw();
 }
-function zoomBy(d){ setZoom(Z+d); }
+// The buttons zoom around the top-left corner of the view, so zooming out and back in lands
+// exactly where it started (the centre cannot: the board stops scrolling at its edge).
+function zoomBy(d){ setZoom(Z+d, {x:0, y:0}); }
 function zoomFit(){
   const all=[start,...Object.values(nodes)];
   if(!all.length) return setZoom(1);
@@ -1442,10 +1444,17 @@ function openEdgeMenu(x,y,nodeId,port){
   document.body.appendChild(m);
   document.getElementById('em-del').onclick=()=>{
     const src = nodeId==='start'?start:nodes[nodeId];
-    if(src && src.outputs) src.outputs[port]=null;
-    closeEdgeMenu(); redraw();
+    // Undoable and saved like every other change; render() brings the "+" back on the freed port.
+    if(src && src.outputs && src.outputs[port]){ mark(); src.outputs[port]=null; render(); scheduleSave(); }
+    closeEdgeMenu();
   };
 }
+// A plain click on a connection opens the same menu — not everyone thinks of right-clicking.
+edges.addEventListener('click', e=>{
+  const p=e.target.closest('path.hit'); if(!p) return;
+  e.stopPropagation();
+  openEdgeMenu(e.clientX, e.clientY, p.dataset.node, p.dataset.port);
+});
 edges.addEventListener('contextmenu', e=>{
   const p=e.target.closest('path.hit'); if(!p) return;   // only over an edge
   e.preventDefault();
@@ -1494,7 +1503,13 @@ function addNode(type,data){
   mark();
   const w=document.getElementById('cwrap');
   // Drop it into the visible area — scroll offsets are in scaled px, so divide by Z.
-  const n={id:nid(),type,x:(w.scrollLeft+120)/Z,y:(w.scrollTop+90)/Z,config:data?JSON.parse(JSON.stringify(data.config||defaultConfig(type))):defaultConfig(type),outputs:data?(data.outputs||{}):{}};
+  // …and never on top of another step (or half over one): go down the column, then start the
+  // next column, until there is a clear space the size of a step.
+  const x0=gsnap((w.scrollLeft+120)/Z), y0=gsnap((w.scrollTop+40)/Z), rows=Math.max(2, Math.floor((w.clientHeight/Z-80)/160));
+  const taken=(x,y)=>[start,...Object.values(nodes)].some(o=>Math.abs((o.x||0)-x)<240 && Math.abs((o.y||0)-y)<150);
+  let px=x0, py=y0;
+  for(let i=0;i<200 && taken(px,py);i++){ const col=Math.floor((i+1)/rows), row=(i+1)%rows; px=x0+col*260; py=y0+row*160; }
+  const n={id:nid(),type,x:px,y:py,config:data?JSON.parse(JSON.stringify(data.config||defaultConfig(type))):defaultConfig(type),outputs:data?(data.outputs||{}):{}};
   nodes[n.id]=n; render(); openCfg(n.id); scheduleSave();
 }
 function deleteCurrent(){ if(!current) return; mark(); const id=current.id; delete nodes[id];
@@ -1866,22 +1881,54 @@ canvas.addEventListener('click', e => {
   addAfter(id, port);
 });
 
-/* ── interactions: drag + connect + pan ── */
-let drag=null, conn=null, pan=null, spaceDown=false;
+/* ── interactions: drag + connect + select + pan ── */
+let drag=null, conn=null, pan=null, box=null, spaceDown=false, skipClick=false;
+const multiKey = e => e.shiftKey || e.ctrlKey || e.metaKey;      // Ctrl on Windows, ⌘ on a Mac, Shift on both
+
+/* Where a wire being dragged would land: the step under the pointer, or — because the input dot
+   sticks out of its step — the step whose input dot is nearest, within reach. Never the step
+   it starts from, never the trigger. Looked up from the pointer position, not the event's
+   target: on touch and pen the target stays the dot the drag began on. */
+function connTarget(clientX, clientY){
+  if(!conn) return null;
+  const ok = id => id && id !== conn.node && id !== 'start' && nodes[id];
+  const hit = document.elementFromPoint(clientX, clientY);
+  const el = hit && hit.closest ? hit.closest('.node') : null;
+  if(el && ok(el.dataset.id)) return el.dataset.id;
+  if(el) return null;                                   // over its own step or the trigger: nothing
+  let best=null, bd=34;                                 // px on screen
+  canvas.querySelectorAll('.port-in').forEach(p=>{
+    if(!ok(p.dataset.node)) return;
+    const r=p.getBoundingClientRect(), d=Math.hypot(r.left+r.width/2-clientX, r.top+r.height/2-clientY);
+    if(d<bd){ bd=d; best=p.dataset.node; }
+  });
+  return best;
+}
+function paintConnTarget(id){
+  canvas.querySelectorAll('.node.conn-target').forEach(e=>e.classList.remove('conn-target'));
+  if(id){ const el=canvas.querySelector(`.node[data-id="${id}"]`); if(el) el.classList.add('conn-target'); }
+}
+
 canvas.addEventListener('pointerdown',e=>{
   // On a phone the board is for looking at. Editing happens in the list and the drawer.
   if(isPhone() && !e.target.classList.contains('del')) return;
+  if(e.button !== 0 || spaceDown) return;               // left button only: right-click is for menus, middle pans
   const port=e.target.closest('.port-out');
-  if(port){ e.preventDefault(); const nidv=port.dataset.node, pv=port.dataset.port; conn={node:nidv,port:pv,snap:snapshot()}; return; }
+  if(port){ e.preventDefault(); const nidv=port.dataset.node, pv=port.dataset.port; conn={node:nidv,port:pv,snap:snapshot(),sx:e.clientX,sy:e.clientY,moved:false}; return; }
   const head=e.target.closest('.node-head');
-  if(e.target.classList.contains('del')){ const el=e.target.closest('.node'); const id=el.dataset.id; if(id!=='start'){ mark(); if(current&&current.id===id)closeCfg(); delete nodes[id]; [start,...Object.values(nodes)].forEach(n=>Object.keys(n.outputs).forEach(k=>{if(n.outputs[k]===id)n.outputs[k]=null;})); render(); scheduleSave(); } e.stopPropagation(); return; }
+  if(e.target.classList.contains('del')){ const el=e.target.closest('.node'); const id=el.dataset.id; if(id!=='start'){ mark(); if(current&&current.id===id)closeCfg(); delete nodes[id]; SEL.delete(id); [start,...Object.values(nodes)].forEach(n=>Object.keys(n.outputs).forEach(k=>{if(n.outputs[k]===id)n.outputs[k]=null;})); render(); scheduleSave(); } e.stopPropagation(); return; }
   if(head){ const el=head.closest('.node'); const id=el.dataset.id; const n=id==='start'?start:nodes[id];
     const p=toCanvas(e.clientX,e.clientY);
     // Drag one of a selected group and the whole group comes with it, keeping its shape.
     const group = (SEL.has(id) && SEL.size > 1)
       ? [...SEL].filter(k => nodes[k] && k !== id).map(k => ({n: nodes[k], ox: nodes[k].x - n.x, oy: nodes[k].y - n.y}))
       : [];
-    drag={n,dx:p.x-n.x,dy:p.y-n.y,ox:n.x,oy:n.y,group,snap:snapshot()}; }
+    drag={n,dx:p.x-n.x,dy:p.y-n.y,ox:n.x,oy:n.y,group,snap:snapshot()}; return; }
+  // Empty board: drag a box around steps to select them (with Shift / Ctrl it adds to the selection).
+  if(!e.target.closest('.node') && !e.target.closest('path.hit')){
+    const p=toCanvas(e.clientX,e.clientY);
+    box={x0:p.x,y0:p.y,x1:p.x,y1:p.y,add:multiKey(e),base:new Set(SEL),el:null};
+  }
 });
 // Middle-drag, or space+drag, pans the board.
 wrap.addEventListener('pointerdown',e=>{
@@ -1907,21 +1954,48 @@ document.addEventListener('pointermove',e=>{
     });
     redraw();
   }
-  else if(conn){ const a=portCenter(conn.node,conn.port,'out'); redraw({a:a||{x:0,y:0},b:toCanvas(e.clientX,e.clientY)}); }
+  else if(conn){
+    if(!conn.moved && Math.hypot(e.clientX-conn.sx, e.clientY-conn.sy) > 5) conn.moved=true;
+    if(!conn.moved) return;
+    const a=portCenter(conn.node,conn.port,'out');
+    // The loose end snaps to the input dot of the step it would connect to, which lights up.
+    const t=connTarget(e.clientX,e.clientY); paintConnTarget(t);
+    redraw({a:a||{x:0,y:0}, b:(t && portCenter(t,null,'in')) || toCanvas(e.clientX,e.clientY)});
+  }
+  else if(box){
+    const p=toCanvas(e.clientX,e.clientY); box.x1=p.x; box.y1=p.y;
+    const x=Math.min(box.x0,box.x1), y=Math.min(box.y0,box.y1), w=Math.abs(box.x1-box.x0), h=Math.abs(box.y1-box.y0);
+    if(!box.el && (w>4 || h>4)){ box.el=document.createElement('div'); box.el.className='marquee'; canvas.appendChild(box.el); }
+    if(box.el){
+      box.el.style.cssText=`left:${x}px;top:${y}px;width:${w}px;height:${h}px`;
+      // A step is in when the box touches it.
+      const inside=new Set(box.add ? box.base : []);
+      Object.values(nodes).forEach(n=>{ const el=canvas.querySelector(`.node[data-id="${n.id}"]`); if(!el) return;
+        if(n.x < x+w && n.x+el.offsetWidth > x && n.y < y+h && n.y+el.offsetHeight > y) inside.add(n.id); });
+      SEL=inside; paintSel();
+    }
+  }
 });
 document.addEventListener('pointerup',e=>{
   if(pan){ pan=null; wrap.classList.remove('panning'); }
-  if(conn){ const tnode=e.target.closest('.node'); const src=conn.node==='start'?start:nodes[conn.node];
-    const was=src.outputs[conn.port]||null;
-    if(tnode && tnode.dataset.id!==conn.node && tnode.dataset.id!=='start'){ src.outputs[conn.port]=tnode.dataset.id; }
-    else if(!tnode){ src.outputs[conn.port]=null; }
-    if((src.outputs[conn.port]||null)!==was){ pushSnap(conn.snap); scheduleSave(); }
-    conn=null; render();
+  if(conn){
+    const src=conn.node==='start'?start:nodes[conn.node];
+    const was=src ? (src.outputs[conn.port]||null) : null;
+    // Dropped on a step (or right beside its input dot): connect. Dropped anywhere else: nothing
+    // changes — a slip of the hand must not delete a connection. To remove one, click it.
+    const t = conn.moved ? connTarget(e.clientX,e.clientY) : null;
+    if(src && t && t!==was){ src.outputs[conn.port]=t; pushSnap(conn.snap); scheduleSave(); }
+    conn=null; paintConnTarget(null); render();
   }
   if(drag){
-    if(drag.n.x!==drag.ox || drag.n.y!==drag.oy){ pushSnap(drag.snap); scheduleSave(); }
+    if(drag.n.x!==drag.ox || drag.n.y!==drag.oy){ pushSnap(drag.snap); scheduleSave(); skipClick=true; }   // it was a move, not a click
     drag=null;
   }
+  if(box){
+    if(box.el){ box.el.remove(); skipClick=true; }      // a box was drawn: the click that follows must not clear it
+    box=null;
+  }
+  if(skipClick) setTimeout(()=>{ skipClick=false; }, 0);
 });
 // Ctrl/⌘ + wheel zooms at the cursor; plain wheel keeps scrolling the board.
 wrap.addEventListener('wheel',e=>{
@@ -1930,11 +2004,13 @@ wrap.addEventListener('wheel',e=>{
   const r=wrap.getBoundingClientRect();
   setZoom(Z + (e.deltaY<0?0.1:-0.1), {x:e.clientX-r.left, y:e.clientY-r.top});
 },{passive:false});
-canvas.addEventListener('click',e=>{ if(e.target.closest('.port'))return; if(e.target.closest('.del'))return; const el=e.target.closest('.node');
-  if(el && el.dataset.id !== 'start' && (e.shiftKey || e.metaKey)){ selToggle(el.dataset.id); return; }
+canvas.addEventListener('click',e=>{ if(skipClick) return; if(e.target.closest('.port'))return; if(e.target.closest('.del'))return; if(e.target.closest('.addnext'))return; const el=e.target.closest('.node');
+  // Shift / Ctrl / ⌘ + click adds a step to the selection or takes it out.
+  if(el && el.dataset.id !== 'start' && multiKey(e)){ selToggle(el.dataset.id); return; }
   if(!el){ selClear(); return; }
-  // Nothing on the board drags on a phone, so the whole node — header included — opens it.
-  if(isPhone() || !e.target.closest('.node-head')) openCfg(el.dataset.id); });
+  // A plain click selects just this step and opens it — on its header as much as on its body.
+  SEL = new Set(el.dataset.id !== 'start' ? [el.dataset.id] : []); paintSel();
+  openCfg(el.dataset.id); });
 
 /* ── trigger form ── */
 /* ── source sheet (the trigger) ──
