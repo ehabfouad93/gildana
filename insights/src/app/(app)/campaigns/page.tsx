@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Filters } from "@/components/filters";
 import { PageHeader } from "@/components/shell";
 import { CurrencySwitch, currencyMode } from "@/components/currency-switch";
@@ -25,6 +26,7 @@ export default async function Campaigns({ searchParams }: { searchParams: Promis
   return (
     <>
       <PageHeader title={t.campaigns} sub={`${rows.length} campaigns · ${range.from} → ${range.to}`}>
+        {canEdit(c.viewer) && canFeature(c.viewer, "campaigns.create") && <Link className="btn" href="/campaigns/new">+ New campaign</Link>}
         <Filters t={t} entity={c.entityPick} tags={c.tags} freshness={c.freshness} accounts={c.accounts} companies={c.companies} companyId={c.companyId} platform={c.platform} range={range} days={c.one("days")} />
       </PageHeader>
       {currencies.some((x) => x !== scope.currency) && (

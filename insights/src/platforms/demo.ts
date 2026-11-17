@@ -285,7 +285,7 @@ export function buildStructure(platform: Platform, accountExternalId: string, sp
           externalId: `${sid}-a${a + 1}`, adSetExternalId: sid, campaignExternalId: cid,
           name: `${format.replace(/_/g, " ")} – v${a + 1}`, status: r() > 0.2 ? "ACTIVE" : "PAUSED", format,
           headline: pick(r, HEADLINES), body: pick(r, BODIES), cta: pick(r, CTAS),
-          landingUrl: "https://example.com/offer",
+          landingUrl: "https://example.com/offer", creativeExternalId: `${sid}-a${a + 1}-cr`,
         });
       }
     }
@@ -300,7 +300,7 @@ export function buildStructure(platform: Platform, accountExternalId: string, sp
     let campaignExternalId = src.campaignExternalId;
     if (t.campaign) {
       const base = campaigns.find((c) => c.externalId === src.campaignExternalId);
-      if (base && !campaigns.some((c) => c.externalId === t.campaign!.externalId)) campaigns.push({ ...base, externalId: t.campaign.externalId, name: t.campaign.name, status: "ACTIVE" });
+      if (base && !campaigns.some((c) => c.externalId === t.campaign!.externalId)) campaigns.push({ ...base, externalId: t.campaign.externalId, name: t.campaign.name, status: t.arms.every((a) => a.paused) ? "PAUSED" : "ACTIVE" });
       campaignExternalId = t.campaign.externalId;
     } else if (!t.keepSource) {
       src.status = "PAUSED";

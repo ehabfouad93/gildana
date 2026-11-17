@@ -5,7 +5,7 @@ import { launchApprovalAction, sendForApprovalAction, type ApprovalResult } from
 import { CopyButton } from "@/components/copy";
 
 /** "Send for approval" next to a create button: stores the launch and shows the link for the client. */
-export function SendForApproval({ kind, payload, disabled }: { kind: "split_campaign" | "mixer" | "grid"; payload: () => Record<string, unknown>; disabled?: boolean }) {
+export function SendForApproval({ kind, payload, disabled }: { kind: "split_campaign" | "mixer" | "grid" | "new_campaign"; payload: () => Record<string, unknown>; disabled?: boolean }) {
   const [res, setRes] = useState<ApprovalResult | null>(null);
   const [pending, go] = useTransition();
   return (

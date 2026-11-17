@@ -53,6 +53,7 @@ export const FEATURES = [
   { key: "actions.rules", module: "actions", label: "Create and edit automation rules" },
   { key: "actions.approvals", module: "actions", label: "Send launches for client approval" },
   { key: "campaigns.tags", module: "campaigns", label: "Tags and funnel stages" },
+  { key: "campaigns.create", module: "campaigns", label: "Create new campaigns" },
   { key: "creatives.grid", module: "creatives", label: "Creative split-test grid (create ad variations)" },
   { key: "companies.leads_sync", module: "companies", label: "Leads sync (send new leads to a CRM or sheet)" },
   { key: "general.sync_breakdowns", module: "general", label: "“Sync breakdowns now” button" },

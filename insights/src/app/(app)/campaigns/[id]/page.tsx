@@ -92,6 +92,7 @@ export default async function CampaignPage({ params, searchParams }: { params: P
       <PageHeader title={campaign.name} sub={`${meta.label} · ${campaign.account.name} · ${campaign.account.company?.name ?? ""} · ${campaign.status} · ${campaign.objective}${campaign.dailyBudget ? ` · ${money(Number(campaign.dailyBudget), campaign.account.currency)}/day` : ""}`}>
         <Filters t={t} companies={[]} range={range} days={c.one("days")} showPlatform={false} extra={{ tab }} />
         {canFeature(c.viewer, "campaigns.share") && canUse(c.viewer, "reports") && <Link href={`/reports?campaign=${id}`} className="btn-ghost no-print">Share report</Link>}
+        {campaign.platform === "META" && canEdit(c.viewer) && canFeature(c.viewer, "campaigns.create") && <Link href={`/campaigns/new?from=${id}`} className="btn-ghost no-print">Copy as new campaign</Link>}
       </PageHeader>
       <div className="mb-3 flex flex-wrap items-center gap-x-6 gap-y-2">
         <CurrencySwitch sp={c.sp} mode={curMode} account={campaign.account.currency} reporting={c.scope.currency} rate={fxNote} />

@@ -10,9 +10,11 @@ import { randomToken } from "@/lib/crypto";
 import { db } from "@/lib/db";
 import { accessWhere, canEdit, canFeature, requireModule, requireWorkspace } from "@/lib/tenancy";
 import { mixName, type MixItem } from "@/platforms/meta/audiences";
+import { describe as describeCampaign, validate, type CampaignSpec } from "@/platforms/meta/new-campaign";
+import { createCampaignAction } from "@/app/actions/new-campaign";
 
 export type ApprovalResult = { ok: boolean; message: string; link?: string };
-type Kind = "split_campaign" | "mixer" | "grid";
+type Kind = "split_campaign" | "mixer" | "grid" | "new_campaign";
 
 const pickValue = (r: string) => r.split("~").slice(2).join("~");
 
@@ -57,6 +59,15 @@ export async function sendForApprovalAction(kind: Kind, payload: Record<string, 
       `${money0(budget, set.account.currency)} per day${days ? `, for ${days} days — up to ${money0(budget * days, set.account.currency)}` : ", with no end date"}`,
       start(payload.startNow),
     ];
+  } else if (kind === "new_campaign") {
+    const acc = await db.adAccount.findFirst({ where: { id: String(payload.accountId), ...mine } });
+    const spec = payload.spec as CampaignSpec | undefined;
+    if (!acc || !spec) return { ok: false, message: "Fill in the campaign first." };
+    const problems = validate({ ...spec, currency: acc.currency });
+    if (problems.length) return { ok: false, message: problems.join(" ") };
+    accountId = acc.id;
+    title = spec.name;
+    lines = describeCampaign(spec, acc.name, (n) => money0(n, acc.currency));
   } else {
     const ad = await db.ad.findFirst({ where: { id: String(payload.adId), account: mine }, include: { account: true, adSet: true, campaign: true } });
     const list = (k: string) => (Array.isArray(payload[k]) ? (payload[k] as unknown[]).map(String).filter(Boolean) : []);
@@ -96,6 +107,8 @@ export async function launchApprovalAction(_: ApprovalResult | null, form: FormD
     for (const x of (p.pick as string[]) ?? []) fd.append("pick", x);
     fd.set("approvalId", a.id);
     r = await createSplitCampaignAction(null, fd);
+  } else if (a.kind === "new_campaign") {
+    r = await createCampaignAction(String(p.accountId), p.spec as CampaignSpec, a.id);
   } else if (a.kind === "mixer") {
     r = await mixerLaunchAction({ ...(p as Parameters<typeof mixerLaunchAction>[0]), approvalId: a.id });
   } else {
