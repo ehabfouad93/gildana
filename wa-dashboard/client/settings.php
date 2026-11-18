@@ -76,6 +76,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && str_starts_with((string) ($_POST['a
         if (strlen($pnid) < 5) $fail('Enter the Phone Number ID from Meta (WhatsApp Manager → Phone numbers).');
         if ($pnid === (string) ($fresh['phone_number_id'] ?? '') || db_val("SELECT 1 FROM wa_numbers WHERE phone_number_id=?", [$pnid]) || db_val("SELECT 1 FROM clients WHERE phone_number_id=?", [$pnid])) $fail('That Phone Number ID is already connected.');
         $tok = trim((string) ($_POST['access_token'] ?? '')); $sec = trim((string) ($_POST['app_secret'] ?? ''));
+        $appId = preg_replace('/\D/', '', (string) ($_POST['app_id'] ?? ''));
+        // A number in another Meta app: its App ID, token and app secret go together.
+        if ($appId !== '' && $appId !== (string) ($fresh['app_id'] ?? '') && ($tok === '' || $sec === '')) $fail('A number in a different Meta app needs that app\'s access token and app secret too.');
         $row = ['phone_number_id' => $pnid, 'waba_id' => $waba ?: null, 'access_token_enc' => $tok !== '' ? encrypt_secret($tok) : null, 'app_secret_enc' => $sec !== '' ? encrypt_secret($sec) : null];
         // Check it with Meta before saving, so a wrong id is caught now rather than at the first send.
         $chk = wa_number_check(array_merge($fresh, ['phone_number_id' => $pnid, 'access_token_enc' => $row['access_token_enc'] ?? $fresh['access_token_enc']]));
@@ -83,7 +86,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && str_starts_with((string) ($_POST['a
         db_insert("INSERT INTO wa_numbers (client_id,kind,label,phone_number_id,waba_id,display_phone,access_token_enc,app_secret_enc,status,created_by,created_at)
                    VALUES (?, 'cloud', ?, ?, ?, ?, ?, ?, 'connected', ?, NOW())",
                   [$cid, $label ?: mb_substr($chk['name'], 0, 60), $pnid, $row['waba_id'], $chk['phone'] ?: null, $row['access_token_enc'], $row['app_secret_enc'], (int) ($PERM_USER['id'] ?? 0) ?: null]);
-        flash('Business API number added' . ($chk['phone'] ? ' (+' . $chk['phone'] . ')' : '') . '. Point its webhook at the same address as your main number.');
+        if ($appId !== '' && db_has_column('wa_numbers', 'app_id')) db_run("UPDATE wa_numbers SET app_id=? WHERE phone_number_id=?", [$appId, $pnid]);
+        flash('Business API number added' . ($chk['phone'] ? ' (+' . $chk['phone'] . ')' : '') . '.'
+              . ($appId !== '' && $appId !== (string) ($fresh['app_id'] ?? '')
+                  ? ' In that Meta app, set the WhatsApp webhook to ' . app_base_url() . '/webhook.php with the same verify token as your main number, and subscribe to "messages" — otherwise replies and button taps from this number do not arrive.'
+                  : ' Its replies arrive through the same webhook as your main number.'));
         redirect('settings.php#numbers');
     }
     if ($a === 'nw_history') {
@@ -100,6 +107,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && str_starts_with((string) ($_POST['a
     $n = wa_number((int) ($_POST['number'] ?? 0), $cid);
     if (!$n || !(int) $n['active']) $fail('That number is not on this account.');
     $lc = wa_line_client($fresh, 'n' . $n['id']);
+    /* The Meta details of an extra Business API number, changed after it was added. Blank = keep. */
+    if ($a === 'nw_meta' && $n['kind'] === 'cloud') {
+        if (!client_may_edit_credentials($fresh) && !is_impersonating()) $fail('Your WhatsApp is managed by ' . BRAND_PARENT . ' — ask them to change it.');
+        $set = []; $vals = [];
+        $appId = preg_replace('/\D/', '', (string) ($_POST['app_id'] ?? ''));
+        if (db_has_column('wa_numbers', 'app_id')) { $set[] = 'app_id=?'; $vals[] = $appId !== '' ? $appId : null; }
+        $waba = preg_replace('/\D/', '', (string) ($_POST['waba_id'] ?? '')); $set[] = 'waba_id=?'; $vals[] = $waba !== '' ? $waba : null;
+        $tok = trim((string) ($_POST['access_token'] ?? '')); $sec = trim((string) ($_POST['app_secret'] ?? ''));
+        if ($tok !== '') {
+            $chk = wa_number_check(array_merge($fresh, ['phone_number_id' => (string) $n['phone_number_id'], 'access_token_enc' => encrypt_secret($tok)]));
+            if (!$chk['ok']) $fail('Meta did not accept that token for this number: ' . $chk['error']);
+            $set[] = 'access_token_enc=?'; $vals[] = encrypt_secret($tok);
+        }
+        if ($sec !== '') { $set[] = 'app_secret_enc=?'; $vals[] = encrypt_secret($sec); }
+        $vals[] = (int) $n['id'];
+        db_run("UPDATE wa_numbers SET " . implode(', ', $set) . " WHERE id=?", $vals);
+        flash('Saved.' . ($appId !== '' && $appId !== (string) ($fresh['app_id'] ?? '') ? ' Make sure that Meta app\'s WhatsApp webhook points to ' . app_base_url() . '/webhook.php.' : ''));
+        redirect('settings.php#numbers');
+    }
     if ($a === 'nw_rename') {
         db_run("UPDATE wa_numbers SET label=? WHERE id=?", [mb_substr(trim((string) ($_POST['label'] ?? '')), 0, 60), (int) $n['id']]);
         flash('Saved.'); redirect('settings.php#numbers');
@@ -383,6 +409,16 @@ function chNote(){
             <?php if ($nr['kind'] === 'personal'): ?>
               <button type="button" class="btn btn-ghost btn-sm" onclick="nwLink(<?= (int) $nr['id'] ?>, <?= e(json_encode($l['label'])) ?>)"><?= $l['ready'] ? 'Re-link' : 'Link phone' ?></button>
             <?php endif; ?>
+            <?php if ($nr['kind'] === 'cloud' && $nwCanApi): ?>
+            <details style="display:inline-block;position:relative"><summary class="btn btn-ghost btn-sm">Meta details</summary>
+              <form method="post" style="position:absolute;inset-inline-end:0;z-index:6;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px;min-width:330px;text-align:start">
+                <?= csrf_field() ?><input type="hidden" name="action" value="nw_meta"><input type="hidden" name="number" value="<?= (int) $nr['id'] ?>">
+                <div class="field"><span class="lbl">Meta App ID</span><input name="app_id" inputmode="numeric" class="ltr" value="<?= e((string) ($nr['app_id'] ?? '')) ?>" placeholder="Same app as the main number"></div>
+                <div class="field"><span class="lbl">WhatsApp Business Account ID</span><input name="waba_id" inputmode="numeric" class="ltr" value="<?= e((string) ($nr['waba_id'] ?? '')) ?>" placeholder="Same as the main number"></div>
+                <div class="field"><span class="lbl">Access token</span><input type="password" name="access_token" autocomplete="new-password" class="ltr" placeholder="<?= $nr['access_token_enc'] ? 'Saved — leave empty to keep' : 'Uses the main token' ?>"></div>
+                <div class="field"><span class="lbl">App secret</span><input type="password" name="app_secret" autocomplete="new-password" class="ltr" placeholder="<?= $nr['app_secret_enc'] ? 'Saved — leave empty to keep' : 'Uses the main app secret' ?>"></div>
+                <button class="btn btn-primary btn-sm">Save</button></form></details>
+            <?php endif; ?>
             <details style="display:inline-block;position:relative"><summary class="btn btn-ghost btn-sm">Rename</summary>
               <form method="post" style="position:absolute;inset-inline-end:0;z-index:5;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px;display:flex;gap:6px;min-width:260px">
                 <?= csrf_field() ?><input type="hidden" name="action" value="nw_rename"><input type="hidden" name="number" value="<?= (int) $nr['id'] ?>">
@@ -409,9 +445,11 @@ function chNote(){
             <div class="field"><span class="lbl">Name</span><input name="label" maxlength="60" placeholder="Sales, Support, Branch 2…"></div>
             <div class="field"><span class="lbl">Phone Number ID</span><input name="phone_number_id" required inputmode="numeric" class="ltr" placeholder="WhatsApp Manager → Phone numbers"></div>
             <div class="field"><span class="lbl">WhatsApp Business Account ID <span class="text-muted">(if it is in another account than your main number)</span></span><input name="waba_id" inputmode="numeric" class="ltr"></div>
+            <div class="field"><span class="lbl">Meta App ID <span class="text-muted">(only if this number is in a different Meta app)</span></span><input name="app_id" inputmode="numeric" class="ltr" placeholder="<?= e((string) ($CLIENT['app_id'] ?? '') ?: 'Same app as the main number') ?>"></div>
             <div class="field"><span class="lbl">Access token <span class="text-muted">(only if your main token cannot reach this number)</span></span><input type="password" name="access_token" autocomplete="new-password" class="ltr"></div>
             <div class="field"><span class="lbl">App secret <span class="text-muted">(only for a different Meta app)</span></span><input type="password" name="app_secret" autocomplete="new-password" class="ltr"></div>
-            <p class="text-muted" style="font-size:12px">We check the number with Meta before saving. In your Meta app, the WhatsApp webhook stays the same — every number of the app arrives at it.</p>
+            <p class="text-muted" style="font-size:12px">We check the number with Meta before saving. In the same Meta app, the WhatsApp webhook stays as it is — every number of the app arrives at it.
+              In a <strong>different</strong> app, give its App ID, access token and app secret, and set that app's WhatsApp webhook to <span class="ltr" style="unicode-bidi:isolate"><?= e(app_base_url()) ?>/webhook.php</span> with the same verify token, subscribed to "messages".</p>
             <button class="btn btn-primary btn-sm">Add number</button></form></details>
         <?php endif; ?>
         <?php if (pw_configured()): ?>

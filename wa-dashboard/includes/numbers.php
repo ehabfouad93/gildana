@@ -139,6 +139,7 @@ function wa_line_client(array $client, string $line): ?array
                 'channel' => 'cloud', 'phone_number_id' => (string) $n['phone_number_id'], 'waba_id' => (string) ($n['waba_id'] ?: ($client['waba_id'] ?? '')),
                 'access_token_enc' => $n['access_token_enc'] ?: ($client['access_token_enc'] ?? null),
                 'app_secret_enc' => $n['app_secret_enc'] ?: ($client['app_secret_enc'] ?? null),
+                'app_id' => (string) (($n['app_id'] ?? '') ?: ($client['app_id'] ?? '')),
                 '__line' => $line, '__wa_number' => (int) $n['id'],
             ]);
         }

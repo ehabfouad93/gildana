@@ -523,4 +523,5 @@ return [
     'When they tap a button' => 'عندما يضغطون على زر', 'When they read it' => 'عندما يقرؤونها', 'When it is delivered' => 'عند التسليم', 'A set time after sending' => 'بعد وقت محدد من الإرسال', 'Which button' => 'أي زر', 'Any button' => 'أي زر من الأزرار',
     'An automation for each button' => 'أتمتة لكل زر', 'starts' => 'يبدأ', '— nothing —' => '— لا شيء —',
     'Follow-up automation' => 'الأتمتة بعد الحملة', 'Saved as you go' => 'يُحفظ تلقائياً', '+ New' => '+ جديد',
+    'Meta App ID' => 'معرّف تطبيق ميتا (App ID)', 'Meta details' => 'بيانات ميتا',
 ];
