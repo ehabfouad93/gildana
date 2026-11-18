@@ -87,10 +87,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && str_starts_with((string) ($_POST['a
                    VALUES (?, 'cloud', ?, ?, ?, ?, ?, ?, 'connected', ?, NOW())",
                   [$cid, $label ?: mb_substr($chk['name'], 0, 60), $pnid, $row['waba_id'], $chk['phone'] ?: null, $row['access_token_enc'], $row['app_secret_enc'], (int) ($PERM_USER['id'] ?? 0) ?: null]);
         if ($appId !== '' && db_has_column('wa_numbers', 'app_id')) db_run("UPDATE wa_numbers SET app_id=? WHERE phone_number_id=?", [$appId, $pnid]);
+        $sub = $row['waba_id'] ? wa_waba_subscribe(array_merge($fresh, ['waba_id' => $row['waba_id'], 'access_token_enc' => $row['access_token_enc'] ?? $fresh['access_token_enc']])) : ['ok' => false, 'error' => 'no WhatsApp Business Account ID was given'];
         flash('Business API number added' . ($chk['phone'] ? ' (+' . $chk['phone'] . ')' : '') . '.'
               . ($appId !== '' && $appId !== (string) ($fresh['app_id'] ?? '')
                   ? ' In that Meta app, set the WhatsApp webhook to ' . app_base_url() . '/webhook.php with the same verify token as your main number, and subscribe to "messages" — otherwise replies and button taps from this number do not arrive.'
-                  : ' Its replies arrive through the same webhook as your main number.'));
+                  : ' Its replies arrive through the same webhook as your main number.')
+              . ($sub['ok'] ? '' : ' Could not connect its WhatsApp Business Account to the app (' . $sub['error'] . ') — add the account ID under "Meta details" and press "Check replies".'));
         redirect('settings.php#numbers');
     }
     if ($a === 'nw_history') {
@@ -123,7 +125,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && str_starts_with((string) ($_POST['a
         if ($sec !== '') { $set[] = 'app_secret_enc=?'; $vals[] = encrypt_secret($sec); }
         $vals[] = (int) $n['id'];
         db_run("UPDATE wa_numbers SET " . implode(', ', $set) . " WHERE id=?", $vals);
-        flash('Saved.' . ($appId !== '' && $appId !== (string) ($fresh['app_id'] ?? '') ? ' Make sure that Meta app\'s WhatsApp webhook points to ' . app_base_url() . '/webhook.php.' : ''));
+        $sub = wa_waba_subscribe(wa_line_client($fresh, 'n' . $n['id']) ?? $fresh);
+        if (!$sub['ok']) flash('Saved, but its WhatsApp Business Account could not be connected to the app: ' . $sub['error'], 'error');
+        else flash('Saved.' . ($appId !== '' && $appId !== (string) ($fresh['app_id'] ?? '') ? ' Make sure that Meta app\'s WhatsApp webhook points to ' . app_base_url() . '/webhook.php.' : ''));
+        redirect('settings.php#numbers');
+    }
+    /* "Replies not arriving": connect the WABA to the app again and say what Revenect last heard. */
+    if ($a === 'nw_hook' && $n['kind'] === 'cloud') {
+        $sub = wa_waba_subscribe($lc ?? $fresh);
+        $h = wa_webhook_health((string) $n['phone_number_id']);
+        $ok = $h['ok_at'] ? strtotime((string) $h['ok_at']) : 0; $bad = $h['bad_at'] ? strtotime((string) $h['bad_at']) : 0;
+        $msg = [];
+        $msg[] = $sub['ok'] ? 'Its WhatsApp Business Account is connected to the app.' : 'Could not connect its WhatsApp Business Account to the app: ' . $sub['error'];
+        if ($bad && $bad >= $ok) $msg[] = 'Meta reaches Revenect for this number (last ' . date('j M H:i', $bad) . ') but the app secret does not match, so it is refused. Paste that Meta app\'s App secret (App settings → Basic) under "Meta details".';
+        elseif ($ok) $msg[] = 'Last message from Meta for this number: ' . date('j M H:i', $ok) . '.';
+        else $msg[] = 'Nothing has arrived from Meta for this number yet. In that Meta app: WhatsApp → Configuration → Webhook URL ' . app_base_url() . '/webhook.php, Verify and save, then Manage → subscribe to "messages". The app must be Live (not Development) to receive messages from customers.';
+        flash(implode(' ', $msg), $sub['ok'] && ($ok > $bad) ? 'success' : 'error');
         redirect('settings.php#numbers');
     }
     if ($a === 'nw_rename') {
@@ -418,6 +435,14 @@ function chNote(){
                 <div class="field"><span class="lbl">Access token</span><input type="password" name="access_token" autocomplete="new-password" class="ltr" placeholder="<?= $nr['access_token_enc'] ? 'Saved — leave empty to keep' : 'Uses the main token' ?>"></div>
                 <div class="field"><span class="lbl">App secret</span><input type="password" name="app_secret" autocomplete="new-password" class="ltr" placeholder="<?= $nr['app_secret_enc'] ? 'Saved — leave empty to keep' : 'Uses the main app secret' ?>"></div>
                 <button class="btn btn-primary btn-sm">Save</button></form></details>
+            <form method="post" style="display:inline"><?= csrf_field() ?><input type="hidden" name="action" value="nw_hook"><input type="hidden" name="number" value="<?= (int) $nr['id'] ?>">
+              <button class="btn btn-ghost btn-sm" title="Connect this number to its Meta app again and see whether replies are reaching Revenect">Check replies</button></form>
+            <?php $wh = wa_webhook_health((string) $nr['phone_number_id']);
+              $whOk = $wh['ok_at'] ? strtotime((string) $wh['ok_at']) : 0; $whBad = $wh['bad_at'] ? strtotime((string) $wh['bad_at']) : 0; ?>
+            <span style="font-size:11.5px;display:block;margin-top:4px;color:<?= $whBad && $whBad >= $whOk ? 'var(--danger)' : 'var(--muted, #888)' ?>"><?php
+              if ($whBad && $whBad >= $whOk) echo 'Replies refused: wrong app secret';
+              elseif ($whOk) echo 'Last from Meta: ' . e(date('j M H:i', $whOk));
+              else echo 'Nothing received from Meta yet'; ?></span>
             <?php endif; ?>
             <details style="display:inline-block;position:relative"><summary class="btn btn-ghost btn-sm">Rename</summary>
               <form method="post" style="position:absolute;inset-inline-end:0;z-index:5;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px;display:flex;gap:6px;min-width:260px">

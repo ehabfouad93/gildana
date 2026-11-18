@@ -80,6 +80,9 @@ if (!is_array($data)) { http_response_code(200); echo 'ok'; exit; }
    Parsing the JSON first is safe: it only tells us which client to look up, and nothing is
    written or acted on until the signature checks out. */
 $sigClient = webhook_client_for($data);
+$sigPnid = '';
+foreach ((array) ($data['entry'] ?? []) as $en) foreach ((array) ($en['changes'] ?? []) as $ch) { $sigPnid = $sigPnid ?: (string) ($ch['value']['metadata']['phone_number_id'] ?? ''); }
+$sigPnid = preg_replace('/\D/', '', $sigPnid);
 $appSecret = '';
 if ($sigClient && !empty($sigClient['app_secret_enc'])) {
     $appSecret = decrypt_secret((string) $sigClient['app_secret_enc']);
@@ -91,7 +94,9 @@ if ($appSecret !== '') {
     $sig = (string) ($_SERVER['HTTP_X_HUB_SIGNATURE_256'] ?? '');
     $expected = 'sha256=' . hash_hmac('sha256', $raw, $appSecret);
     if (!$sig || !hash_equals($expected, $sig)) {
-        error_log('webhook: bad signature for client ' . (int) ($sigClient['id'] ?? 0));
+        error_log('webhook: bad signature for client ' . (int) ($sigClient['id'] ?? 0) . ' number ' . $sigPnid);
+        // Remember it, so Settings can say "Meta reaches Revenect but the app secret is wrong".
+        if ($sigPnid !== '') { try { setting_set('wh_badsig_' . $sigPnid, date('Y-m-d H:i:s')); } catch (Throwable $e) {} }
         http_response_code(403);
         exit('Bad signature');
     }
@@ -114,6 +119,7 @@ if ($appSecret !== '') {
    failed to ack, and re-running a delivery would fire the automation and the AI reply a
    second time — so the insert doubles as the dedupe key: if it changed no rows, we have
    handled this payload already. */
+if ($sigPnid !== '') { try { setting_set('wh_ok_' . $sigPnid, date('Y-m-d H:i:s')); } catch (Throwable $e) {} }
 $duplicate = false;
 try {
     $key = substr(hash('sha256', $raw), 0, 60);

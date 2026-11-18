@@ -270,6 +270,29 @@ function wa_number_check(array $lineClient): array
     return ['ok' => true, 'phone' => preg_replace('/\D/', '', (string) ($r['json']['display_phone_number'] ?? '')), 'name' => (string) ($r['json']['verified_name'] ?? ''), 'error' => ''];
 }
 
+/**
+ * Make sure Meta sends this number's replies to the app whose webhook points here.
+ * A WhatsApp Business Account only delivers messages to apps subscribed to it; a number in a
+ * second Meta app never gets that subscription unless someone makes it — and then nothing
+ * the customer sends ever reaches Revenect. Subscribing is idempotent.
+ */
+function wa_waba_subscribe(array $lineClient): array
+{
+    $token = wa_token($lineClient); $waba = (string) ($lineClient['waba_id'] ?? '');
+    if ($token === '' || $waba === '') return ['ok' => false, 'error' => 'Missing the WhatsApp Business Account ID or access token.'];
+    $r = wa_request('POST', wa_graph_base() . '/' . rawurlencode($waba) . '/subscribed_apps', $token);
+    if ($r['http'] < 200 || $r['http'] >= 300) return ['ok' => false, 'error' => 'Meta said: ' . ($r['error'] ?: 'HTTP ' . $r['http'])];
+    return ['ok' => true, 'error' => ''];
+}
+
+/** What Revenect last heard from Meta for this phone number id (set by webhook.php). */
+function wa_webhook_health(string $pnid): array
+{
+    require_once __DIR__ . '/push.php';
+    $get = fn(string $k) => setting_get($k);
+    return ['ok_at' => $get('wh_ok_' . $pnid), 'bad_at' => $get('wh_badsig_' . $pnid)];
+}
+
 /** Options for a "Send from" select: key => label, only lines this person may use. */
 function wa_line_options(array $client, ?array $user, ?string $kind = null): array
 {
