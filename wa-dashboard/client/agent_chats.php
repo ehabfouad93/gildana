@@ -22,12 +22,12 @@ if (($_GET['export'] ?? '') === '1') {
     header('Content-Type: text/csv; charset=UTF-8');
     header('Content-Disposition: attachment; filename="chats-' . $fid . '-' . date('Y-m-d') . '.csv"');
     echo "\xEF\xBB\xBF";
-    echo implode(',', array_map('csv_cell', array_merge(['phone', 'name', 'status', 'messages', 'started'], $fieldKeys))) . "\n";
+    echo implode(',', array_map('csv_cell', array_merge(['phone', 'name', 'channel', 'status', 'messages', 'started'], $fieldKeys))) . "\n";
     foreach ($rows as $r) {
         $ctx = json_decode((string) $r['context'], true) ?: [];
         $fields = (array) ($ctx['fields'] ?? []);
         $out = [
-            (string) $r['phone_e164'], (string) $r['name'], (string) $r['status'],
+            (string) $r['phone_e164'], (string) $r['name'], (string) ($r['channel'] ?? 'whatsapp'), (string) $r['status'],
             (string) count((array) ($ctx['transcript'] ?? [])), (string) $r['created_at'],
         ];
         foreach ($fieldKeys as $k) $out[] = (string) ($fields[$k] ?? '');
@@ -56,6 +56,7 @@ function chat_status_pill(string $s): string {
 }
 
 $actions = '<a class="btn btn-ghost btn-sm" href="agent_edit.php?id=' . $fid . '">Edit</a>'
+         . '<a class="btn btn-ghost btn-sm" href="agent_web.php?flow=' . $fid . '">Website chat</a>'
          . '<a class="btn btn-ghost btn-sm" href="agent_chats.php?flow=' . $fid . '&export=1">Export CSV</a>';
 client_header('Chats · ' . $flow['name'], 'agents', $CLIENT);
 page_head('Chats — ' . $flow['name'], $actions);
@@ -69,9 +70,9 @@ page_head('Chats — ' . $flow['name'], $actions);
 <div class="card card-flush">
   <div class="table-wrap">
     <table class="data">
-      <thead><tr><th>Phone</th><th>Name</th><th>Status</th><th>Captured</th><th>Started</th><th></th></tr></thead>
+      <thead><tr><th>Phone</th><th>Channel</th><th>Name</th><th>Status</th><th>Captured</th><th>Started</th><th></th></tr></thead>
       <tbody>
-      <?php if (!$chats): ?><tr><td colspan="6"><div class="empty">No conversations yet. Activate the agent — it replies when a customer messages your number.</div></td></tr><?php endif; ?>
+      <?php if (!$chats): ?><tr><td colspan="7"><div class="empty">No conversations yet. Activate the agent — it replies when a customer messages your number.</div></td></tr><?php endif; ?>
       <?php foreach ($chats as $r):
         $ctx = json_decode((string) $r['context'], true) ?: [];
         $tr  = json_encode($ctx['transcript'] ?? [], JSON_UNESCAPED_UNICODE);
@@ -81,7 +82,8 @@ page_head('Chats — ' . $flow['name'], $actions);
         $capStr = implode(' · ', array_slice($cap, 0, 3));
       ?>
         <tr>
-          <td class="mono">+<?= e((string) $r['phone_e164']) ?></td>
+          <td class="mono"><?= $r['phone_e164'] ? '+' . e((string) $r['phone_e164']) : '<span class="text-muted">—</span>' ?></td>
+          <td><?php $chn = (string) ($r['channel'] ?? 'whatsapp'); ?><span class="pill <?= $chn === 'web' ? 'green' : 'gray' ?>"><?= e(['web' => 'Website', 'whatsapp' => 'WhatsApp', 'messenger' => 'Messenger', 'instagram' => 'Instagram'][$chn] ?? $chn) ?></span></td>
           <td><?= e((string) $r['name']) ?: '<span class="text-muted">—</span>' ?></td>
           <td><?= chat_status_pill((string) $r['status']) ?></td>
           <td class="text-muted" style="max-width:260px;font-size:12px"><?= $capStr !== '' ? e($capStr) : '<span class="text-muted">—</span>' ?></td>

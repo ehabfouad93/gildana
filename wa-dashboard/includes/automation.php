@@ -936,6 +936,13 @@ function auto_inbound_decide(array $client, array $contact, array $message, stri
         // says we're done or the turn cap is reached, then hand off to the next node (scoring).
         if ($type === 'ai_chat') {
             $latest = $text !== '' ? $text : $buttonId;
+            /* The answer goes where the conversation is (Messenger, Instagram, the website) — the
+               route is otherwise only set inside automation_run_steps(), so without this every
+               reply after the first went out on WhatsApp. */
+            if (function_exists('auto_route_for') && !auto_dry_run() && auto_route_for($client, $run, $cfg, $contact) === false) {
+                $run['status'] = 'stopped'; auto_save_run($run, $ctx);
+                return 'not_reachable|This person cannot be reached on ' . ($run['channel'] ?? 'whatsapp');
+            }
             if (auto_chat_turn($client, $run, $step, $contact, $ctx, $cfg, $latest)) {
                 $run['status'] = 'active';
                 $run['current_step_id'] = $next;     // done → advance to scoring / collect

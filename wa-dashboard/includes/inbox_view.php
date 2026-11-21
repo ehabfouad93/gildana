@@ -13,6 +13,8 @@ $IB_SEP = strpos($IB_ENDPOINT, '?') === false ? '?' : '&';
 // The channels this account talks on, for the tabs over the list (only when there is more than one).
 $IB_CHANNELS = isset($CLIENT) && function_exists('client_channels')
     ? array_values(array_intersect(['whatsapp', 'messenger', 'instagram'], client_channels($CLIENT))) : ['whatsapp'];
+// The website chat: a tab of its own once the account has a website widget.
+if (isset($CLIENT['id'])) { require_once __DIR__ . '/webchat.php'; if (webchat_ready() && db_val("SELECT 1 FROM web_widgets WHERE client_id=? LIMIT 1", [(int) $CLIENT['id']])) $IB_CHANNELS[] = 'web'; }
 ?>
 <style>
   .ib-wrap{display:flex;gap:0;height:72vh;min-height:460px;border:1px solid var(--line,rgba(var(--ink-rgb,13,19,33),.10));border-radius:12px;overflow:hidden;background:var(--surface,#fff)}
@@ -57,7 +59,7 @@ $IB_CHANNELS = isset($CLIENT) && function_exists('client_channels')
   .ib-tabs button{border:1px solid var(--line,rgba(var(--ink-rgb,13,19,33),.12));background:var(--surface,#fff);border-radius:999px;padding:3px 10px;font-size:12px;cursor:pointer;color:inherit}
   .ib-tabs button.on{background:var(--brand,#7C3AED);border-color:var(--brand,#7C3AED);color:#fff}
   .ib-chb{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:16px;padding:0 4px;border-radius:5px;font-size:9.5px;font-weight:700;color:#fff;letter-spacing:.02em;vertical-align:1px}
-  .ib-chb.sms{background:#64748B}.ib-chb.whatsapp{background:#25D366}.ib-chb.messenger{background:#0866FF}.ib-chb.instagram{background:linear-gradient(45deg,#F58529,#DD2A7B 55%,#8134AF)}
+  .ib-chb.sms{background:#64748B}.ib-chb.whatsapp{background:#25D366}.ib-chb.messenger{background:#0866FF}.ib-chb.instagram{background:linear-gradient(45deg,#F58529,#DD2A7B 55%,#8134AF)}.ib-chb.web{background:#0F766E}
   .ib-chsel[hidden]{display:none!important}
   .ib-chsel{border:1px solid var(--line,rgba(var(--ink-rgb,13,19,33),.12));border-radius:8px;padding:6px 8px;font-size:12.5px;background:var(--surface,#fff);color:inherit;align-self:center}
   .ib-addlead{white-space:nowrap}
@@ -150,7 +152,7 @@ $IB_CHANNELS = isset($CLIENT) && function_exists('client_channels')
     <?php if (count($IB_CHANNELS) > 1): ?>
     <div class="ib-tabs" id="ib-tabs" role="tablist" aria-label="Channel">
       <button type="button" class="on" data-ch="">All</button>
-      <?php foreach ($IB_CHANNELS as $ch): ?><button type="button" data-ch="<?= e($ch) ?>"><?= e(['whatsapp' => 'WhatsApp', 'messenger' => 'Messenger', 'instagram' => 'Instagram'][$ch]) ?></button><?php endforeach; ?>
+      <?php foreach ($IB_CHANNELS as $ch): ?><button type="button" data-ch="<?= e($ch) ?>"><?= e(['whatsapp' => 'WhatsApp', 'messenger' => 'Messenger', 'instagram' => 'Instagram', 'web' => 'Website'][$ch]) ?></button><?php endforeach; ?>
     </div>
     <?php endif; ?>
     <?php
@@ -302,7 +304,7 @@ const IB_SEP = <?= json_encode($IB_SEP) ?>;
 const IB_CSRF = <?= json_encode(csrf_token()) ?>;
 const IB_MULTI = <?= count($IB_CHANNELS) > 1 ? 'true' : 'false' ?>;
 let ibCur = 0, ibLast = 0, ibOpen = false, ibCh = '', ibChPicked = false, ibFilter = '', ibLine = null, ibLineFilter = '', ibSplit = false, ibFrom = null, ibFromPicked = false, ibFromList = [];
-const IB_CH_SHORT = {whatsapp:'WA', messenger:'M', instagram:'IG', sms:'SMS'}, IB_CH_NAME = {whatsapp:'WhatsApp', messenger:'Messenger', instagram:'Instagram', sms:'SMS'};
+const IB_CH_SHORT = {whatsapp:'WA', messenger:'M', instagram:'IG', sms:'SMS', web:'WEB'}, IB_CH_NAME = {whatsapp:'WhatsApp', messenger:'Messenger', instagram:'Instagram', sms:'SMS', web:'Website'};
 const chBadge = c => `<span class="ib-chb ${c}" title="${IB_CH_NAME[c]||c}">${IB_CH_SHORT[c]||'?'}</span>`;
 /* Who they are when there is no number yet: their Instagram handle, or the channel they wrote on. */
 const whoName = t => t.name || (t.phone_e164 ? '+'+t.phone_e164 : (t.ig_username ? '@'+t.ig_username : (IB_CH_NAME[t.last_channel]||'Contact')+' user'));
@@ -409,7 +411,7 @@ async function pollThread(){
   el('ib-addlead').hidden = !d.can_add_lead;
   el('ib-optin').hidden = !d.can_ask_optin;
   ibOpen = d.windows && (ibCh in d.windows) ? !!d.windows[ibCh] : !!d.window_open;
-  const social = ibCh === 'messenger' || ibCh === 'instagram';
+  const social = ibCh === 'messenger' || ibCh === 'instagram' || ibCh === 'web';
   /* Send from: this person's WhatsApp numbers. A linked phone has no 24-hour window. */
   ibFromList = d.wa_from || [];
   const fs = el('ib-from');
@@ -460,7 +462,7 @@ el('ib-form').addEventListener('submit', async e=>{
   e.preventDefault(); const ta=el('ib-text'); const body=ta.value.trim(); if(!body||!ibCur) return;
   const btn=e.target.querySelector('button'); btn.disabled=true;
   const fd=new FormData(); fd.append('ajax','send'); fd.append('csrf_token',IB_CSRF); fd.append('contact',ibCur); fd.append('body',body); fd.append('channel',ibCh||'whatsapp');
-  if (ibFrom && ibCh !== 'messenger' && ibCh !== 'instagram') fd.append('line', ibFrom); else if (ibLine) fd.append('line', ibLine);
+  if (ibFrom && ibCh !== 'messenger' && ibCh !== 'instagram' && ibCh !== 'web') fd.append('line', ibFrom); else if (ibLine) fd.append('line', ibLine);
   const r=await fetch(IB_URL,{method:'POST',body:fd}); const d=await r.json();
   btn.disabled=false;
   if(d.ok){ ta.value='';

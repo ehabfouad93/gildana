@@ -62,7 +62,7 @@ page_head('AI Chat Agent', $actions);
 if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
 
 <div class="alert info" style="font-size:12.5px">
-  An AI Chat Agent answers customers who <strong>message your number</strong> — it chats like a human using only the
+  An AI Chat Agent answers customers who <strong>message your number</strong> — and visitors on <strong>your website</strong> (Website chat) — it chats like a human using only the
   <strong>knowledge you give it</strong>, pursues your goals, and captures details. No lead scoring.
   <?php if (!($CLIENT['ai_provider'] ?? '')): ?> Add your AI key in <a href="settings.php#ai">Settings</a> first.<?php endif; ?>
 </div>
@@ -83,6 +83,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
           <td style="text-align: end;white-space:nowrap">
             <a class="btn btn-ghost btn-sm" href="agent_edit.php?id=<?= (int) $f['id'] ?>">Edit</a>
             <a class="btn btn-ghost btn-sm" href="agent_chats.php?flow=<?= (int) $f['id'] ?>">Chats</a>
+            <a class="btn btn-ghost btn-sm" href="agent_web.php?flow=<?= (int) $f['id'] ?>" title="Put this agent on your website and landing pages">Website chat</a>
             <form method="post" style="display:inline">
               <?= csrf_field() ?><input type="hidden" name="action" value="duplicate"><input type="hidden" name="id" value="<?= (int) $f['id'] ?>">
               <button class="btn btn-ghost btn-sm" title="Make a copy of this agent">Duplicate</button>

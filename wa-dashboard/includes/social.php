@@ -25,7 +25,7 @@ require_once __DIR__ . '/credits.php';
 /** messenger | instagram, as people see them. */
 function social_channel_label(string $ch): string
 {
-    return ['whatsapp' => 'WhatsApp', 'messenger' => 'Messenger', 'instagram' => 'Instagram'][$ch] ?? ucfirst($ch);
+    return ['whatsapp' => 'WhatsApp', 'messenger' => 'Messenger', 'instagram' => 'Instagram', 'web' => 'Website'][$ch] ?? ucfirst($ch);
 }
 
 /* ───────────────────────── Graph ───────────────────────── */
@@ -161,6 +161,7 @@ function social_contact(array $client, array $page, string $platform, string $si
 /** The 24-hour window on Messenger / Instagram: they wrote within the last day. */
 function social_window_open(array $contact, string $platform): bool
 {
+    if ($platform === 'web') return !empty($contact['web_vid']);   // the website chat has no 24-hour rule
     $last = $contact[$platform === 'instagram' ? 'ig_last_in_at' : 'fb_last_in_at'] ?? null;
     return $last && strtotime((string) $last) > time() - 86400;
 }
@@ -169,7 +170,7 @@ function social_window_open(array $contact, string $platform): bool
 function social_reach(array $contact): array
 {
     return array_filter(['whatsapp' => (string) ($contact['phone_e164'] ?? ''), 'messenger' => (string) ($contact['fb_psid'] ?? ''),
-                         'instagram' => (string) ($contact['ig_sid'] ?? '')], 'strlen');
+                         'instagram' => (string) ($contact['ig_sid'] ?? ''), 'web' => (string) ($contact['web_vid'] ?? '')], 'strlen');
 }
 
 /** The Page a contact talks to (the one they last wrote to), for sending. */
@@ -406,12 +407,15 @@ function social_attach_phone(array $client, int $contactId, string $raw): array
     }
     // Keep the existing contact; carry the Messenger / Instagram identity over to it.
     $carry = [];
-    foreach (['fb_psid', 'ig_sid', 'ig_username', 'social_avatar', 'fb_last_in_at', 'ig_last_in_at', 'social_page_id'] as $k) {
-        if (!empty($c[$k]) && empty($other[$k])) $carry[$k] = $c[$k];
+    $web = db_has_column('contacts', 'web_vid');
+    foreach (array_merge(['fb_psid', 'ig_sid', 'ig_username', 'social_avatar', 'fb_last_in_at', 'ig_last_in_at', 'social_page_id'],
+                         $web ? ['web_vid', 'web_widget_id', 'web_last_in_at', 'web_page'] : []) as $k) {
+        // The website visitor's id always moves: it is what their browser will keep using.
+        if (!empty($c[$k]) && ($k === 'web_vid' || empty($other[$k]))) $carry[$k] = $c[$k];
     }
-    db_run("UPDATE contacts SET fb_psid=NULL, ig_sid=NULL WHERE id=?", [$contactId]);   // they are unique per account
+    db_run("UPDATE contacts SET fb_psid=NULL, ig_sid=NULL" . ($web ? ", web_vid=NULL" : '') . " WHERE id=?", [$contactId]);   // they are unique per account
     if (!function_exists('crm_merge') || !crm_merge($client, (int) $other['id'], $contactId, function_exists('crm_actor_id') ? crm_actor_id() : null)) {
-        db_run("UPDATE contacts SET fb_psid=?, ig_sid=? WHERE id=?", [$c['fb_psid'], $c['ig_sid'], $contactId]);
+        db_run("UPDATE contacts SET fb_psid=?, ig_sid=?" . ($web ? ", web_vid=?" : '') . " WHERE id=?", array_merge([$c['fb_psid'], $c['ig_sid']], $web ? [$c['web_vid']] : [], [$contactId]));
         return ['ok' => false, 'error' => 'Could not join this person to the contact with that number.'];
     }
     if ($carry) {

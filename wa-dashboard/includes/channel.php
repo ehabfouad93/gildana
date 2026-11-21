@@ -67,6 +67,8 @@ function channel_route(?array $set = null, bool $clear = false): ?array
 function channel_routed(array $client, string $kind, array $args): ?array
 {
     $r = channel_route();
+    // The website chat: nothing to deliver — the message is stored and the visitor's browser fetches it.
+    if ($r && ($r['channel'] ?? '') === 'web') { require_once __DIR__ . '/webchat.php'; return webchat_routed($kind, $args); }
     if (!$r || !function_exists('social_send')) return null;
     [$contact, $ch] = [$r['contact'], $r['channel']];
     switch ($kind) {

@@ -275,7 +275,7 @@ function inbox_threads(int $clientId, string $q = '', int $limit = 200, string $
         array_push($params, "%$q%", "%$q%"); if ($social) $params[] = "%$q%";
     }
     // One channel's conversations: anyone who has written or been written to on it.
-    if ($social && in_array($channel, ['whatsapp', 'messenger', 'instagram'], true)) {
+    if ($social && in_array($channel, ['whatsapp', 'messenger', 'instagram', 'web'], true)) {
         $search .= " AND EXISTS (SELECT 1 FROM messages xc WHERE xc.client_id=c.client_id AND xc.contact_id=c.id AND xc.channel=?)";
         $params[] = $channel;
     }
@@ -337,7 +337,9 @@ function inbox_threads_split(array $client, string $q, int $limit, string $chann
     [$fSql, $fP] = inbox_from_sql($clientId, $from, $replied);
     $where .= $fSql; $p = array_merge($p, $fP);
     if ($q !== '') { $where .= " AND (c.name LIKE ? OR c.phone_e164 LIKE ? OR c.ig_username LIKE ?)"; array_push($p, "%$q%", "%$q%", "%$q%"); }
-    if (in_array($channel, ['messenger', 'instagram'], true)) { $where .= " AND lm.ln=''"; }
+    if (in_array($channel, ['messenger', 'instagram', 'web'], true)) {
+        $where .= " AND lm.ln='' AND EXISTS (SELECT 1 FROM messages xc WHERE xc.client_id=c.client_id AND xc.contact_id=c.id AND xc.channel=?)"; $p[] = $channel;
+    }
     elseif ($channel === 'whatsapp') { $where .= " AND lm.ln<>''"; }
     if ($lineFilter !== '' && wa_line_valid($lineFilter)) { $where .= " AND lm.ln=?"; $p[] = $lineFilter; }
     // A number that is not working now: gone from the Inbox, except for an Admin who picks it.
@@ -373,7 +375,7 @@ function inbox_threads_split(array $client, string $q, int $limit, string $chann
         if ($hide && (string) $r['phone_e164'] !== '') $r['phone_e164'] = ltrim(crm_phone_mask((string) $r['phone_e164']), '+');
         $r['phone_e164'] = (string) ($r['phone_e164'] ?? '');
         $r['last_channel'] = (string) ($r['last_channel'] ?? 'whatsapp');
-        $r['line_label'] = $r['line'] !== '' ? wa_line_label($client, (string) $r['line']) : 'Messenger, Instagram & SMS';
+        $r['line_label'] = $r['line'] !== '' ? wa_line_label($client, (string) $r['line']) : 'Messenger, Instagram, SMS & Website';
         $r['last_body'] = $label[(string) $r['last_body']] ?? $r['last_body'];
     }
     unset($r);
@@ -696,7 +698,8 @@ function inbox_handle_ajax(array $client): void
             $want ??= $line;
         } elseif ($line !== null && $line !== '') $want = $line;
         $s = sender_for($client, sending_user(), $want, $contact);
-        $reach = array_filter(social_reach($contact), fn($v, $ch) => client_has_channel($client, $ch), ARRAY_FILTER_USE_BOTH);
+        // The website chat comes with the AI Chat Agent: there whenever this person chatted on the website.
+        $reach = array_filter(social_reach($contact), fn($v, $ch) => $ch === 'web' || client_has_channel($client, $ch), ARRAY_FILTER_USE_BOTH);
         if ($line !== null) $reach = array_filter($reach, fn($v, $ch) => ($ch === 'whatsapp') === ($line !== ''), ARRAY_FILTER_USE_BOTH);
         $lastIn = db_has_column('messages', 'channel')
             ? (string) db_val("SELECT channel FROM messages WHERE client_id=? AND contact_id=? AND direction='in' ORDER BY id DESC LIMIT 1", [$cid, $contactId]) : '';
@@ -734,6 +737,11 @@ function inbox_handle_ajax(array $client): void
         if (in_array($ch, ['messenger', 'instagram'], true)) {
             require_once __DIR__ . '/social.php';
             json_out(inbox_send_social($client, (int) ($_POST['contact'] ?? 0), (string) ($_POST['body'] ?? ''), $ch));
+        }
+        if ($ch === 'web') {
+            if (function_exists('can_write') && !can_write()) json_out(['ok' => false, 'error' => 'You can only look at this account.']);
+            require_once __DIR__ . '/webchat.php';
+            json_out(inbox_send_web($client, (int) ($_POST['contact'] ?? 0), (string) ($_POST['body'] ?? '')));
         }
         $ln = (string) ($_POST['line'] ?? '');
         json_out(inbox_send($client, (int) ($_POST['contact'] ?? 0), (string) ($_POST['body'] ?? ''), $ln !== '' && wa_line_valid($ln) ? $ln : null));

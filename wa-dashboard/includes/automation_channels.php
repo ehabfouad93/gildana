@@ -249,7 +249,14 @@ function auto_route_for(array $client, array $run, array $cfg, array $contact)
 {
     $want = (string) ($cfg['send_on'] ?? '');
     $ch = ($want === '' || $want === 'origin') ? (string) ($run['channel'] ?? 'whatsapp') : $want;
-    if (!in_array($ch, ['whatsapp', 'messenger', 'instagram'], true)) $ch = 'whatsapp';
+    if (!in_array($ch, ['whatsapp', 'messenger', 'instagram', 'web'], true)) $ch = 'whatsapp';
+    // The website chat: the visitor's browser, while they have one (web_vid).
+    if ($ch === 'web') {
+        if (trim((string) ($contact['web_vid'] ?? '')) === '') { channel_route(null, true); return false; }
+        $r = ['channel' => 'web', 'contact' => $contact];
+        channel_route($r);
+        return $r;
+    }
     if ($ch === 'whatsapp') {
         channel_route(null, true);
         return trim((string) ($contact['phone_e164'] ?? '')) === '' ? false : null;
