@@ -153,10 +153,10 @@ if ($widget) {
     <p class="text-muted" style="font-size:12.5px;margin-top:-4px">Buttons under the welcome message. Each one sends a message to the agent, or opens a link. Add a picture to any of them and they show as cards you swipe through.</p>
     <div class="wc-act text-muted" style="font-size:11.5px;margin-bottom:4px"><span>Button text</span><span>Sends this message</span><span>…or opens this link</span><span>Picture (optional)</span><span></span></div>
     <div id="acts">
-      <?php foreach ($acts as $a): ?>
+      <?php foreach ($acts as $ai => $a): $ex = $ai === 0 && !$s['actions']; ?>
         <div class="wc-act">
-          <input name="act_label[]" maxlength="40" value="<?= e((string) ($a['label'] ?? '')) ?>" placeholder="الأسعار">
-          <input name="act_send[]" maxlength="300" value="<?= e((string) ($a['send'] ?? '')) ?>" placeholder="عايز أعرف الأسعار">
+          <input name="act_label[]" maxlength="40" value="<?= e((string) ($a['label'] ?? '')) ?>" placeholder="<?= $ex ? 'e.g. الأسعار' : 'Button text' ?>">
+          <input name="act_send[]" maxlength="300" value="<?= e((string) ($a['send'] ?? '')) ?>" placeholder="<?= $ex ? 'e.g. عايز أعرف الأسعار' : 'Message it sends' ?>">
           <input name="act_url[]" class="ltr" value="<?= e((string) ($a['url'] ?? '')) ?>" placeholder="https://…">
           <input name="act_image[]" class="ltr" value="<?= e((string) ($a['image'] ?? '')) ?>" placeholder="https://…/photo.jpg">
           <button type="button" class="icon-btn" onclick="this.closest('.wc-act').remove()" title="Remove">&#x2715;</button>

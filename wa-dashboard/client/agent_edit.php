@@ -16,7 +16,7 @@ $agentChannels = array_values(array_filter(['messenger', 'instagram'], fn($ch) =
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save') {
     verify_csrf();
     $name    = trim((string) ($_POST['name'] ?? $flow['name']));
-    $trigger = in_array(($_POST['trigger_type'] ?? ''), ['welcome', 'keyword'], true) ? (string) $_POST['trigger_type'] : 'welcome';
+    $trigger = in_array(($_POST['trigger_type'] ?? ''), ['welcome', 'keyword', 'website'], true) ? (string) $_POST['trigger_type'] : 'welcome';
     $match   = in_array(($_POST['match_type'] ?? ''), ['contains', 'exact', 'starts'], true) ? (string) $_POST['match_type'] : 'contains';
     $keywords = array_values(array_filter(array_map('trim', explode(',', (string) ($_POST['keywords'] ?? '')))));
 
@@ -69,7 +69,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save'
             if (function_exists('auto_save_triggers')) {
                 $rows = [];
                 foreach ($agentChannels as $ch) {
-                    if (!in_array($ch, (array) ($_POST['also_on'] ?? []), true)) continue;
+                    // Website only: nothing starts it on Messenger or Instagram either.
+                    if ($trigger === 'website' || !in_array($ch, (array) ($_POST['also_on'] ?? []), true)) continue;
                     $rows[] = $trigger === 'keyword'
                         ? ['kind' => $ch . '_keyword', 'config' => ['keywords' => $keywords, 'match_type' => $match]]
                         : ['kind' => $ch . '_any', 'config' => []];
@@ -134,10 +135,11 @@ client_header('Agent · ' . $flow['name'], 'agents', $CLIENT);
         <select name="trigger_type" id="trig">
           <option value="welcome" <?= $flow['trigger_type'] === 'welcome' ? 'selected' : '' ?>>Any customer messages</option>
           <option value="keyword" <?= $flow['trigger_type'] === 'keyword' ? 'selected' : '' ?>>A keyword is received</option>
+          <option value="website" <?= $flow['trigger_type'] === 'website' ? 'selected' : '' ?>>Only on my website (Website chat)</option>
         </select>
       </div>
-      <div class="field"><span class="lbl">Keywords <span class="text-muted">(comma separated)</span></span><input type="text" name="keywords" value="<?= e($kwStr) ?>" placeholder="price, info, مهتم"></div>
-      <div class="field"><span class="lbl">Match</span>
+      <div class="field wa-trig"><span class="lbl">Keywords <span class="text-muted">(comma separated)</span></span><input type="text" name="keywords" value="<?= e($kwStr) ?>" placeholder="price, info, مهتم"></div>
+      <div class="field wa-trig"><span class="lbl">Match</span>
         <select name="match_type">
           <?php foreach (['contains' => 'Contains', 'exact' => 'Exact', 'starts' => 'Starts with'] as $mv => $ml): ?>
             <option value="<?= $mv ?>" <?= $matchType === $mv ? 'selected' : '' ?>><?= $ml ?></option>
@@ -146,7 +148,7 @@ client_header('Agent · ' . $flow['name'], 'agents', $CLIENT);
       </div>
     </div>
     <?php if ($agentChannels): ?>
-      <div class="field"><span class="lbl">Answer on</span>
+      <div class="field wa-trig"><span class="lbl">Answer on</span>
         <div style="display:flex;gap:16px;flex-wrap:wrap">
           <label class="mod-opt"><input type="checkbox" checked disabled> WhatsApp</label>
           <?php foreach ($agentChannels as $ch): ?>
@@ -156,7 +158,9 @@ client_header('Agent · ' . $flow['name'], 'agents', $CLIENT);
         <div class="hint">The agent answers there the same way (same trigger and keywords). Buttons become quick replies.</div>
       </div>
     <?php endif; ?>
-    <div class="hint">Free-form AI replies only work within 24h of the customer's last message; each sent message costs 1 credit.</div>
+    <div class="hint wa-trig">Free-form AI replies only work within 24h of the customer's last message; each sent message costs 1 credit.</div>
+    <div class="alert info web-trig" style="font-size:12.5px;margin-top:10px">This agent answers only visitors on your website and landing pages — messages to your WhatsApp number, Messenger or Instagram never start it.
+      Put it on a page from <a href="agent_web.php?flow=<?= $id ?>"><strong>Website chat</strong></a>. Each AI reply costs 1 credit.</div>
   </div>
 
   <div class="card">
@@ -203,6 +207,12 @@ client_header('Agent · ' . $flow['name'], 'agents', $CLIENT);
 </form>
 
 <script>
+// Website only: the WhatsApp trigger fields do not apply.
+(function(){ const t = document.getElementById('trig');
+  const sync = () => { const web = t.value === 'website';
+    document.querySelectorAll('.wa-trig').forEach(el => el.style.display = web ? 'none' : '');
+    document.querySelectorAll('.web-trig').forEach(el => el.style.display = web ? '' : 'none'); };
+  t.addEventListener('change', sync); sync(); })();
 function addGoal(){ document.getElementById('goals').insertAdjacentHTML('beforeend',
   '<div class="grow" style="display:flex;gap:8px;margin-bottom:8px"><input type="text" name="chat_goal[]" placeholder="e.g. get their budget"><button type="button" class="icon-btn" onclick="this.closest(\'.grow\').remove()">&#x2715;</button></div>'); }
 function addCap(){ document.getElementById('caps').insertAdjacentHTML('beforeend',

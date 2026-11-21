@@ -312,7 +312,7 @@ function webchat_answer(array $client, array $widget, array $contact, string $te
             if (!$flow || (int) $flow['client_id'] !== (int) $client['id']) $reason = 'no_flow|This website chat has no agent';
             elseif ($flow['status'] !== 'active') $reason = 'no_flow|The agent "' . $flow['name'] . '" is switched off';
             elseif (!$flow['first_step_id']) $reason = 'flow_broken|The agent has no knowledge saved yet';
-            elseif (db_val("SELECT 1 FROM flow_runs WHERE contact_id=? AND flow_id=? AND updated_at > NOW() - INTERVAL 30 MINUTE LIMIT 1", [(int) $contact['id'], (int) $flow['id']])) {
+            elseif (db_val("SELECT 1 FROM flow_runs WHERE contact_id=? AND flow_id=? AND status='completed' AND updated_at > NOW() - INTERVAL 30 MINUTE LIMIT 1", [(int) $contact['id'], (int) $flow['id']])) {
                 // The agent finished this chat a moment ago (its reply limit): a person takes it from the Inbox.
                 $reason = 'no_flow|The agent already finished this chat — it waits in the Inbox';
             } else {

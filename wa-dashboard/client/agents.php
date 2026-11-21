@@ -24,7 +24,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
     verify_csrf();
     $name    = trim((string) ($_POST['name'] ?? ''));
     $trigger = (string) ($_POST['trigger_type'] ?? 'welcome');
-    if (!in_array($trigger, ['welcome', 'keyword'], true)) $trigger = 'welcome';
+    if (!in_array($trigger, ['welcome', 'keyword', 'website'], true)) $trigger = 'welcome';
     if ($name === '') $err = 'Enter a name.';
     else {
         $newId = db_insert("INSERT INTO flows (client_id,name,kind,status,trigger_type,created_at) VALUES (?,?, 'agent','draft', ?, NOW())", [$cid, $name, $trigger]);
@@ -53,7 +53,7 @@ $flows = db_all(
             (SELECT COUNT(*) FROM flow_messages m WHERE m.flow_id=f.id) AS sends
        FROM flows f WHERE f.client_id=? AND f.kind='agent' ORDER BY f.id DESC", [$cid]
 );
-$triggerLabel = ['welcome' => 'First message', 'keyword' => 'Keyword'];
+$triggerLabel = ['welcome' => 'First message', 'keyword' => 'Keyword', 'website' => 'Website chat only'];
 
 $actions = '<a class="btn btn-ghost btn-sm" href="diagnostics.php">🩺 Health check</a>'
          . '<button class="btn btn-primary btn-sm" onclick="document.getElementById(\'m-new\').classList.add(\'open\')">+ New Agent</button>';
@@ -108,6 +108,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
       <select name="trigger_type">
         <option value="welcome">Any customer messages the number</option>
         <option value="keyword">A keyword is received</option>
+        <option value="website">Only on my website (Website chat) — not on WhatsApp</option>
       </select>
       <div class="hint">You'll set the knowledge, persona and (for keywords) the trigger words next.</div>
     </div>
