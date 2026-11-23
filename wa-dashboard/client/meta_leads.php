@@ -140,7 +140,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $tok = trim((string) ($_POST['token'] ?? ''));
         $r = $tok !== '' ? meta_ads_accounts_for($tok) : ['ok' => false, 'error' => 'Paste the token first.'];
         if ($r['ok'] && !$r['accounts']) $r = ['ok' => false, 'error' => 'That token can read no ad accounts. In Business Settings, give the System User access to your ad account.'];
-        if ($r['ok']) { $n = meta_ads_save_accounts($cid, $tok, 'system', $r['accounts']); flash($n . ' ad account' . ($n === 1 ? '' : 's') . ' connected. Spend is read within the hour — or press Read now.'); }
+        if ($r['ok']) { try { db_run("DELETE FROM app_settings WHERE k=?", ['meta_ads_err_' . $cid]); } catch (Throwable $e) {} $n = meta_ads_save_accounts($cid, $tok, 'system', $r['accounts']); flash($n . ' ad account' . ($n === 1 ? '' : 's') . ' connected. Spend is read within the hour — or press Read now.'); }
         else flash($r['error'], 'error');
         redirect('meta_leads.php#ads');
     }
@@ -525,9 +525,12 @@ function mfEdit(pageId, formId){
   <p class="text-muted" style="font-size:12.5px">Last 30 days: <strong><?= e(crm_money_fmt($spend30, $cid)) ?></strong> spent. The last three days are read again every hour, because Meta keeps correcting them.</p>
   <?php else: ?>
     <p class="note">No ad account yet. Connecting Facebook above (again) with <strong>ads_read</strong> allowed brings your ad accounts here —
-      or paste a System User token below, which never expires.</p>
+      or paste a token below (a System User token never expires).</p>
+    <?php $adsWhy = (string) (db_val("SELECT v FROM app_settings WHERE k=?", ['meta_ads_err_' . $cid]) ?? ''); if ($adsWhy !== ''): ?>
+      <div class="alert error" style="font-size:12.5px">Last time Facebook was connected, the ad accounts could not be read: <?= e($adsWhy) ?></div>
+    <?php endif; ?>
   <?php endif; ?>
-  <details class="mt10"><summary class="btn-link">Use a System User token (recommended — it does not expire)</summary>
+  <details class="mt10" <?= $adAccs ? '' : 'open' ?>><summary class="btn-link">Paste a token (a System User token is best — it does not expire)</summary>
     <ol style="font-size:12.5px;line-height:1.6;margin:8px 0">
       <li>Meta Business Settings → Users → <strong>System users</strong> → Add (Admin or Employee).</li>
       <li><strong>Assign assets</strong> → your ad account → <em>View performance</em>.</li>
@@ -536,7 +539,8 @@ function mfEdit(pageId, formId){
     <form method="post" style="display:flex;gap:8px;flex-wrap:wrap"><?= csrf_field() ?><input type="hidden" name="action" value="ads_token">
       <input name="token" type="password" autocomplete="off" placeholder="EAAB…" style="flex:1;min-width:220px" aria-label="System User token">
       <button class="btn btn-primary btn-sm">Connect ad accounts</button></form>
-    <p class="text-muted" style="font-size:12px">Stored encrypted, never shown again. It only reads spend; it cannot change or pause your ads.</p>
+    <p class="text-muted" style="font-size:12px">A user token from the Graph API Explorer with <code>ads_read</code> works too, but stops after about two months.
+      Stored encrypted, never shown again. Revenect only reads with it: spend, and your campaigns and ads for choosing them in automations.</p>
   </details>
 </div>
 <?php endif; ?>

@@ -156,6 +156,17 @@ function meta_finish_connect(int $clientId, string $code): array
         } catch (Throwable $e) {}
     }
 
+    /* Ad accounts first (ads_read): an advertiser on click-to-WhatsApp ads may have no Page to give
+       here, and they still want their ad accounts — for ad spend and for choosing ads in automations.
+       Why it did not work is kept, so the Ad spend card can say it. */
+    if (function_exists('meta_ads_accounts_for')) {
+        $acc = meta_ads_accounts_for($userToken);
+        if ($acc['ok'] && $acc['accounts']) meta_ads_save_accounts($clientId, $userToken, 'login', $acc['accounts'], date('Y-m-d H:i:s', strtotime('+60 days')));
+        $why = !$acc['ok'] ? (string) $acc['error']
+             : (!$acc['accounts'] ? 'Facebook allowed reading ads, but this login can see no ad account. Ask the ad account\'s owner to add you to it (Business Settings → Ad accounts → People), then connect again.' : '');
+        try { db_run("INSERT INTO app_settings (k,v,updated_at) VALUES (?,?,NOW()) ON DUPLICATE KEY UPDATE v=VALUES(v), updated_at=NOW()", ['meta_ads_err_' . $clientId, $why]); } catch (Throwable $e) {}
+    }
+
     $pages = meta_http('GET', 'me/accounts', ['fields' => 'id,name,access_token', 'limit' => 100, 'access_token' => $userToken]);
     if (!$pages['ok']) return ['ok' => false, 'error' => $pages['error']];
     $list = (array) ($pages['json']['data'] ?? []);
@@ -175,12 +186,6 @@ function meta_finish_connect(int $clientId, string $code): array
             social_page_link_ig($row);
             if ((int) $row['subscribed'] || (int) ($row['msg_on'] ?? 0) || (int) ($row['ig_msg_on'] ?? 0) || (int) ($row['comments_on'] ?? 0)) social_page_apply($row);
         }
-    }
-    // The same login can read ad spend, when it was allowed (ads_read). Not having it is fine:
-    // lead forms work without it, and the ad spend card says how to add it.
-    if (function_exists('meta_ads_accounts_for')) {
-        $acc = meta_ads_accounts_for($userToken);
-        if ($acc['ok'] && $acc['accounts']) meta_ads_save_accounts($clientId, $userToken, 'login', $acc['accounts'], date('Y-m-d H:i:s', strtotime('+60 days')));
     }
     return ['ok' => true, 'pages' => count($list)];
 }
