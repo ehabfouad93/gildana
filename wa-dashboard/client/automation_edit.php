@@ -15,6 +15,25 @@ if (!$flow) { http_response_code(404); exit('Automation not found.'); }
 
 $err = '';
 
+/* ── AJAX: the ad picker — ad accounts, their campaigns, a campaign's ads (includes/ad_picker.php) ── */
+if (($_GET['adp'] ?? '') !== '') {
+    require_once __DIR__ . '/../includes/ad_picker.php';
+    $what = (string) $_GET['adp'];
+    if ($what === 'accounts') {
+        $accs = array_values(array_filter(meta_ads_accounts($cid), fn($a) => !empty($a['token_enc'])));
+        json_out(['ok' => true, 'accounts' => array_map(fn($a) => ['id' => (string) $a['account_id'], 'name' => (string) ($a['name'] ?: $a['account_id'])], $accs)]);
+    }
+    $acc = adp_account($cid, (string) ($_GET['account'] ?? ''));
+    if (!$acc) json_out(['ok' => false, 'error' => 'That ad account is not connected to this account.']);
+    if ($what === 'campaigns') json_out(adp_campaigns($acc));
+    if ($what === 'ads') {
+        $camp = preg_replace('/\D/', '', (string) ($_GET['campaign'] ?? ''));
+        if ($camp === '') json_out(['ok' => false, 'error' => 'Choose a campaign.']);
+        json_out(adp_ads($cid, $acc, $camp, mb_substr((string) ($_GET['campaign_name'] ?? ''), 0, 190)));
+    }
+    json_out(['ok' => false, 'error' => 'Unknown request.']);
+}
+
 /* ── AJAX: what does this flow do, and what's wrong with it? ── */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array(($_POST['action'] ?? ''), ['preview', 'check'], true)) {
     verify_csrf();
@@ -63,10 +82,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save'
            replacing it. */
         $picked = array_map('trim', (array) ($_POST['ad_ids'] ?? []));
         $typed  = array_filter(array_map('trim', preg_split('/[\s,]+/', (string) ($_POST['ad_id_manual'] ?? ''))));
-        $ids    = array_values(array_unique(array_filter(array_merge($picked, $typed))));
-        $tc = (($_POST['ad_mode'] ?? 'any') === 'ads' && $ids)
-            ? ['mode' => 'ads', 'source_ids' => $ids]
+        // …and what was chosen from Ads Manager: single ads, whole campaigns, and their names.
+        $fromMeta = json_decode((string) ($_POST['ad_pick'] ?? ''), true) ?: [];
+        $digits = fn($v) => preg_replace('/\D/', '', (string) $v);
+        $ids    = array_values(array_unique(array_filter(array_map($digits, array_merge($picked, $typed, (array) ($fromMeta['ads'] ?? []))))));
+        $camps  = array_values(array_unique(array_filter(array_map($digits, (array) ($fromMeta['campaigns'] ?? [])))));
+        $labels = [];
+        foreach ((array) ($fromMeta['labels'] ?? []) as $lid => $lname) {
+            $lid = $digits($lid);
+            if ($lid !== '' && (in_array($lid, $ids, true) || in_array($lid, $camps, true))) $labels[$lid] = mb_substr(strip_tags((string) $lname), 0, 160);
+        }
+        $tc = (($_POST['ad_mode'] ?? 'any') === 'ads' && ($ids || $camps))
+            ? array_filter(['mode' => 'ads', 'source_ids' => $ids, 'campaign_ids' => $camps, 'labels' => $labels], fn($v) => $v !== [])
             : ['mode' => 'any'];
+        if (!isset($tc['source_ids']) && $tc['mode'] === 'ads') $tc['source_ids'] = [];
     }
 
     $graph = json_decode((string) ($_POST['flow_json'] ?? '{}'), true);
@@ -535,14 +564,26 @@ client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
       <label class="ad-opt">
         <input type="radio" name="ad_mode" value="ads" <?= $adMode === 'ads' ? 'checked' : '' ?> onchange="onAdMode()">
         <span><strong>Specific ads</strong><br>
-          <span class="text-muted">Only the campaigns you tick below.</span></span>
+          <span class="text-muted">Only the campaigns and ads you choose below.</span></span>
       </label>
 
       <div id="ad-list" style="display:<?= $adMode === 'ads' ? 'block' : 'none' ?>">
+        <?php
+          // What was chosen from Ads Manager: whole campaigns, and ads not in the clicked-ads list below.
+          $knownIds = array_map(fn($a) => (string) $a['source_id'], $adsKnown);
+          $adPick = ['campaigns' => array_values(array_map('strval', (array) ($tc['campaign_ids'] ?? []))),
+                     'ads' => array_values(array_diff($adPicked, $knownIds)), 'labels' => (object) ((array) ($tc['labels'] ?? []))];
+        ?>
+        <input type="hidden" name="ad_pick" id="ad-pick" value="<?= e(json_encode($adPick, JSON_UNESCAPED_UNICODE)) ?>">
+        <div class="adp-bar">
+          <button type="button" class="btn btn-primary btn-sm" onclick="adpOpen()">Choose from Ads Manager</button>
+          <span class="text-muted" style="font-size:12px">Pick an ad account, then whole campaigns or single ads.</span>
+        </div>
+        <div id="adp-chosen" class="adp-chosen"></div>
         <?php if (!$adsKnown): ?>
           <p class="text-muted" style="font-size:12.5px;margin:8px 0">
-            No ads yet. An ad appears here the first time someone messages you from it — until
-            then, use <strong>Any ad</strong> or paste its ID below.
+            Ads people already came from show here after their first message. Use
+            <strong>Choose from Ads Manager</strong> above to pick any ad or campaign now.
           </p>
         <?php else: foreach ($adsKnown as $a): ?>
           <label class="ad-row">
@@ -2204,4 +2245,133 @@ setTimeout(() => { window.dispatchEvent(new Event('resize')); zoomFit(); }, 50);
 <?php endif; ?>
 </script>
 
+<!-- ── Ad picker: ad account → campaigns → ads ── -->
+<div class="modal-back" id="m-adp">
+  <div class="modal adp-modal">
+    <h2>Choose ads</h2>
+    <p class="text-muted" style="font-size:12.5px;margin:-6px 0 12px">Tick a whole campaign (its new ads count too), or open it and tick single ads.</p>
+    <div class="adp-top">
+      <select id="adp-acc" aria-label="Ad account"></select>
+      <input type="search" id="adp-q" placeholder="Search campaigns or ads" aria-label="Search">
+      <label class="adp-run"><input type="checkbox" id="adp-active"> Running only</label>
+    </div>
+    <div id="adp-body" class="adp-body"><p class="text-muted">Loading…</p></div>
+    <div class="modal-actions" style="align-items:center">
+      <span id="adp-count" class="text-muted" style="font-size:12.5px;margin-inline-end:auto"></span>
+      <button type="button" class="btn btn-ghost" onclick="adpClose()">Cancel</button>
+      <button type="button" class="btn btn-primary" onclick="adpApply()">Use these</button>
+    </div>
+  </div>
+</div>
+<style>
+  .adp-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:10px 0 8px}
+  .adp-chosen{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+  .adp-chip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;padding:4px 6px 4px 10px;font-size:12.5px;background:var(--white)}
+  .adp-chip b{font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted,#6b7280)}
+  .adp-chip button{border:0;background:none;cursor:pointer;color:var(--muted,#6b7280);font-size:15px;line-height:1;padding:0 4px}
+  .adp-modal{max-width:720px}
+  .adp-top{display:grid;grid-template-columns:1.1fr 1fr auto;gap:8px;align-items:center;margin-bottom:10px}
+  @media (max-width:640px){.adp-top{grid-template-columns:1fr}}
+  .adp-run{display:flex;gap:6px;align-items:center;font-size:12.5px;white-space:nowrap}.adp-run input{width:auto}
+  .adp-body{max-height:52vh;overflow-y:auto;border:1px solid var(--line);border-radius:10px}
+  .adp-camp{border-bottom:1px solid var(--line)}.adp-camp:last-child{border-bottom:0}
+  .adp-row{display:flex;gap:10px;align-items:center;padding:10px 12px}
+  .adp-row input[type=checkbox]{width:auto;flex:0 0 auto}
+  .adp-row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .adp-row .st{font-size:11px;border-radius:999px;padding:2px 8px;background:var(--paper,#f3f4f6);color:var(--muted,#6b7280);white-space:nowrap}
+  .adp-row .st.on{background:#dcfce7;color:#166534}
+  .adp-ads{padding:0 12px 8px 40px}
+  .adp-ads .adp-row{padding:6px 0}
+  .adp-ads img{width:34px;height:34px;border-radius:6px;object-fit:cover;background:var(--paper,#f3f4f6);flex:0 0 auto}
+  .adp-ads .sub{font-size:11.5px;color:var(--muted,#6b7280)}
+</style>
+<script>
+/* The ad picker. Its choices live in the hidden #ad-pick field: {campaigns:[ids], ads:[ids], labels:{id:name}}. */
+let adpPick = (()=>{ try { const p = JSON.parse(document.getElementById('ad-pick').value||'{}'); return {campaigns:p.campaigns||[], ads:p.ads||[], labels:p.labels||{}}; } catch(e){ return {campaigns:[],ads:[],labels:{}}; } })();
+let adpWork = null, adpCamps = [], adpAdsOf = {};
+const adpEsc = s => String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function adpGet(q){ try { const r = await fetch('automation_edit.php?id=<?= (int) $id ?>&' + q); return await r.json(); } catch(e){ return {ok:false, error:'Could not reach Revenect.'}; } }
+function adpChips(){
+  const box = document.getElementById('adp-chosen'); if (!box) return;
+  const L = adpPick.labels || {};
+  box.innerHTML = adpPick.campaigns.map(c => `<span class="adp-chip"><b>Campaign</b>${adpEsc(L[c]||c)}<button type="button" aria-label="Remove" onclick="adpDrop('campaigns','${c}')">&times;</button></span>`).join('')
+                + adpPick.ads.map(a => `<span class="adp-chip"><b>Ad</b>${adpEsc(L[a]||a)}<button type="button" aria-label="Remove" onclick="adpDrop('ads','${a}')">&times;</button></span>`).join('');
+  document.getElementById('ad-pick').value = JSON.stringify(adpPick);
+}
+function adpDrop(kind, id){ adpPick[kind] = adpPick[kind].filter(x => x !== id); adpChips(); if (typeof scheduleSave === 'function') scheduleSave(); }
+async function adpOpen(){
+  adpWork = JSON.parse(JSON.stringify(adpPick));
+  document.getElementById('m-adp').classList.add('open');
+  const sel = document.getElementById('adp-acc'), body = document.getElementById('adp-body');
+  if (!sel.options.length) {
+    body.innerHTML = '<p class="text-muted" style="padding:12px">Loading your ad accounts…</p>';
+    const d = await adpGet('adp=accounts');
+    if (!d.ok || !d.accounts.length) {
+      body.innerHTML = '<div style="padding:14px;font-size:13px">No Meta ad account is connected yet. Connect Facebook (with permission to read ads) in <a href="meta_leads.php">Meta Lead Ads</a> — the same connection shows your ad spend — then come back here.</div>';
+      return;
+    }
+    sel.innerHTML = d.accounts.map(a => `<option value="${adpEsc(a.id)}">${adpEsc(a.name)}</option>`).join('');
+    sel.onchange = adpLoad;
+  }
+  adpLoad();
+}
+function adpClose(){ document.getElementById('m-adp').classList.remove('open'); }
+async function adpLoad(){
+  const body = document.getElementById('adp-body'), acc = document.getElementById('adp-acc').value;
+  body.innerHTML = '<p class="text-muted" style="padding:12px">Loading campaigns…</p>';
+  const d = await adpGet('adp=campaigns&account=' + encodeURIComponent(acc));
+  if (!d.ok) { body.innerHTML = `<p style="padding:12px;color:var(--danger)">${adpEsc(d.error||'Could not load.')}</p>`; return; }
+  adpCamps = d.campaigns; adpAdsOf = {};
+  adpRender();
+}
+function adpRender(){
+  const body = document.getElementById('adp-body');
+  const q = document.getElementById('adp-q').value.trim().toLowerCase(), act = document.getElementById('adp-active').checked;
+  const list = adpCamps.filter(c => (!act || c.active) && (!q || c.name.toLowerCase().includes(q) || (adpAdsOf[c.id]||[]).some(a => a.name.toLowerCase().includes(q))));
+  body.innerHTML = list.length ? list.map(c => {
+    const whole = adpWork.campaigns.includes(c.id), ads = adpAdsOf[c.id];
+    const nAds = ads ? ads.filter(a => adpWork.ads.includes(a.id)).length : 0;
+    return `<div class="adp-camp" data-c="${c.id}">
+      <div class="adp-row"><input type="checkbox" ${whole?'checked':''} onchange="adpWhole('${c.id}',this.checked)" aria-label="Whole campaign">
+        <span class="nm" title="${adpEsc(c.name)}"><strong>${adpEsc(c.name)}</strong>${nAds && !whole ? ` <span class="text-muted">· ${nAds} ad${nAds>1?'s':''} chosen</span>`:''}</span>
+        <span class="st ${c.active?'on':''}">${adpEsc(c.status)}</span>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="adpToggleAds('${c.id}')">${ads && ads._open ? 'Hide ads' : 'Ads ▾'}</button></div>
+      ${ads && ads._open ? `<div class="adp-ads">${ads.length ? ads.filter(a => !q || a.name.toLowerCase().includes(q) || c.name.toLowerCase().includes(q)).map(a => `
+        <label class="adp-row"><input type="checkbox" ${whole||adpWork.ads.includes(a.id)?'checked':''} ${whole?'disabled':''} onchange="adpAd('${a.id}',this.checked)">
+          ${a.thumb?`<img src="${adpEsc(a.thumb)}" alt="">`:'<img alt="">'}
+          <span class="nm"><span>${adpEsc(a.name)}</span><br><span class="sub">${adpEsc(a.adset)}</span></span>
+          <span class="st ${a.active?'on':''}">${adpEsc(a.status)}</span></label>`).join('') : '<p class="text-muted" style="font-size:12.5px">No ads in this campaign.</p>'}</div>` : ''}
+    </div>`;
+  }).join('') : '<p class="text-muted" style="padding:12px">No campaigns match.</p>';
+  const n = adpWork.campaigns.length, m = adpWork.ads.length;
+  document.getElementById('adp-count').textContent = (n||m) ? `${n} campaign${n===1?'':'s'}, ${m} single ad${m===1?'':'s'} chosen` : 'Nothing chosen yet';
+}
+async function adpToggleAds(cid){
+  const c = adpCamps.find(x => x.id === cid);
+  if (adpAdsOf[cid]) { adpAdsOf[cid]._open = !adpAdsOf[cid]._open; adpRender(); return; }
+  adpAdsOf[cid] = []; adpAdsOf[cid]._open = true; adpRender();
+  const d = await adpGet('adp=ads&account=' + encodeURIComponent(document.getElementById('adp-acc').value) + '&campaign=' + cid + '&campaign_name=' + encodeURIComponent(c ? c.name : ''));
+  if (!d.ok) { showToast(d.error || 'Could not load the ads.', true); delete adpAdsOf[cid]; adpRender(); return; }
+  adpAdsOf[cid] = d.ads; adpAdsOf[cid]._open = true;
+  d.ads.forEach(a => adpWork.labels[a.id] = a.name);
+  adpRender();
+}
+function adpWhole(cid, on){
+  const c = adpCamps.find(x => x.id === cid);
+  adpWork.campaigns = adpWork.campaigns.filter(x => x !== cid);
+  if (on) { adpWork.campaigns.push(cid); adpWork.labels[cid] = c ? c.name : cid;
+            // its single ads are covered by the whole campaign
+            if (adpAdsOf[cid]) adpWork.ads = adpWork.ads.filter(a => !adpAdsOf[cid].some(x => x.id === a)); }
+  adpRender();
+}
+function adpAd(aid, on){ adpWork.ads = adpWork.ads.filter(x => x !== aid); if (on) adpWork.ads.push(aid); adpRender(); }
+function adpApply(){
+  adpPick = adpWork; adpChips(); adpClose();
+  const r = document.querySelector('input[name="ad_mode"][value="ads"]'); if (r) { r.checked = true; onAdMode(); }
+  if (typeof scheduleSave === 'function') scheduleSave();
+}
+document.getElementById('adp-q').addEventListener('input', () => adpRender());
+document.getElementById('adp-active').addEventListener('change', () => adpRender());
+adpChips();
+</script>
 <?php layout_footer(); ?>

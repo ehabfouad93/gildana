@@ -749,7 +749,7 @@ function auto_match_ad(int $clientId, string $sourceId, ?string $line = null): ?
     [$lw, $lo, $lp] = auto_line_sql($line);
     $flows = db_all("SELECT * FROM flows WHERE client_id=? AND status='active' AND trigger_type='ad'{$lw}
                      ORDER BY {$lo}(kind='agent') DESC, id", array_merge([$clientId], $lp));
-    $any = null;
+    $any = null; $byCampaign = [];
     foreach ($flows as $f) {
         $tc   = json_decode((string) $f['trigger_config'], true) ?: [];
         $mode = (string) ($tc['mode'] ?? 'any');
@@ -757,9 +757,17 @@ function auto_match_ad(int $clientId, string $sourceId, ?string $line = null): ?
             foreach ((array) ($tc['source_ids'] ?? []) as $id) {
                 if (trim((string) $id) === $sourceId) return $f;      // specific: done
             }
+            if (!empty($tc['campaign_ids'])) $byCampaign[] = [$f, array_map('strval', (array) $tc['campaign_ids'])];
             continue;
         }
         if ($any === null) $any = $f;                                  // remember the catch-all
+    }
+    /* A whole campaign: the message names only the ad, so find the ad's campaign (picked ads are
+       known already; a new ad in the campaign is asked of Meta once). Ad beats campaign beats any. */
+    if ($byCampaign) {
+        require_once __DIR__ . '/ad_picker.php';
+        $camp = adp_campaign_of($clientId, $sourceId);
+        if ($camp !== '') foreach ($byCampaign as [$f, $ids]) if (in_array($camp, $ids, true)) return $f;
     }
     return $any;
 }
