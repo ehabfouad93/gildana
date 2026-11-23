@@ -233,6 +233,7 @@ function webchat_routed(string $kind, array $args): array
     $ext = 'web.' . bin2hex(random_bytes(8));
     $extra = [];
     if ($kind === 'image') $extra['image'] = (string) $args[0];
+    if ($kind === 'buttons' && trim((string) ($args[2] ?? '')) !== '') $extra['image'] = (string) $args[2];
     if ($kind === 'buttons' || $kind === 'list') {
         $items = $kind === 'buttons' ? (array) $args[1] : (array) $args[2];
         foreach (array_values($items) as $i => $b) $extra['choices'][] = ['id' => (string) ($b['id'] ?? ('b' . $i)), 'title' => mb_substr((string) ($b['title'] ?? ('Option ' . ($i + 1))), 0, 60)];

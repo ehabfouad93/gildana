@@ -393,7 +393,8 @@ function automation_run_steps(array $client, array $contact, array $run, array $
             foreach (array_slice((array) ($cfg['buttons'] ?? []), 0, 3) as $bi => $b) {
                 $btns[] = ['id' => 'b' . $bi, 'title' => (string) ($b['title'] ?? ('Option ' . ($bi + 1)))];
             }
-            if (!auto_send($client, $run, $step, $contact, 'buttons', fn() => channel_send_buttons($client, $to, $body, $btns), $body)) break;
+            $pic  = trim((string) ($cfg['image'] ?? ''));   // a picture on top of the message (optional)
+            if (!auto_send($client, $run, $step, $contact, 'buttons', fn() => channel_send_buttons($client, $to, $body, $btns, $pic), ($pic !== '' ? '🖼️ ' : '') . $body)) break;
             auto_log($ctx, 'assistant', $body);
             $run['status'] = 'waiting_input';   // await tap; stay on this step
             break;
@@ -1678,6 +1679,10 @@ function automation_validate(array $flow, array $client = []): array
         if (in_array($type, ['text', 'question'], true) && trim((string) ($cfg['body'] ?? '')) === '') {
             $add('error', $sid, 'Empty message',
                  $type === 'question' ? 'This step would ask the customer nothing.' : 'This step would send a blank message.');
+        }
+        // WhatsApp refuses buttons with no words — with or without a picture on top.
+        if ($type === 'buttons' && trim((string) ($cfg['body'] ?? '')) === '') {
+            $add('error', $sid, 'Buttons step has no message', 'Write the words that go with the buttons' . (trim((string) ($cfg['image'] ?? '')) !== '' ? ' (under the picture)' : '') . ' — WhatsApp does not send buttons without them.');
         }
         if ($type === 'image' && trim((string) ($cfg['link'] ?? '')) === '') {
             $add('error', $sid, 'Image step has no image', 'Add the image to send.');

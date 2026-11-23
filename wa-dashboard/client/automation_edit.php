@@ -263,6 +263,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save'
                         $btns[] = ['title' => (string) ($b['title'] ?? ''), 'points' => (int) ($b['points'] ?? 0), 'next_step_id' => $R($out['b' . $bi] ?? null)];
                     }
                     $cfg = ['body' => (string) ($c['body'] ?? ''), 'buttons' => $btns, 'save_as' => (string) ($c['save_as'] ?? '')];
+                    $pic = trim((string) ($c['image'] ?? ''));
+                    if ($pic !== '' && preg_match('#^https?://#i', $pic)) $cfg['image'] = $pic;   // a picture on top (optional)
                     break;
                 case 'ai_branch':
                     $brs = [];
@@ -452,7 +454,7 @@ function automation_graph_for_editor(int $id): array
                 $node['outputs']['next'] = $tid($s['next_step_id']); break;
             case 'sheet_export': $node['config'] = ['sheet_id' => $c['sheet_id'] ?? '', 'sheet_name' => $c['sheet_name'] ?? '', 'sheet_tab' => $c['sheet_tab'] ?? '', 'fields' => $c['fields'] ?? ['date','phone','name','last_reply','score','grade']]; $node['outputs']['next'] = $tid($s['next_step_id']); break;
             case 'buttons':
-                $node['config'] = ['body' => $c['body'] ?? '', 'save_as' => $c['save_as'] ?? '', 'buttons' => array_map(fn($b) => ['title' => $b['title'] ?? '', 'points' => (int) ($b['points'] ?? 0)], (array) ($c['buttons'] ?? []))];
+                $node['config'] = ['body' => $c['body'] ?? '', 'image' => $c['image'] ?? '', 'save_as' => $c['save_as'] ?? '', 'buttons' => array_map(fn($b) => ['title' => $b['title'] ?? '', 'points' => (int) ($b['points'] ?? 0)], (array) ($c['buttons'] ?? []))];
                 foreach ((array) ($c['buttons'] ?? []) as $bi => $b) $node['outputs']['b' . $bi] = $tid($b['next_step_id'] ?? null);
                 break;
             case 'ai_branch':
@@ -736,6 +738,7 @@ client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
           <option value="sheet_export">Write to Google Sheet</option>
           <option value="template">Send template</option>
           <option value="buttons">Reply buttons</option>
+          <option value="buttons_pic">Picture + text + buttons</option>
           <option value="list_msg">Menu list (up to 10)</option>
         </optgroup>
         <?php if (function_exists('crm_sms_available') && crm_sms_available($CLIENT)): ?><optgroup label="SMS"><option value="sms">Send SMS</option></optgroup><?php endif; ?>
@@ -938,12 +941,29 @@ async function saveNow(){
 /* After a save the server has renumbered every step, so the canvas must adopt those ids or
    the next save would create duplicates. Positions are kept from what is on screen. */
 function adoptServerGraph(srvNodes, srvStart){
-  const open = current ? current.type : null;
+  // The open step is found again by where it sits (positions survive the save; ids do not) —
+  // not by its type, which reopened another step of the same kind when there were several.
+  const open = current ? {type: current.type, x: current.x, y: current.y} : null;
+  const fe = document.activeElement, inPanel = fe && fe.closest && fe.closest('#cfg-body');
+  const focus = inPanel ? {k: fe.getAttribute('data-k'), cls: fe.className, idx: [...document.querySelectorAll('#cfg-body input,#cfg-body textarea,#cfg-body select')].indexOf(fe),
+                           s: fe.selectionStart, e: fe.selectionEnd} : null;
   Object.keys(nodes).forEach(k => delete nodes[k]);
   (srvNodes || []).forEach(n => nodes[n.id] = n);
   if(srvStart){ start.x = srvStart.x; start.y = srvStart.y; start.outputs = {next: srvStart.next || null}; }
   render();
-  if(open){ const again = Object.values(nodes).find(n => n.type === open); if(again) openCfg(again.id); }
+  if(open){
+    const all = Object.values(nodes).filter(n => n.type === open.type);
+    const again = all.find(n => n.x === open.x && n.y === open.y)
+               || all.sort((a, b) => Math.hypot(a.x-open.x, a.y-open.y) - Math.hypot(b.x-open.x, b.y-open.y))[0];
+    if(again){
+      openCfg(again.id);
+      if(focus){   // put the cursor back where it was
+        const els = [...document.querySelectorAll('#cfg-body input,#cfg-body textarea,#cfg-body select')];
+        const el = (focus.k && document.querySelector('#cfg-body [data-k="'+focus.k+'"]')) || els[focus.idx];
+        if(el){ el.focus(); try{ if(focus.s != null) el.setSelectionRange(focus.s, focus.e); }catch(e){} }
+      }
+    }
+  }
 }
 window.addEventListener('beforeunload', e => {
   if(DIRTY){ e.preventDefault(); e.returnValue = ''; }
@@ -1120,7 +1140,7 @@ function summary(n){
       const needMedia=['IMAGE','VIDEO','DOCUMENT'].includes(fmt) && !(c.header_media||'').trim();
       return esc(t.label)+(needMedia?'<div class="muted" style="margin-top:4px;color:#c0392b">⚠ '+fmt.toLowerCase()+' header missing</div>':'');
     }
-    case 'buttons': return esc(c.body)+'<div class="muted" style="margin-top:4px">'+((c.buttons||[]).map(b=>'▸ '+esc(b.title||'?')).join('<br>'))+'</div>';
+    case 'buttons': return (c.image?'🖼 ':'')+esc(c.body)+'<div class="muted" style="margin-top:4px">'+((c.buttons||[]).map(b=>'▸ '+esc(b.title||'?')).join('<br>'))+'</div>';
     case 'question': return '❓ '+(esc(c.body)||'<span class="muted">question</span>')+(c.save_as?' <span class="muted">→ '+esc(c.save_as)+'</span>':'');
     case 'ai_chat': {
       const kb=(c.knowledge||'').trim();
@@ -1541,6 +1561,8 @@ function defaultConfig(type){
     export:{fields:['date','name','phone','channel','last_reply','all_answers'],to_sheet:false,sheet_id:'',sheet_name:'',sheet_tab:'',to_crm:true,webhook_url:'',emails:'',secret:''}}[type]||{};
 }
 function addNode(type,data){
+  // "Picture + text + buttons" is a Buttons step with its picture field filled in.
+  if(type==='buttons_pic'){ type='buttons'; data=data||{config:Object.assign(defaultConfig('buttons'),{image:'',_pic:1}),outputs:{}}; }
   mark();
   const w=document.getElementById('cwrap');
   // Drop it into the visible area — scroll offsets are in scaled px, so divide by Z.
@@ -1701,7 +1723,13 @@ function cfgForm(n){ const c=n.config;
     }
     case 'notify': return `<label><span class="lbl">Message (emailed to Gildana)</span><textarea data-k="message" rows="2">${esc(c.message)}</textarea></label>`;
     case 'collect': { const f=c.fields||[]; return `<label><span class="lbl">Sheet name</span><input data-k="sheet_name" value="${esc(c.sheet_name)}"></label><div class="lbl mt10">Capture fields</div>`+['phone','name','last_reply','score','grade','tags'].map(k=>`<label style="display:flex;gap:6px;font-weight:normal;align-items:center"><input type="checkbox" class="cf" value="${k}" ${f.includes(k)?'checked':''} style="width:auto">${k}</label>`).join(''); }
-    case 'buttons': return `<label><span class="lbl">Message</span><textarea data-k="body" rows="2">${esc(c.body)}</textarea></label><div class="lbl mt10">Buttons (max 3) — wire each on the canvas</div><div id="rows">${(c.buttons||[]).map((b,i)=>btnRow(b,i)).join('')}</div><button type="button" class="btn-link" onclick="addRow('buttons')">+ button</button><label class="mt10" style="display:block"><span class="lbl">Save their choice as (optional)</span><input data-k="save_as" value="${esc(c.save_as||'')}" placeholder="e.g. interest"></label>`;
+    case 'buttons': return `<label><span class="lbl">Picture on top <span class="text-muted">(optional — one message: picture, text, buttons)</span></span>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          <input data-k="image" id="img-url" value="${esc(c.image||'')}" placeholder="https://… or Upload" style="flex:1;min-width:150px">
+          <input type="file" id="img-file" style="display:none" accept=".jpg,.jpeg,.png" onchange="uploadNodeImage(this,'image')">
+          <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('img-file').click()">Upload</button>
+        </div><div class="hint" id="img-status"></div>${c.image?`<img src="${esc(c.image)}" alt="" style="max-width:100%;max-height:120px;border-radius:8px;margin-top:6px;display:block">`:''}</label>
+      <label><span class="lbl">Message</span><textarea data-k="body" rows="2" placeholder="${c.image||c._pic?'The words under the picture (required by WhatsApp)':''}">${esc(c.body)}</textarea></label><div class="lbl mt10">Buttons (max 3) — wire each on the canvas</div><div id="rows">${(c.buttons||[]).map((b,i)=>btnRow(b,i)).join('')}</div><button type="button" class="btn-link" onclick="addRow('buttons')">+ button</button><label class="mt10" style="display:block"><span class="lbl">Save their choice as (optional)</span><input data-k="save_as" value="${esc(c.save_as||'')}" placeholder="e.g. interest"></label>`;
     case 'ai_chat': return `
       <label><span class="lbl">Knowledge base <span class="text-muted">(the AI answers ONLY from this)</span></span><textarea data-k="knowledge" rows="7" placeholder="Company, products, prices, offers, working hours, FAQs…">${esc(c.knowledge)}</textarea></label>
       <label><span class="lbl">Instructions <span class="text-muted">(language, dialect, tone)</span></span><textarea data-k="instructions" rows="3" placeholder="مثال: رد دايماً باللهجة المصرية العامية. كن مختصر ومهذب.">${esc(c.instructions)}</textarea></label>
@@ -2099,7 +2127,8 @@ document.addEventListener('DOMContentLoaded',()=>{
 });
 
 /* ── image node: upload straight into the flow ── */
-async function uploadNodeImage(input){
+async function uploadNodeImage(input, key){
+  key = key || 'link';
   if(!input.files || !input.files[0] || !current) return;
   const st=document.getElementById('img-status'); if(st) st.textContent='Uploading…';
   const fd=new FormData(); fd.append('csrf_token',CSRF); fd.append('media',input.files[0]);
@@ -2107,7 +2136,7 @@ async function uploadNodeImage(input){
     const r=await fetch('upload_media.php',{method:'POST',body:fd}); const d=await r.json();
     if(d.ok){
       document.getElementById('img-url').value=d.url;
-      current.config.link=d.url;
+      current.config[key]=d.url;
       if(st) st.textContent='✓ uploaded';
       renderKeepPanel(false);
     } else if(st) st.textContent='✕ '+(d.error||'upload failed');

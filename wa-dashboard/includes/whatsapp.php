@@ -905,7 +905,7 @@ function wa_send_list(array $client, string $to, string $body, string $buttonTex
     return wa_send_message($client, $to, ['type' => 'interactive', 'interactive' => $interactive]);
 }
 
-function wa_send_buttons(array $client, string $to, string $body, array $buttons): array
+function wa_send_buttons(array $client, string $to, string $body, array $buttons, string $image = ''): array
 {
     $rows = [];
     foreach (array_slice(array_values($buttons), 0, 3) as $i => $b) {
@@ -918,6 +918,7 @@ function wa_send_buttons(array $client, string $to, string $body, array $buttons
         'type' => 'interactive',
         'interactive' => [
             'type'   => 'button',
+        ] + ($image !== '' ? ['header' => ['type' => 'image', 'image' => ['link' => $image]]] : []) + [
             'body'   => ['text' => mb_substr($body, 0, 1024)],
             'action' => ['buttons' => $rows],
         ],

@@ -77,6 +77,8 @@ function channel_routed(array $client, string $kind, array $args): ?array
         case 'buttons':
             $c = [];
             foreach (array_values((array) $args[1]) as $i => $b) $c[] = ['id' => (string) ($b['id'] ?? ('b' . $i)), 'title' => (string) ($b['title'] ?? ('Option ' . ($i + 1)))];
+            // Messenger / Instagram cannot put a picture on quick replies: the picture goes first.
+            if (trim((string) ($args[2] ?? '')) !== '') { $pic = social_send_image($client, $contact, $ch, (string) $args[2]); if (!$pic['ok']) return $pic; }
             return social_send_choices($client, $contact, $ch, (string) $args[0], $c);
         case 'list':
             $c = [];
@@ -116,18 +118,19 @@ function channel_send_image(array $client, string $to, string $link, string $cap
  * degrade to a numbered list in the text and the engine's existing free-text matching
  * (see automation_handle_inbound) resolves the customer's answer.
  */
-function channel_send_buttons(array $client, string $to, string $body, array $buttons): array
+function channel_send_buttons(array $client, string $to, string $body, array $buttons, string $image = ''): array
 {
-    if (($r = channel_routed($client, 'buttons', [$body, $buttons])) !== null) return $r;
+    if (($r = channel_routed($client, 'buttons', [$body, $buttons, $image])) !== null) return $r;
     if (!channel_is_personal($client)) {
-        return wa_send_buttons($client, $to, $body, $buttons);
+        return wa_send_buttons($client, $to, $body, $buttons, $image);
     }
     $lines = [];
     foreach (array_slice(array_values($buttons), 0, 3) as $i => $b) {
         $lines[] = ($i + 1) . '. ' . (string) ($b['title'] ?? ('Option ' . ($i + 1)));
     }
     $text = $body . ($lines ? "\n\n" . implode("\n", $lines) : '');
-    return pw_send_text($client, $to, $text);
+    // A picture on top: one picture message, the words and the numbered choices as its caption.
+    return $image !== '' ? pw_send_image($client, $to, $image, $text) : pw_send_text($client, $to, $text);
 }
 
 /**
