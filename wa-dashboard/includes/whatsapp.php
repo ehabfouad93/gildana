@@ -889,17 +889,17 @@ function wa_send_list(array $client, string $to, string $body, string $buttonTex
     foreach (array_slice(array_values($rows), 0, 10) as $i => $r) {
         $items[] = [
             'id'          => substr((string) ($r['id'] ?? ('r' . $i)), 0, 200),
-            'title'       => substr((string) ($r['title'] ?? ('Option ' . ($i + 1))), 0, 24),
-            'description' => substr((string) ($r['description'] ?? ''), 0, 72),
+            'title'       => mb_substr((string) ($r['title'] ?? ('Option ' . ($i + 1))), 0, 24),
+            'description' => mb_substr((string) ($r['description'] ?? ''), 0, 72),
         ];
     }
     $interactive = [
         'type'   => 'list',
-        'body'   => ['text' => substr($body, 0, 1024)],
+        'body'   => ['text' => mb_substr($body, 0, 1024)],
         'action' => [
             // Meta caps this at 20 characters and rejects the whole message if it is longer.
-            'button'   => substr($buttonText !== '' ? $buttonText : 'Choose', 0, 20),
-            'sections' => [['title' => substr($header !== '' ? $header : 'Options', 0, 24), 'rows' => $items]],
+            'button'   => mb_substr($buttonText !== '' ? $buttonText : 'Choose', 0, 20),
+            'sections' => [['title' => mb_substr($header !== '' ? $header : 'Options', 0, 24), 'rows' => $items]],
         ],
     ];
     return wa_send_message($client, $to, ['type' => 'interactive', 'interactive' => $interactive]);
@@ -910,15 +910,15 @@ function wa_send_buttons(array $client, string $to, string $body, array $buttons
     $rows = [];
     foreach (array_slice(array_values($buttons), 0, 3) as $i => $b) {
         $rows[] = ['type' => 'reply', 'reply' => [
-            'id'    => substr((string) ($b['id'] ?? ('b' . $i)), 0, 256),
-            'title' => substr((string) ($b['title'] ?? ('Option ' . ($i + 1))), 0, 20),
+            'id'    => mb_substr((string) ($b['id'] ?? ('b' . $i)), 0, 256),
+            'title' => mb_substr((string) ($b['title'] ?? ('Option ' . ($i + 1))), 0, 20),
         ]];
     }
     return wa_send_message($client, $to, [
         'type' => 'interactive',
         'interactive' => [
             'type'   => 'button',
-            'body'   => ['text' => substr($body, 0, 1024)],
+            'body'   => ['text' => mb_substr($body, 0, 1024)],
             'action' => ['buttons' => $rows],
         ],
     ]);

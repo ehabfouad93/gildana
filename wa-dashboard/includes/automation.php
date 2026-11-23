@@ -2286,7 +2286,7 @@ function automation_send_outreach(int $maxPerRun = 0, int $onlyFlowId = 0): int
                     db_run("UPDATE flow_runs SET status='blocked', context=?, updated_at=NOW() WHERE id=?", [json_encode($ctx, JSON_UNESCAPED_UNICODE), $runId]);
                     db_run("INSERT INTO flow_messages (flow_id,step_id,run_id,client_id,contact_id,wa_message_id,status,error_code,error_title,created_at) VALUES (?,?,?,?,?,?, 'failed', ?, ?, NOW())",
                         [$m['flow_id'], $m['stepId'], $runId, $cid, $m['contact_id'], $rr['wamid'] ?? null,
-                         $ecode !== '' ? substr($ecode, 0, 32) : null, substr($err, 0, 255)]);
+                         $ecode !== '' ? substr($ecode, 0, 32) : null, mb_substr($err, 0, 255)]);
                     if (function_exists('msg_log')) msg_log($cid, $m['contact_id'], 'out', $logTxt, ['type' => $logTyp, 'source' => 'qualifier', 'status' => 'failed', 'error' => $err, 'error_code' => $ecode, 'ref' => (int) $runId, 'line' => wa_line_of($client), 'template_id' => (int) ($it['tpl']['template_id'] ?? 0)]);
                 }
             }
