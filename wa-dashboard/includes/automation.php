@@ -134,6 +134,36 @@ function auto_step_event(array $run, int $stepId, string $outcome, string $reaso
     } catch (Throwable $e) { /* statistics must never break a live conversation */ }
 }
 
+/**
+ * What else a previewed message shows besides its words: the buttons or list options to tap,
+ * and its picture — so the preview can be walked by tapping, as the customer would.
+ */
+function auto_preview_extras(array $step, int $clientId): array
+{
+    $cfg = auto_cfg($step); $x = [];
+    switch ((string) ($step['type'] ?? '')) {
+        case 'buttons':
+            $x['choices'] = array_values(array_filter(array_map(fn($b) => trim((string) ($b['title'] ?? '')), (array) ($cfg['buttons'] ?? [])), 'strlen'));
+            if (trim((string) ($cfg['image'] ?? '')) !== '') $x['image'] = (string) $cfg['image'];
+            break;
+        case 'list_msg':
+            $x['choices'] = array_values(array_filter(array_map(fn($o) => trim((string) ($o['title'] ?? '')), (array) ($cfg['options'] ?? ($cfg['rows'] ?? []))), 'strlen'));
+            break;
+        case 'image':
+            if (trim((string) ($cfg['link'] ?? '')) !== '') $x['image'] = (string) $cfg['link'];
+            break;
+        case 'template':
+            if (trim((string) ($cfg['media'] ?? ($cfg['header_media'] ?? ''))) !== '') $x['image'] = (string) ($cfg['media'] ?: $cfg['header_media']);
+            $comp = json_decode((string) db_val("SELECT components FROM templates WHERE id=? AND client_id=?", [(int) ($cfg['template_id'] ?? 0), $clientId]), true) ?: [];
+            foreach ($comp as $c) if (strtoupper((string) ($c['type'] ?? '')) === 'BUTTONS') {
+                foreach ((array) ($c['buttons'] ?? []) as $b) if (strtoupper((string) ($b['type'] ?? '')) === 'QUICK_REPLY') $x['choices'][] = (string) ($b['text'] ?? '');
+            }
+            break;
+    }
+    if (empty($x['choices'])) unset($x['choices']);
+    return $x;
+}
+
 /** The single store for a preview transcript. Returned by reference so callers append to it. */
 function &auto_preview_log(): array
 {
@@ -147,7 +177,7 @@ function auto_send(array $client, array &$run, array $step, array $contact, stri
        the flow advances exactly as it would in production. */
     if (auto_dry_run()) {
         $log = &auto_preview_log();
-        $log[] = ['step_id' => (int) ($step['id'] ?? 0), 'type' => $kind, 'body' => $body];
+        $log[] = ['step_id' => (int) ($step['id'] ?? 0), 'type' => $kind, 'body' => $body] + auto_preview_extras($step, (int) ($run['client_id'] ?? 0));
         return true;
     }
 
@@ -1799,6 +1829,14 @@ function automation_preview(array $client, array $flow, array $contact, array $a
     try {
         auto_dry_run(true);
         auto_replying(true);
+
+        /* An account with no contacts yet previews with a stand-in customer. The run needs a real
+           contact row, so the stand-in is made inside this transaction — and goes with it. */
+        if ((int) ($contact['id'] ?? 0) === 0) {
+            $sid = db_insert("INSERT INTO contacts (client_id,phone_e164,name,opt_in_status,last_inbound_at,created_at) VALUES (?,?,?,'in',NOW(),NOW())",
+                             [(int) $client['id'], '000000000000', (string) ($contact['name'] ?? 'Sample Customer')]);
+            $contact = db_row("SELECT * FROM contacts WHERE id=?", [$sid]) ?: $contact;
+        }
 
         $ctx = ['fields' => [], 'transcript' => [], 'preview' => true];
         $runId = db_insert(

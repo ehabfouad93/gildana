@@ -2057,3 +2057,16 @@ a.viz-kpi:hover { border-color: var(--brand); }
 .cf-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0 0 12px; }
 .cf-bar .cf-lbl { font-size: 12.5px; color: var(--muted); }
 .cf-bar select { width: auto; min-width: 150px; max-width: 240px; padding: 6px 10px; font-size: 13px; }
+
+/* Automation preview: buttons to tap and pictures, as the customer sees them */
+.pv-img { display: block; max-width: 100%; max-height: 180px; border-radius: 8px; margin: -2px -2px 6px; object-fit: cover; }
+.pv-noimg { background: var(--paper); border-radius: 8px; padding: 22px 10px; text-align: center; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+.pv-choices { display: flex; flex-direction: column; gap: 4px; margin: 8px -4px -2px; }
+.pv-choice { border: 0; border-top: 1px solid var(--line); background: transparent; color: #0A84FF; font: inherit; font-size: 13px; font-weight: 600; padding: 7px 6px 3px; cursor: pointer; text-align: center; }
+.pv-choice:hover:not([disabled]) { background: rgba(10,132,255,.07); }
+.pv-choice[disabled] { color: var(--muted); cursor: default; font-weight: 500; }
+
+/* Automation canvas: the 🗑 shown on a hovered connection */
+.canvas .edge-del { position: absolute; z-index: 4; width: 30px; height: 30px; margin: -15px 0 0 -15px; border-radius: 50%; border: 1px solid var(--line-strong); background: var(--white); color: var(--danger, #DC2626); display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 3px 10px rgba(26,22,18,.18); padding: 0; }
+.canvas .edge-del[hidden] { display: none; }
+.canvas .edge-del:hover { background: var(--danger, #DC2626); color: #fff; border-color: transparent; }

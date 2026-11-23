@@ -845,7 +845,7 @@ client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
         </optgroup>
       </select>
       <button type="button" class="btn btn-ghost btn-sm" onclick="addNode(document.getElementById('add-type').value)">+ Add node</button>
-      <span class="canvas-hint canvas-hint-desk">Drag a step by its header to move it · drag the dot on its right onto another step to connect · click a step to edit · <strong>click a connection to delete it</strong> · drag on the empty board to select several (or Ctrl / Shift + click) · Ctrl/⌘+scroll or the +/− buttons to zoom · middle-drag or space-drag to pan · shift-click to select several, then Ctrl/⌘+C and V to copy them.</span>
+      <span class="canvas-hint canvas-hint-desk">Drag a step by its header to move it · drag the dot on its right onto another step to connect · click a step to edit · <strong>click a connection to delete it</strong> · drag on the empty board to select several (or Ctrl / Shift + click) · scroll the mouse wheel (or the +/− buttons) to zoom · middle-drag, space-drag or Shift+scroll to move around · hover a connection and press 🗑 to delete it · shift-click to select several, then Ctrl/⌘+C and V to copy them.</span>
     </div>
     <!-- The ordered list. On a phone this is where editing happens: no dragging, no wires. -->
     <div class="canvas-outline" id="outline">
@@ -1153,9 +1153,9 @@ let PV_ANSWERS = [];
 
 function openPreview(){ PV_ANSWERS = []; document.getElementById('preview-back').classList.add('open'); runPreview(); }
 function closePreview(){ document.getElementById('preview-back').classList.remove('open'); }
-function sendPreviewAnswer(){
+function sendPreviewAnswer(v){
   const box = document.getElementById('pv-answer');
-  const v = box.value.trim(); if(!v) return;
+  v = (typeof v === 'string' ? v : box.value).trim(); if(!v) return;
   PV_ANSWERS.push(v); box.value = '';
   runPreview();
 }
@@ -1170,7 +1170,14 @@ async function runPreview(){
     const r = await fetch('', {method:'POST', body:fd}); const d = await r.json();
     const msgs = d.messages || [];
     thread.innerHTML = msgs.length
-      ? msgs.map(m => '<div class="pv-msg '+(m.type==='reply'?'them':'us')+'">'+esc(m.body||'(no text)')+'</div>').join('')
+      ? msgs.map((m, i) => {
+          // The last message's buttons can be tapped, as the customer would; earlier ones show what was offered.
+          const live = d.stopped === 'waiting_input' && i === msgs.length - 1;
+          const ch = (m.choices || []).length ? '<div class="pv-choices">' + m.choices.map(c => `<button type="button" class="pv-choice" ${live ? '' : 'disabled'} data-v="${esc(c)}">${esc(c)}</button>`).join('') + '</div>' : '';
+          const im = m.image ? `<img class="pv-img" src="${esc(m.image)}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'pv-noimg',textContent:'🖼 Picture'}))">` : '';
+          const words = m.body ? esc(m.body).replace(/^🖼️ /, '') : (im ? '' : '(no text)');
+          return '<div class="pv-msg '+(m.type==='reply'?'them':'us')+'">'+im+words+ch+'</div>';
+        }).join('')
       : '<div class="text-muted">This flow sends nothing.</div>';
     const stop = document.getElementById('pv-stop');
     const label = {
@@ -1182,6 +1189,7 @@ async function runPreview(){
     }[d.stopped] || '';
     stop.textContent = label;
     document.getElementById('pv-answer').disabled = (d.stopped !== 'waiting_input');
+    thread.querySelectorAll('.pv-choice:not([disabled])').forEach(b => b.addEventListener('click', () => sendPreviewAnswer(b.dataset.v)));
     thread.scrollTop = thread.scrollHeight;
   }catch(e){ thread.innerHTML = '<div class="alert error">Preview failed.</div>'; }
 }
@@ -1611,14 +1619,33 @@ edges.addEventListener('contextmenu', e=>{
   e.preventDefault();
   openEdgeMenu(e.clientX, e.clientY, p.dataset.node, p.dataset.port);
 });
+/* Hovering a connection shows a 🗑 at its middle: one click deletes it (undoable). */
+const edgeDel = document.createElement('button');
+edgeDel.type = 'button'; edgeDel.className = 'edge-del'; edgeDel.hidden = true; edgeDel.title = 'Delete this connection';
+edgeDel.setAttribute('aria-label', 'Delete this connection');
+edgeDel.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"/></svg>';
+canvas.appendChild(edgeDel);
+let edgeDelT = null, edgeDelFor = null;
+const edgeHot = (node, port, on) => { const v = edges.querySelector(`path.edge[data-node="${node}"][data-port="${port}"]`); if(v) v.classList.toggle('hot', on); };
+function edgeDelHide(){ edgeDelT = setTimeout(() => { edgeDel.hidden = true; if(edgeDelFor) edgeHot(edgeDelFor[0], edgeDelFor[1], false); edgeDelFor = null; }, 250); }
 edges.addEventListener('mouseover', e=>{
   const p=e.target.closest('path.hit'); if(!p) return;
-  const vis=edges.querySelector(`path.edge[data-node="${p.dataset.node}"][data-port="${p.dataset.port}"]`);
-  if(vis) vis.classList.add('hot');
+  clearTimeout(edgeDelT);
+  if(edgeDelFor) edgeHot(edgeDelFor[0], edgeDelFor[1], false);
+  edgeDelFor = [p.dataset.node, p.dataset.port]; edgeHot(p.dataset.node, p.dataset.port, true);
+  const len = p.getTotalLength(), mid = p.getPointAtLength(len / 2);
+  edgeDel.style.left = mid.x + 'px'; edgeDel.style.top = mid.y + 'px'; edgeDel.hidden = false;
 });
-edges.addEventListener('mouseout', e=>{
-  const p=e.target.closest('path.hit'); if(!p) return;
-  edges.querySelectorAll('path.edge.hot').forEach(x=>x.classList.remove('hot'));
+edges.addEventListener('mouseout', e=>{ if(e.target.closest('path.hit')) edgeDelHide(); });
+edgeDel.addEventListener('mouseenter', () => clearTimeout(edgeDelT));
+edgeDel.addEventListener('mouseleave', edgeDelHide);
+edgeDel.addEventListener('pointerdown', e => e.stopPropagation());   // not the start of a drag or a box
+edgeDel.addEventListener('click', e => {
+  e.stopPropagation();
+  if(!edgeDelFor) return;
+  const [node, port] = edgeDelFor, src = node === 'start' ? start : nodes[node];
+  if(src && src.outputs && src.outputs[port]){ mark(); src.outputs[port] = null; render(); scheduleSave(); }
+  edgeDel.hidden = true; edgeDelFor = null;
 });
 document.addEventListener('pointerdown', e=>{ if(!e.target.closest('.edge-menu')) closeEdgeMenu(); });
 /* Touch has no right-click: long-press an edge opens the same menu. */
@@ -1694,7 +1721,7 @@ document.addEventListener('mousedown', e => {
   const p = document.getElementById('cfg');
   if(!p.classList.contains('open') || e.button !== 0) return;
   // Inside the panel, on a step (that opens it), in a pop-up or a menu: stay open.
-  if(e.target.closest('#cfg, .node, .modal-back, #cfg-tab, .edge-menu, .addnext, .mlc-tip, .toast')) return;
+  if(e.target.closest('#cfg, .node, .modal-back, #cfg-tab, .edge-menu, .edge-del, .addnext, .mlc-tip, .toast')) return;
   closeCfg();
 });
 function closeCfg(){ const tb = document.getElementById('cfg-tab'); if(tb) tb.hidden = true; document.getElementById('cfg').classList.remove('open'); document.querySelectorAll('.node.sel').forEach(e=>e.classList.remove('sel')); current=null; renderOutline(); }
@@ -2101,7 +2128,7 @@ canvas.addEventListener('pointerdown',e=>{
       : [];
     drag={n,dx:p.x-n.x,dy:p.y-n.y,ox:n.x,oy:n.y,group,snap:snapshot()}; return; }
   // Empty board: drag a box around steps to select them (with Shift / Ctrl it adds to the selection).
-  if(!e.target.closest('.node') && !e.target.closest('path.hit')){
+  if(!e.target.closest('.node') && !e.target.closest('path.hit') && !e.target.closest('.edge-del')){
     const p=toCanvas(e.clientX,e.clientY);
     box={x0:p.x,y0:p.y,x1:p.x,y1:p.y,add:multiKey(e),base:new Set(SEL),el:null};
   }
@@ -2173,12 +2200,15 @@ document.addEventListener('pointerup',e=>{
   }
   if(skipClick) setTimeout(()=>{ skipClick=false; }, 0);
 });
-// Ctrl/⌘ + wheel zooms at the cursor; plain wheel keeps scrolling the board.
+/* The mouse wheel zooms at the cursor (a pinch on a trackpad too). Shift + wheel, and a
+   trackpad's sideways swipe, move the board; so does middle-drag or space-drag. */
 wrap.addEventListener('wheel',e=>{
-  if(!e.ctrlKey && !e.metaKey) return;
+  if(e.shiftKey && !e.ctrlKey && !e.metaKey) return;              // sideways scroll
+  if(!e.ctrlKey && !e.metaKey && Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;   // trackpad swipe sideways
   e.preventDefault();
   const r=wrap.getBoundingClientRect();
-  setZoom(Z + (e.deltaY<0?0.1:-0.1), {x:e.clientX-r.left, y:e.clientY-r.top});
+  const dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;          // Firefox counts lines
+  setZoom(Z * Math.exp(-Math.max(-300, Math.min(300, dy)) * (e.ctrlKey ? 0.01 : 0.0018)), {x:e.clientX-r.left, y:e.clientY-r.top});
 },{passive:false});
 canvas.addEventListener('click',e=>{ if(skipClick) return; if(e.target.closest('.port'))return; if(e.target.closest('.del'))return; if(e.target.closest('.addnext'))return; const el=e.target.closest('.node');
   // Shift / Ctrl / ⌘ + click adds a step to the selection or takes it out.
