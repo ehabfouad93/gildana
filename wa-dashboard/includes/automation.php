@@ -787,6 +787,41 @@ function auto_match_ad(int $clientId, string $sourceId, ?string $line = null): ?
     return $any;
 }
 
+/**
+ * "Someone clicks a link or scans a QR code": the wa.me link opens WhatsApp with a message already
+ * typed that carries the automation's code (#K7Q2M). The message containing that code — or, when
+ * the code was taken out of the message, the message exactly — starts the automation.
+ */
+function auto_match_link(int $clientId, string $text, ?string $line = null): ?array
+{
+    $t = mb_strtolower(trim($text));
+    if ($t === '') return null;
+    [$lw, $lo, $lp] = auto_line_sql($line);
+    foreach (db_all("SELECT * FROM flows WHERE client_id=? AND status='active' AND trigger_type='link'{$lw} ORDER BY {$lo}id", array_merge([$clientId], $lp)) as $f) {
+        $tc = json_decode((string) $f['trigger_config'], true) ?: [];
+        $code = mb_strtolower(trim((string) ($tc['code'] ?? '')));
+        if ($code !== '' && str_contains($t, '#' . $code)) return $f;
+        $pre = mb_strtolower(trim((string) ($tc['text'] ?? '')));
+        if ($pre !== '' && $t === $pre) return $f;
+    }
+    return null;
+}
+
+/** "Someone taps a button": a reply button or a template's quick reply, with one of these words (any, when none are set). */
+function auto_match_button(int $clientId, string $title, ?string $line = null): ?array
+{
+    $t = mb_strtolower(trim($title));
+    if ($t === '') return null;
+    [$lw, $lo, $lp] = auto_line_sql($line);
+    $any = null;
+    foreach (db_all("SELECT * FROM flows WHERE client_id=? AND status='active' AND trigger_type='button'{$lw} ORDER BY {$lo}id", array_merge([$clientId], $lp)) as $f) {
+        $words = array_filter(array_map(fn($w) => mb_strtolower(trim((string) $w)), (array) ((json_decode((string) $f['trigger_config'], true) ?: [])['buttons'] ?? [])), 'strlen');
+        if (!$words) { $any ??= $f; continue; }
+        if (in_array($t, $words, true)) return $f;                    // the button's own words win over "any button"
+    }
+    return $any;
+}
+
 function auto_welcome_flow(int $clientId, ?string $line = null): ?array
 {
     // An AI Chat Agent welcome flow takes precedence over a chatbot welcome flow.
@@ -938,6 +973,14 @@ function auto_inbound_decide(array $client, array $contact, array $message, stri
     // The inbound is still logged by webhook.php, so nothing is lost.
     if (auto_bot_paused($contact)) return 'bot_paused|A human took over this chat from the Inbox';
 
+    /* They came through an automation's link or QR code: that is what they asked for now, even in
+       the middle of another conversation — which ends, and the link's automation starts. */
+    if ($channel === 'whatsapp' && $buttonId === '' && ($lf = auto_match_link((int) $client['id'], $text, $client['__line'] ?? null))) {
+        db_run("UPDATE flow_runs SET status='stopped', updated_at=NOW() WHERE contact_id=? AND status IN ('active','waiting_input','waiting_timer')", [(int) $contact['id']]);
+        auto_start($client, $contact, $lf, $text, $seedFields, 'whatsapp', ['trigger_kind' => 'link']);
+        return 'started|link: ' . (string) $lf['name'];
+    }
+
     $run = auto_active_run((int) $contact['id']) ?? auto_revive_no_answer($contact);
     // They answered on another channel than the conversation started on: carry on there.
     if ($run && isset($run['channel']) && $run['channel'] !== $channel && $run['status'] === 'waiting_input') {
@@ -1037,8 +1080,10 @@ function auto_inbound_decide(array $client, array $contact, array $message, stri
     if ($text === '') {
         return 'no_text|Nothing to match on: a photo or voice note with no caption';
     }
-    $flow = auto_match_keyword((int) $client['id'], $text, $client['__line'] ?? null);
-    $how  = $flow ? 'keyword' : '';
+    // A tapped button (a reply button or a template's quick reply) with no conversation waiting on it.
+    $flow = $buttonId !== '' ? auto_match_button((int) $client['id'], $text, $client['__line'] ?? null) : null;
+    $how  = $flow ? 'button' : '';
+    if (!$flow) { $flow = auto_match_keyword((int) $client['id'], $text, $client['__line'] ?? null); $how = $flow ? 'keyword' : ''; }
     // A flow can also have WhatsApp keywords as an extra trigger ("also start when…").
     if (!$flow && function_exists('auto_trigger_flow')) {
         $flow = auto_trigger_flow((int) $client['id'], ['wa_keyword'], fn($k, $c) => !empty($c['keywords']) && auto_keywords_match($c, $text));

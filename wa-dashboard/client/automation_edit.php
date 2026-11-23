@@ -73,7 +73,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save'
     $warmMin = max(0, (int) ($_POST['warm_min'] ?? 40));
 
     $tc = null;
-    if ($trigger === 'keyword') {
+    if ($trigger === 'link') {
+        /* A wa.me link that opens WhatsApp with this message typed, carrying the automation's code.
+           The code stays the same across saves, so links already printed keep working. */
+        $old = json_decode((string) ($flow['trigger_config'] ?? ''), true) ?: [];
+        $code = strtoupper(preg_replace('/[^A-Za-z0-9]/', '', (string) (($old['code'] ?? '') ?: ($_POST['link_code'] ?? ''))));
+        if ($code !== '' && empty($old['code']) && db_val("SELECT 1 FROM flows WHERE client_id=? AND id<>? AND trigger_type='link' AND trigger_config LIKE ?", [$cid, $id, '%"code":"' . $code . '"%'])) $code = '';
+        if ($code === '') {
+            do { $code = substr(str_shuffle('ABCDEFGHJKLMNPQRSTUVWXYZ23456789'), 0, 5); }
+            while (db_val("SELECT 1 FROM flows WHERE client_id=? AND trigger_type='link' AND trigger_config LIKE ?", [$cid, '%"code":"' . $code . '"%']));
+        }
+        $txt = trim(mb_substr((string) ($_POST['link_text'] ?? ''), 0, 300));
+        if ($txt === '') $txt = 'Hi! I would like to know more #' . $code;
+        $tc = ['code' => $code, 'text' => $txt, 'line' => preg_replace('/[^a-z0-9]/', '', (string) ($_POST['link_line'] ?? ''))];
+    } elseif ($trigger === 'button') {
+        $words = array_values(array_filter(array_map(fn($w) => mb_substr(trim($w), 0, 25), preg_split('/[\n,]+/', (string) ($_POST['button_words'] ?? '')))));
+        $tc = ['buttons' => $words];
+    } elseif ($trigger === 'keyword') {
         $kws = array_values(array_filter(array_map('trim', preg_split('/[\n,]+/', (string) ($_POST['keywords'] ?? '')))));
         $tc  = ['keywords' => $kws, 'match_type' => (string) ($_POST['match_type'] ?? 'contains')];
     } elseif ($trigger === 'ad') {
@@ -504,7 +520,9 @@ client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
     <div class="grid3">
       <div class="field"><span class="lbl">Name</span><input type="text" name="name" value="<?= e((string) $flow['name']) ?>" required></div>
       <div class="field"><span class="lbl">Trigger</span>
-        <select name="trigger_type" id="trigger_type" onchange="onTrig()">
+        <button type="button" class="trig-card" id="trig-card" onclick="tpOpen()" aria-haspopup="dialog">
+          <span class="tc-ico" id="tc-ico"></span><span class="tc-txt"><small id="tc-grp"></small><b id="tc-lbl"></b></span><span class="tc-chg">Change</span></button>
+        <select name="trigger_type" id="trigger_type" onchange="onTrig()" class="trig-select" tabindex="-1" aria-hidden="true">
           <?php $mainVal = auto_main_trigger_value($flow);
                 foreach (auto_main_trigger_options($CLIENT) as $grp => $opts): ?>
             <optgroup label="<?= e($grp) ?>">
@@ -548,6 +566,60 @@ client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
       $adPicked = array_map('strval', (array) ($tc['source_ids'] ?? []));
       $adIsPersonal = function_exists('channel_is_personal') && channel_is_personal($CLIENT);
     ?>
+    <?php
+      /* ── "Someone clicks a link or scans a QR code" ── */
+      $lk = $flow['trigger_type'] === 'link' ? ($tc ?: []) : [];
+      $lkCode = (string) ($lk['code'] ?? '') ?: substr(str_shuffle('ABCDEFGHJKLMNPQRSTUVWXYZ23456789'), 0, 5);
+      $lkText = (string) ($lk['text'] ?? '') ?: 'Hi! I would like to know more #' . $lkCode;
+      $lkLines = [];
+      {   // the main number is asked of Meta once, then remembered (wa_main_phone_digits)
+        $lkCl = db_row("SELECT * FROM clients WHERE id=?", [$cid]) ?: $CLIENT;
+        foreach ((wa_lines_ready() ? wa_lines($lkCl) : []) as $k => $l) {
+          $d = preg_replace('/\D/', '', (string) $l['phone']);
+          if ($d === '' && $k === 'api') $d = wa_main_phone_digits($lkCl);
+          if ($d !== '') $lkLines[$k] = ['label' => $l['label'] . ' (+' . $d . ')', 'digits' => $d];
+        }
+        if (!$lkLines) {
+          $d = wa_main_phone_digits($lkCl) ?: preg_replace('/\D/', '', (string) ($lkCl['personal_msisdn'] ?? ''));
+          if ($d !== '') $lkLines['api'] = ['label' => '+' . $d, 'digits' => $d];
+        }
+      }
+      $lkLine = isset($lkLines[$lk['line'] ?? '']) ? (string) $lk['line'] : (string) array_key_first($lkLines);
+      /* ── "Someone taps a button" ── */
+      $bwWords = implode(', ', (array) ($flow['trigger_type'] === 'button' ? ($tc['buttons'] ?? []) : []));
+    ?>
+    <div id="link-wrap" class="trig-box" style="display:<?= $flow['trigger_type'] === 'link' ? 'block' : 'none' ?>">
+      <p class="text-muted" style="font-size:12.5px;margin:0 0 10px">Put this link on your website, in a post, an email or an ad — or print the QR code. It opens WhatsApp with the message below already typed; when they send it, this automation starts (even in the middle of another conversation).</p>
+      <input type="hidden" name="link_code" id="lk-code" value="<?= e($lkCode) ?>">
+      <div class="grid3">
+        <?php if (count($lkLines) > 1): ?>
+        <div class="field"><span class="lbl">WhatsApp number</span><select name="link_line" id="lk-line" onchange="lkSync()">
+          <?php foreach ($lkLines as $k => $l): ?><option value="<?= e($k) ?>" data-d="<?= e($l['digits']) ?>" <?= $k === $lkLine ? 'selected' : '' ?>><?= e($l['label']) ?></option><?php endforeach; ?>
+        </select></div>
+        <?php else: ?><input type="hidden" name="link_line" id="lk-line" value="<?= e($lkLine) ?>" data-d="<?= e($lkLines[$lkLine]['digits'] ?? '') ?>"><?php endif; ?>
+        <div class="field" style="grid-column:span 2"><span class="lbl">The message they send <span class="text-muted">(keep <b>#<?= e($lkCode) ?></b> in it — that is how it is recognised)</span></span>
+          <input name="link_text" id="lk-text" maxlength="300" value="<?= e($lkText) ?>" oninput="lkSync()"></div>
+      </div>
+      <?php if (!$lkLines): ?><div class="alert error" style="font-size:12.5px">No WhatsApp number with a phone number is connected yet, so there is no link to make.</div><?php endif; ?>
+      <div class="lk-out" <?= $lkLines ? '' : 'hidden' ?>>
+        <img id="lk-qr" alt="QR code" width="132" height="132">
+        <div style="flex:1;min-width:220px">
+          <div class="lbl">Your link</div>
+          <div class="lk-url"><code id="lk-url"></code></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+            <button type="button" class="btn btn-primary btn-sm" onclick="lkCopy(this)">Copy link</button>
+            <a class="btn btn-ghost btn-sm" id="lk-dl" target="_blank" rel="noopener">Download QR code</a>
+            <a class="btn btn-ghost btn-sm" id="lk-try" target="_blank" rel="noopener">Try it</a>
+          </div>
+          <div class="hint" id="lk-warn" style="color:var(--danger)" hidden>The message no longer has #<?= e($lkCode) ?> — it is then recognised only when sent exactly as typed here.</div>
+        </div>
+      </div>
+    </div>
+    <div id="btn-wrap" class="trig-box" style="display:<?= $flow['trigger_type'] === 'button' ? 'block' : 'none' ?>">
+      <p class="text-muted" style="font-size:12.5px;margin:0 0 10px">Starts when someone taps a button — a quick-reply button on a template you sent (from a campaign, the Inbox or another automation), or a reply button — and no conversation is waiting for that tap.</p>
+      <div class="field"><span class="lbl">Button text <span class="text-muted">(comma separated; empty = any button)</span></span>
+        <input name="button_words" value="<?= e($bwWords) ?>" placeholder="عايز اعرف اكتر, احجز زيارة"></div>
+    </div>
     <div id="ad-wrap" style="display:<?= $flow['trigger_type'] === 'ad' ? 'block' : 'none' ?>">
       <?php if ($adIsPersonal): ?>
         <div class="alert error" style="font-size:12.5px">
@@ -798,9 +870,12 @@ client_header('Edit · ' . $flow['name'], 'automations', $CLIENT);
   </div>
 </form>
 
-<div class="cfg-panel" id="cfg"><h3><span id="cfg-title">Step</span><span class="close-x" onclick="closeCfg()">✕</span></h3><div id="cfg-body"></div>
+<div class="cfg-panel" id="cfg"><h3><span id="cfg-title">Step</span><span class="cfg-acts">
+  <button type="button" class="cfg-btn" onclick="minCfg(true)" title="Minimize — keep it to the side" aria-label="Minimize">&#x2212;</button>
+  <button type="button" class="cfg-btn" onclick="closeCfg()" title="Close (Esc)" aria-label="Close">&#x2715;</button></span></h3><div id="cfg-body"></div>
   <div class="mt16"><button type="button" class="btn btn-danger btn-sm" onclick="deleteCurrent()">Delete node</button></div>
 </div>
+<button type="button" class="cfg-tab" id="cfg-tab" onclick="minCfg(false)" hidden><span>&#x2039;</span> <b id="cfg-tab-t">Step</b></button>
 
 <script>
 const TEMPLATES = <?= json_encode(array_map(fn($t)=>['id'=>(int)$t['id'],'label'=>$t['wa_name'].' ('.$t['language'].')'],$templates)) ?>;
@@ -1115,6 +1190,20 @@ const TYPE_LABEL = {start:'Trigger',text:'Send text',image:'Send image',template
   condition:'If / then',split:'Split test',jump:'Go to automation',wait_until:'Wait until',set_field:'Remember',http:'Web service',list_msg:'Menu list',
   comment_reply:'Reply to comment',comment_dm:'Private reply',export:'Export data',sms:'Send SMS'};
 const CH_NAME = {whatsapp:'WhatsApp', messenger:'Messenger', instagram:'Instagram'};
+/* What kind of step it is — its colour and mark on the canvas. */
+const NODE_CAT = t => t==='start' ? 'start'
+  : ['text','image','template','buttons','list_msg','question','comment_reply','comment_dm'].includes(t) ? 'send'
+  : t==='sms' ? 'sms'
+  : ['ai_chat','ai_branch','ai_score'].includes(t) ? 'ai'
+  : ['condition','split','wait','wait_until','jump'].includes(t) ? 'logic' : 'action';
+const NODE_ICON = {
+  start:'<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>',
+  send:'<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/>',
+  sms:'<rect x="3" y="5" width="18" height="13" rx="2"/><path d="M3 7l9 6 9-6"/>',
+  ai:'<path d="M12 3l1.8 4.6L18 9.4l-4.2 1.8L12 16l-1.8-4.8L6 9.4l4.2-1.8z"/><path d="M19 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/>',
+  logic:'<path d="M6 3v6a3 3 0 0 0 3 3h6a3 3 0 0 1 3 3v6"/><path d="M15 18l3 3 3-3"/>',
+  action:'<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2.4-.6-.6-2.4z"/>'};
+const nodeIcon = c => `<svg class="nico" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${NODE_ICON[c]||''}</svg>`;
 
 let nodes = {};        // id -> {id,type,x,y,config,outputs}
 let start = {id:'start', type:'start', x:INIT_START.x, y:INIT_START.y, outputs:{next:INIT_START.next||null}};
@@ -1140,7 +1229,7 @@ function summary(n){
       const needMedia=['IMAGE','VIDEO','DOCUMENT'].includes(fmt) && !(c.header_media||'').trim();
       return esc(t.label)+(needMedia?'<div class="muted" style="margin-top:4px;color:#c0392b">⚠ '+fmt.toLowerCase()+' header missing</div>':'');
     }
-    case 'buttons': return (c.image?'🖼 ':'')+esc(c.body)+'<div class="muted" style="margin-top:4px">'+((c.buttons||[]).map(b=>'▸ '+esc(b.title||'?')).join('<br>'))+'</div>';
+    case 'buttons': return (c.image?'🖼 ':'')+(esc(c.body)||'<span class="muted">(no message)</span>');   // the buttons show as the step's exits
     case 'question': return '❓ '+(esc(c.body)||'<span class="muted">question</span>')+(c.save_as?' <span class="muted">→ '+esc(c.save_as)+'</span>':'');
     case 'ai_chat': {
       const kb=(c.knowledge||'').trim();
@@ -1203,12 +1292,13 @@ function outPorts(n){
 /* ── render ── */
 function nodeEl(n){
   const el=document.createElement('div');
-  el.className='node'+(n.type==='start'?' start':''); el.dataset.id=n.id;
+  const cat=NODE_CAT(n.type);
+  el.className='node cat-'+cat+(n.type==='start'?' start':''); el.dataset.id=n.id;
   el.style.left=n.x+'px'; el.style.top=n.y+'px';
   const ports=outPorts(n);
   el.innerHTML =
     (n.type==='start'?'':`<span class="port port-in" data-node="${n.id}" data-port="in"></span>`) +
-    `<div class="node-head" data-drag="1">${TYPE_LABEL[n.type]||n.type}${n.type==='start'?'':'<span class="del" title="Delete">✕</span>'}</div>`+
+    `<div class="node-head" data-drag="1"><span class="nh-t">${nodeIcon(cat)}<span>${cat==='send'?'<small>'+esc(CH_NAME[(n.config&&n.config.send_on)||'']||'WhatsApp')+'</small>':''}${TYPE_LABEL[n.type]||n.type}</span></span>${n.type==='start'?'':'<span class="del" title="Delete">✕</span>'}</div>`+
     `<div class="node-body">${summary(n)}${SENDING_TYPES.includes(n.type)&&n.config&&n.config.send_on?`<div class="muted" style="margin-top:4px">on ${esc(CH_NAME[n.config.send_on]||n.config.send_on)}</div>`:''}</div>`+
     statsRow(n)+
     `<div class="node-ports">`+ports.map(p=>
@@ -1587,10 +1677,27 @@ function openCfg(id){ current = id==='start'?start:nodes[id]; if(!current) retur
   document.getElementById('cfg-body').innerHTML=current.type==='start'?'<p class="text-muted" style="font-size:13px">This is the entry point. Connect its port to the first step. Trigger settings are at the top of the page.</p>':cfgForm(current)+sendOnForm(current);
   document.querySelector('#cfg [onclick="deleteCurrent()"]').parentElement.style.display=current.type==='start'?'none':'';
   document.getElementById('cfg').classList.add('open');
+  const tb = document.getElementById('cfg-tab'); if(tb) tb.hidden = true;
   bindCfg();
   renderOutline();   // keep the list's highlight in step with the drawer
 }
-function closeCfg(){ document.getElementById('cfg').classList.remove('open'); document.querySelectorAll('.node.sel').forEach(e=>e.classList.remove('sel')); current=null; renderOutline(); }
+/* The panel closes with ✕, Escape or a click anywhere outside it; minimize keeps the step open in a tab at the side. */
+function minCfg(on){
+  const p = document.getElementById('cfg'), t = document.getElementById('cfg-tab');
+  if(on){ p.classList.remove('open'); t.hidden = false; document.getElementById('cfg-tab-t').textContent = document.getElementById('cfg-title').textContent; }
+  else { t.hidden = true; if(current) p.classList.add('open'); }
+}
+document.addEventListener('keydown', e => {
+  if(e.key === 'Escape' && document.getElementById('cfg').classList.contains('open') && !document.querySelector('.modal-back.open')){ e.stopImmediatePropagation(); closeCfg(); }
+}, true);
+document.addEventListener('mousedown', e => {
+  const p = document.getElementById('cfg');
+  if(!p.classList.contains('open') || e.button !== 0) return;
+  // Inside the panel, on a step (that opens it), in a pop-up or a menu: stay open.
+  if(e.target.closest('#cfg, .node, .modal-back, #cfg-tab, .edge-menu, .addnext, .mlc-tip, .toast')) return;
+  closeCfg();
+});
+function closeCfg(){ const tb = document.getElementById('cfg-tab'); if(tb) tb.hidden = true; document.getElementById('cfg').classList.remove('open'); document.querySelectorAll('.node.sel').forEach(e=>e.classList.remove('sel')); current=null; renderOutline(); }
 function cfgForm(n){ const c=n.config;
   switch(n.type){
     case 'text': return `<label><span class="lbl">Message</span><textarea data-k="body" rows="3">${esc(c.body)}</textarea></label><div class="hint">Use {{name}}, {{phone}} or a saved field.</div>`;
@@ -2229,7 +2336,24 @@ function onTrig(init){ const v=document.getElementById('trigger_type').value; co
     const row = at>=0 ? TRIGS.splice(at,1)[0] : {kind, config:{}, active:1}; row.active=1; TRIGS.unshift(row); trigRender(); trigSync(); } document.getElementById('kw-wrap').style.display=k?'':'none'; document.getElementById('mt-wrap').style.display=k?'':'none';
   const sw=document.getElementById('sheet-wrap'); if(sw) sw.style.display=v==='google_sheet'?'block':'none';
   const aw=document.getElementById('ad-wrap');    if(aw) aw.style.display=v==='ad'?'block':'none';
+  const lw=document.getElementById('link-wrap');  if(lw) { lw.style.display=v==='link'?'block':'none'; if(v==='link') lkSync(); }
+  const bw=document.getElementById('btn-wrap');   if(bw) bw.style.display=v==='button'?'block':'none';
+  if(typeof trigCard==='function') trigCard();
   const s=canvas.querySelector('.node.start .node-body'); if(s)s.innerHTML=summary(start); }
+
+/* The link / QR code of a "clicks a link" automation, built as it is typed. */
+function lkSync(){
+  const t=document.getElementById('lk-text'); if(!t) return;
+  const ln=document.getElementById('lk-line'), opt=ln && ln.tagName==='SELECT' ? ln.options[ln.selectedIndex] : ln;
+  const d=opt ? (opt.getAttribute('data-d')||'') : '';
+  const url='https://wa.me/'+d+'?text='+encodeURIComponent(t.value.trim());
+  document.getElementById('lk-url').textContent=url;
+  const qr='https://api.qrserver.com/v1/create-qr-code/?size=480x480&margin=8&data='+encodeURIComponent(url);
+  document.getElementById('lk-qr').src=qr; document.getElementById('lk-dl').href=qr+'&download=1'; document.getElementById('lk-try').href=url;
+  const code=document.getElementById('lk-code').value;
+  document.getElementById('lk-warn').hidden = t.value.toUpperCase().includes('#'+code);
+}
+function lkCopy(b){ navigator.clipboard.writeText(document.getElementById('lk-url').textContent).then(()=>{ const x=b.textContent; b.textContent='Copied'; setTimeout(()=>b.textContent=x,1500); }); }
 
 /* The ad list only matters once "Specific ads" is chosen — showing a checklist under an
    unselected radio invites people to tick things that will be ignored on save. */
@@ -2402,5 +2526,71 @@ function adpApply(){
 document.getElementById('adp-q').addEventListener('input', () => adpRender());
 document.getElementById('adp-active').addEventListener('change', () => adpRender());
 adpChips();
+</script>
+<!-- ── Trigger picker: "Start automation when…" ── -->
+<div class="modal-back" id="m-trig">
+  <div class="modal tp-modal" role="dialog" aria-labelledby="tp-h">
+    <div class="tp-head"><h2 id="tp-h">Start automation when…</h2>
+      <input type="search" id="tp-q" placeholder="Search triggers" aria-label="Search triggers"></div>
+    <div class="tp-grid">
+      <nav class="tp-nav" id="tp-nav"></nav>
+      <div class="tp-list" id="tp-list"></div>
+    </div>
+  </div>
+</div>
+<script>
+/* The trigger picker reads the trigger <select> (its groups and options) and writes back to it. */
+const TP_DESC = {
+  keyword:'They send a message with a word you choose', welcome:'Someone writes to you for the first time',
+  default:'A message nothing else answered', ad:'They tap your click-to-WhatsApp ad',
+  link:'They open your wa.me link or scan its QR code', button:'They tap a template or reply button',
+  google_sheet:'A new row is added to a Google Sheet',
+  'x:messenger_keyword':'A Messenger message with a word you choose', 'x:messenger_first':'Someone messages your Page for the first time',
+  'x:messenger_any':'Any Messenger message nothing else answers', 'x:messenger_ad':'They tap your click-to-Messenger ad',
+  'x:instagram_keyword':'An Instagram message with a word you choose', 'x:instagram_first':'Someone DMs you on Instagram for the first time',
+  'x:instagram_any':'Any Instagram message nothing else answers', 'x:instagram_story_reply':'They reply to your story',
+  'x:instagram_story_mention':'They mention you in their story', 'x:instagram_ad':'They tap your click-to-Instagram ad',
+  'x:fb_comment':'Someone comments on your Facebook post', 'x:ig_comment':'Someone comments on your post or reel',
+  'x:lead_form':'Someone submits your Meta lead form', 'x:crm_stage':'A lead reaches a stage in your CRM'
+};
+const TP_ICON = {WhatsApp:'#25D366', Messenger:'#0866FF', Instagram:'#DD2A7B', Facebook:'#1877F2', Leads:'#7C3AED'};
+function tpGroups(){
+  const sel=document.getElementById('trigger_type'), out=[];
+  [...sel.children].forEach(g => { if(g.tagName==='OPTGROUP') out.push({name:g.label, opts:[...g.children].map(o=>({v:o.value, t:o.textContent}))}); });
+  return out;
+}
+let tpCur = 0;
+function tpIco(group){ const c = TP_ICON[group] || '#64748B'; return `<span class="tp-dot" style="background:${c}">${group.slice(0,1)}</span>`; }
+function tpRender(){
+  const groups=tpGroups(), q=document.getElementById('tp-q').value.trim().toLowerCase(), cur=document.getElementById('trigger_type').value;
+  document.getElementById('tp-nav').innerHTML = groups.map((g,i)=>`<button type="button" class="${!q&&i===tpCur?'on':''}" onclick="tpCur=${i};document.getElementById('tp-q').value='';tpRender()">${tpIco(g.name)}${esc(g.name)}</button>`).join('');
+  const show = q ? groups.flatMap(g=>g.opts.map(o=>({...o,g:g.name}))).filter(o=>(o.t+' '+(TP_DESC[o.v]||'')+' '+o.g).toLowerCase().includes(q))
+                 : (groups[tpCur]||{opts:[]}).opts.map(o=>({...o,g:groups[tpCur].name}));
+  document.getElementById('tp-list').innerHTML = (q?'':`<div class="tp-sub"><b>${esc((groups[tpCur]||{}).name||'')}</b> — what starts this automation</div>`) +
+    (show.length ? show.map(o=>`<button type="button" class="tp-item ${o.v===cur?'on':''}" onclick="tpPick('${o.v.replace(/'/g,"")}')">
+      ${tpIco(o.g)}<span><small>${esc(o.g)}</small><b>${esc(o.t.replace(/^[^—]+ — /,''))}</b><em>${esc(TP_DESC[o.v]||'')}</em></span>${o.v===cur?'<i>Current</i>':''}</button>`).join('')
+      : '<p class="text-muted" style="padding:10px">No trigger matches.</p>');
+}
+function tpOpen(){
+  const groups=tpGroups(), cur=document.getElementById('trigger_type').value;
+  tpCur = Math.max(0, groups.findIndex(g=>g.opts.some(o=>o.v===cur)));
+  document.getElementById('tp-q').value=''; tpRender();
+  document.getElementById('m-trig').classList.add('open'); setTimeout(()=>document.getElementById('tp-q').focus(), 30);
+}
+function tpPick(v){
+  const sel=document.getElementById('trigger_type'); sel.value=v;
+  sel.dispatchEvent(new Event('change', {bubbles:true}));
+  document.getElementById('m-trig').classList.remove('open');
+  if(typeof scheduleSave==='function') scheduleSave();
+}
+function trigCard(){
+  const sel=document.getElementById('trigger_type'), o=sel.options[sel.selectedIndex]; if(!o) return;
+  const g=o.parentElement && o.parentElement.label || '';
+  document.getElementById('tc-ico').innerHTML=tpIco(g);
+  document.getElementById('tc-grp').textContent=g;
+  document.getElementById('tc-lbl').textContent=o.textContent.replace(/^[^—]+ — /,'');
+}
+document.getElementById('tp-q').addEventListener('input', tpRender);
+trigCard();
 </script>
 <?php layout_footer(); ?>

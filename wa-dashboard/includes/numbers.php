@@ -293,6 +293,24 @@ function wa_webhook_health(string $pnid): array
     return ['ok_at' => $get('wh_ok_' . $pnid), 'bad_at' => $get('wh_badsig_' . $pnid)];
 }
 
+/**
+ * The digits of the account's main Business API number (for wa.me links). Not stored with the
+ * account, so it is asked of Meta once and remembered; '' when Meta cannot say.
+ */
+function wa_main_phone_digits(array $client): string
+{
+    require_once __DIR__ . '/push.php';
+    $k = 'wa_main_phone_' . (int) $client['id'] . '_' . preg_replace('/\D/', '', (string) ($client['phone_number_id'] ?? ''));
+    $v = (string) (setting_get($k) ?? '');
+    if (str_starts_with($v, 'none:')) { if ((int) substr($v, 5) > time() - 86400) return ''; $v = ''; }   // Meta could not say: ask again tomorrow
+    if ($v !== '') return $v;
+    if (wa_phone_id($client) === '' || wa_token($client) === '') return '';
+    $chk = wa_number_check($client);
+    $d = $chk['ok'] ? (string) $chk['phone'] : '';
+    try { setting_set($k, $d !== '' ? $d : 'none:' . time()); } catch (Throwable $e) {}
+    return $d;
+}
+
 /** Options for a "Send from" select: key => label, only lines this person may use. */
 function wa_line_options(array $client, ?array $user, ?string $kind = null): array
 {

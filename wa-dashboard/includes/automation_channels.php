@@ -137,7 +137,8 @@ function auto_save_triggers(array $client, int $flowId, array $rows): void
 function auto_main_trigger_options(array $client): array
 {
     $out = ['WhatsApp' => ['keyword' => 'Keyword reply', 'welcome' => 'Welcome (first message)',
-                           'default' => 'Default reply (nothing else matched)', 'ad' => 'Someone arrives from an ad'],
+                           'default' => 'Default reply (nothing else matched)', 'ad' => 'Someone arrives from an ad',
+                           'link' => 'Someone clicks a link or scans a QR code', 'button' => 'Someone taps a button'],
             'Leads' => ['google_sheet' => 'New row in a Google Sheet']];
     foreach (auto_trigger_kinds_for($client) as $k => $t) {
         if (str_starts_with($k, 'wa_')) continue;                    // the WhatsApp ones are listed above
@@ -155,7 +156,7 @@ function auto_main_trigger_resolve(array $client, string $value): array
         $k = substr($value, 2);
         return isset(auto_trigger_kinds_for($client)[$k]) && !str_starts_with($k, 'wa_') ? ['channel', $k] : ['keyword', ''];
     }
-    return [in_array($value, ['keyword', 'welcome', 'default', 'ad', 'google_sheet'], true) ? $value : 'keyword', ''];
+    return [in_array($value, ['keyword', 'welcome', 'default', 'ad', 'google_sheet', 'link', 'button'], true) ? $value : 'keyword', ''];
 }
 
 /** The select value showing a flow's current main trigger. */
@@ -172,7 +173,7 @@ function auto_main_trigger_label(array $flow): string
     $v = auto_main_trigger_value($flow);
     if (str_starts_with($v, 'x:')) return auto_trigger_kinds()[substr($v, 2)][0] ?? 'Other channel';
     return ['keyword' => 'Keyword', 'welcome' => 'Welcome', 'default' => 'Default reply', 'ad' => 'From an ad',
-            'google_sheet' => 'Google Sheet (AI leads)', 'button' => 'Button'][$v] ?? $v;
+            'google_sheet' => 'Google Sheet (AI leads)', 'button' => 'Button tapped', 'link' => 'Link / QR code'][$v] ?? $v;
 }
 
 /** Does $text match a keyword list? An empty list matches anything. */

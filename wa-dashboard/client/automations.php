@@ -74,7 +74,7 @@ $flows = db_all(
 );
 $starters = automation_templates();
 
-$triggerLabel = ['keyword' => 'Keyword', 'welcome' => 'Welcome', 'google_sheet' => 'Google Sheet (AI leads)', 'button' => 'Button'];
+$triggerLabel = ['keyword' => 'Keyword', 'welcome' => 'Welcome', 'google_sheet' => 'Google Sheet (AI leads)', 'button' => 'Button tapped', 'link' => 'Link / QR code', 'ad' => 'From an ad', 'default' => 'Default reply'];
 
 $actions = '<a class="btn btn-ghost btn-sm" href="diagnostics.php">🩺 Health check</a>'
          . '<button class="btn btn-primary btn-sm" onclick="document.getElementById(\'m-new\').classList.add(\'open\')">+ New Automation</button>';
