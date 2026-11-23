@@ -200,41 +200,128 @@ function country_picker_html(string $name = 'import_country', string $current = 
          . '</div>';
 }
 
-function normalize_phone(string $raw, string $defaultCountry = ''): string
+/**
+ * How many digits follow the country code, for the countries clients reach most (mobiles and
+ * landlines). A number is only accepted as "already has country code X" when the rest has a
+ * length X really uses — which is what stops 01009876543 turning into +1 009 876 543.
+ */
+function phone_nsn_lengths(string $cc): ?array
+{
+    static $t = [
+        '20' => [9, 10], '966' => [9], '971' => [8, 9], '965' => [8], '974' => [8], '973' => [8], '968' => [8],
+        '962' => [8, 9], '961' => [7, 8], '963' => [9], '964' => [10], '970' => [9], '972' => [8, 9], '967' => [9],
+        '212' => [9], '213' => [9], '216' => [8], '218' => [9, 10], '249' => [9], '1' => [10], '44' => [10],
+        '33' => [9], '34' => [9], '39' => [9, 10, 11], '49' => [10, 11], '90' => [10], '91' => [10], '92' => [10],
+        '7' => [10], '86' => [11], '61' => [9], '27' => [9], '234' => [10], '254' => [9], '255' => [9], '256' => [9],
+    ];
+    return $t[$cc] ?? null;
+}
+
+/** Does $rest (the digits after $cc) have a length that country uses? Unknown countries: 6–12. */
+function phone_nsn_ok(string $cc, string $rest): bool
+{
+    $len = strlen($rest);
+    if ($rest === '' || $rest[0] === '0') return false;           // after a country code there is no trunk 0
+    $l = phone_nsn_lengths($cc);
+    return $l ? in_array($len, $l, true) : ($len >= 6 && $len <= 12);
+}
+
+/**
+ * The country of a number written without one, from its own shape: an Egyptian mobile is the
+ * only common one that cannot be mistaken (01x + 8 digits, or 1x + 8). Gulf mobiles (05… in
+ * Saudi Arabia and the Emirates alike) need the country — from the account, the file or the person.
+ */
+function phone_guess_local(string $digits): string
+{
+    if (preg_match('/^0?1[0125]\d{8}$/', $digits)) return '20';
+    return '';
+}
+
+/**
+ * The country most numbers in a list are from (those that say so), to complete the ones that
+ * do not — when the account has no default country and none was chosen for the import.
+ */
+function phone_guess_country(array $raws): string
+{
+    $n = [];
+    foreach (array_slice($raws, 0, 2000) as $raw) {
+        $raw = trim((string) $raw); $d = preg_replace('/\D+/', '', $raw);
+        if ($d === '') continue;
+        $intl = str_starts_with($raw, '+') || str_starts_with($d, '00');
+        if (str_starts_with($d, '00')) $d = substr($d, 2);
+        $cc = '';
+        if ($intl) { $cc = (string) phone_detect_cc($d); }
+        elseif (($g = phone_guess_local($d)) !== '') { $cc = $g; }
+        elseif (($c = (string) phone_detect_cc($d)) !== '' && phone_nsn_ok($c, substr($d, strlen($c))) && phone_nsn_lengths($c)) { $cc = $c; }
+        if ($cc !== '') $n[$cc] = ($n[$cc] ?? 0) + 1;
+    }
+    if (!$n) return '';
+    arsort($n);
+    return (string) array_key_first($n);
+}
+
+/**
+ * A phone number as WhatsApp wants it: country code and number, digits only.
+ *
+ * $defaultCountry: the country for numbers written without one (the import's choice, else the
+ * account's). $hint: the country most of the same file is from (phone_guess_country), used when
+ * there is no default. Returns '' when the number cannot be placed — never a wrong guess.
+ */
+function normalize_phone(string $raw, string $defaultCountry = '', string $hint = ''): string
 {
     $raw = trim($raw);
     if ($raw === '') return '';
 
-    $hasPlus = str_starts_with($raw, '+') || str_starts_with($raw, '00');
+    $hasPlus = str_starts_with($raw, '+') || str_starts_with(preg_replace('/[^\d+]/', '', $raw), '00');
     $digits  = preg_replace('/\D+/', '', $raw);
     if ($digits === '') return '';
+    if (str_starts_with($digits, '00')) { $digits = substr($digits, 2); $hasPlus = true; }
+    $cc0 = preg_replace('/\D+/', '', $defaultCountry) ?: preg_replace('/\D+/', '', $hint);
+    $ok  = fn(string $d) => strlen($d) >= 8 && strlen($d) <= 15 ? $d : '';
 
-    // 00-prefixed international → drop the 00, treat as already international.
-    if (str_starts_with($digits, '00')) {
-        $digits  = substr($digits, 2);
-        $hasPlus = true;
-    }
-
-    if (!$hasPlus) {
-        $cc = preg_replace('/\D+/', '', $defaultCountry);
-        if (str_starts_with($digits, '0')) {
-            // Leading trunk zero → definitely a local number → complete with default code.
-            $local  = ltrim($digits, '0');
-            $digits = $cc !== '' ? $cc . $local : $local;
-        } elseif ($cc !== '' && str_starts_with($digits, $cc) && strlen($digits) >= strlen($cc) + 8) {
-            // Already begins with the account's own country code → leave as-is.
-        } elseif (phone_detect_cc($digits) !== null) {
-            // Already carries some (other) country's code → respect it, don't prepend.
-        } elseif ($cc !== '') {
-            // Bare local number → complete with the account default code.
-            $digits = $cc . $digits;
+    if ($hasPlus) {
+        // International. "+20 0100…": the trunk 0 kept after the code is dropped.
+        $cc = (string) phone_detect_cc($digits);
+        if ($cc !== '') {
+            $rest = substr($digits, strlen($cc));
+            if (str_starts_with($rest, '0') && phone_nsn_ok($cc, substr($rest, 1))) return $ok($cc . substr($rest, 1));
         }
+        return $ok($digits);
     }
 
-    // Plausible E.164: 8–15 digits.
-    if (strlen($digits) < 8 || strlen($digits) > 15) return '';
+    // A trunk 0: a number written the local way. Its country: the default, else its own shape.
+    if (str_starts_with($digits, '0')) {
+        $local = substr($digits, 1);
+        $cc = $cc0 !== '' ? $cc0 : phone_guess_local($digits);
+        if ($cc === '') return '';                                     // which country? not known — do not guess
+        if (phone_nsn_lengths($cc) && !phone_nsn_ok($cc, $local) && phone_guess_local($digits) !== '') $cc = '20';
+        if (phone_nsn_lengths($cc) && !phone_nsn_ok($cc, $local)) return '';   // too short or too long for that country
+        return $ok($cc . $local);
+    }
 
-    return $digits; // stored without '+', WhatsApp API accepts bare digits
+    if ($cc0 !== '') {
+        // Already has the default country's code (perhaps with the trunk 0 after it).
+        if (str_starts_with($digits, $cc0)) {
+            $rest = substr($digits, strlen($cc0));
+            if (phone_nsn_ok($cc0, $rest)) return $ok($digits);
+            if (str_starts_with($rest, '0') && phone_nsn_ok($cc0, substr($rest, 1))) return $ok($cc0 . substr($rest, 1));
+        }
+        // A number of the default country written without its code or its 0.
+        if (phone_nsn_lengths($cc0) && phone_nsn_ok($cc0, $digits)) return $ok($cc0 . $digits);
+    }
+    // Another country's code, with a length that country uses ("2010…", "9665…").
+    // (Only for countries whose lengths are known, or long numbers: a short one could be anything.)
+    $cc = (string) phone_detect_cc($digits);
+    if ($cc !== '' && (phone_nsn_lengths($cc) || strlen($digits) >= 11)) {
+        $rest = substr($digits, strlen($cc));
+        if (phone_nsn_ok($cc, $rest)) return $ok($digits);
+        if (str_starts_with($rest, '0') && phone_nsn_ok($cc, substr($rest, 1))) return $ok($cc . substr($rest, 1));
+    }
+    // An Egyptian mobile without its 0.
+    if (($g = phone_guess_local($digits)) !== '') return $ok($g . $digits);
+    // A country whose lengths are not in the table: add its code to anything of a plausible length.
+    if ($cc0 !== '' && !phone_nsn_lengths($cc0) && strlen($digits) >= 6 && strlen($digits) <= 12) return $ok($cc0 . $digits);
+    return '';                                                         // which country? not known — do not guess
 }
 
 /* ── format bytes / small utils ── */

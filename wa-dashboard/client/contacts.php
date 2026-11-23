@@ -216,7 +216,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'impor
                                  ['country' => $importCountry, 'crm' => false, 'tags' => $allTag !== '' ? [$allTag] : [], 'list_id' => $toList]);
             $importSummary = ['total' => $s['total'], 'imported' => $s['added'], 'updated' => $s['updated'],
                               'skipped' => $s['skipped'], 'problems' => $s['problems'], 'new_lists' => $s['new_lists'] ?? [],
-                              'list' => $toList ? (string) db_val("SELECT name FROM contact_lists WHERE id=?", [$toList]) : '', 'tag' => $allTag];
+                              'list' => $toList ? (string) db_val("SELECT name FROM contact_lists WHERE id=?", [$toList]) : '', 'tag' => $allTag,
+                              'guess' => (string) ($s['country_guess'] ?? '')];
         }
     }
 }
@@ -254,6 +255,7 @@ if ($importSummary): ?>
   <div class="alert success">Import done — <?= (int) $importSummary['imported'] ?> added, <?= (int) $importSummary['updated'] ?> updated, <?= (int) $importSummary['skipped'] ?> skipped of <?= (int) $importSummary['total'] ?> rows.<?php
       if ($importSummary['tag'] !== '') echo ' Everyone tagged “' . e($importSummary['tag']) . '”.';
       if ($importSummary['list'] !== '') echo ' Added to the list “' . e($importSummary['list']) . '”.';
+      if ($importSummary['guess'] !== '') echo ' Numbers written without a country code were taken as +' . e($importSummary['guess']) . ', like most of the file.';
       if ($importSummary['new_lists']) echo ' New list' . (count($importSummary['new_lists']) > 1 ? 's' : '') . ' made from the file: ' . e(implode(', ', array_unique($importSummary['new_lists']))) . '.'; ?>
     <?php if (!empty($importSummary['problems'])): ?>
       <details style="margin-top:6px"><summary>What was skipped or changed, and why</summary>

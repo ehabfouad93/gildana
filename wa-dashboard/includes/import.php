@@ -263,6 +263,10 @@ function import_contacts(array $client, array $header, array $rows, array $map, 
         if (count($sum['problems']) < 200) $sum['problems'][] = "Row {$line}: {$why}";
     };
     $col = fn(array $r, string $f) => isset($map[$f]) && $map[$f] !== '' ? trim((string) ($r[(int) $map[$f]] ?? '')) : '';
+    /* No country chosen and none on the account: the country most of this file's numbers are
+       from completes the ones written the local way (0100…, 05…). */
+    $hint = $country === '' ? phone_guess_country(array_map(fn($r) => $col($r, 'phone'), $rows)) : '';
+    $sum['country_guess'] = $hint;
     $update  = ($opts['mode'] ?? 'add') === 'update' && $toCrm;
     $byCode  = $update && ($opts['match'] ?? 'phone') === 'code';
     $importId = (int) ($opts['import_id'] ?? 0);
@@ -279,7 +283,7 @@ function import_contacts(array $client, array $header, array $rows, array $map, 
                 $existing = $code !== '' ? db_row("SELECT * FROM contacts WHERE client_id=? AND code=?", [$cid, $code]) : null;
                 $key = $code !== '' ? '#' . $code : ($col($r, 'code') !== '' ? 'the code "' . $col($r, 'code') . '"' : 'no code');
             } else {
-                $ph = normalize_phone($col($r, 'phone'), $country);
+                $ph = normalize_phone($col($r, 'phone'), $country, $hint);
                 $existing = $ph !== '' ? db_row("SELECT * FROM contacts WHERE client_id=? AND phone_e164=?", [$cid, $ph]) : null;
                 $key = $col($r, 'phone') ?: 'no phone';
             }
@@ -336,10 +340,13 @@ function import_contacts(array $client, array $header, array $rows, array $map, 
             $problem($line, "the phone \"{$rawPhone}\" was shortened by Excel. Format that column as Text in Excel and export again.");
             continue;
         }
-        $phone = normalize_phone($rawPhone, $country);
+        $phone = normalize_phone($rawPhone, $country, $hint);
         if ($phone === '') {
             $sum['skipped']++;
-            $problem($line, $rawPhone === '' ? 'no phone number.' : "\"{$rawPhone}\" is not a phone number.");
+            $problem($line, $rawPhone === '' ? 'no phone number.'
+                : (preg_match('/^\s*0/', $rawPhone) && $country === '' && $hint === ''
+                    ? "\"{$rawPhone}\" is written without its country code — choose the country for this import (or write it as +966…, +971…)."
+                    : "\"{$rawPhone}\" is not a phone number we can place — write it with its country code (+20…, +966…)."));
             continue;
         }
 

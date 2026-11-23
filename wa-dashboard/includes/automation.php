@@ -2560,6 +2560,15 @@ function automation_ingest_rows(array $client, array $flow, string $csv, int $ma
     $nameIdx  = auto_col_index($cols, $map, 'name',  ['name', 'full_name', 'fullname', 'contact']);
     if ($phoneIdx === null) $phoneIdx = 0;
     if ($country === '') $country = (string) $client['default_country'];
+    /* No country anywhere: the file's own numbers say which (the most common code among them),
+       for the ones written the local way. Read ahead, then back to the first row. */
+    $hint = '';
+    if ($country === '') {
+        $pos = ftell($fh); $sample = [];
+        for ($i = 0; $i < 500 && ($row = fgetcsv($fh)) !== false; $i++) $sample[] = (string) ($row[$phoneIdx] ?? '');
+        fseek($fh, $pos);
+        $hint = phone_guess_country($sample);
+    }
     $cid = (int) $client['id'];
 
     while (($row = fgetcsv($fh)) !== false) {
@@ -2567,7 +2576,7 @@ function automation_ingest_rows(array $client, array $flow, string $csv, int $ma
         if ($row === [null] || (count($row) === 1 && trim((string) $row[0]) === '')) continue;
         if ($res['imported'] >= $maxRows) break;
         $res['rows']++;
-        $phone = normalize_phone((string) ($row[$phoneIdx] ?? ''), $country);
+        $phone = normalize_phone((string) ($row[$phoneIdx] ?? ''), $country, $hint);
         if ($phone === '') { $res['invalid']++; continue; }
         $name  = $nameIdx !== null ? trim((string) ($row[$nameIdx] ?? '')) : '';
 
