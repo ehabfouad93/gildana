@@ -4,6 +4,9 @@ require __DIR__ . '/_init.php';
 require_once __DIR__ . '/../includes/charts.php';
 require_once __DIR__ . '/../includes/sms.php';   // sms_error_explain for SMS campaigns
 require_once __DIR__ . '/../includes/inbox.php'; // replies.php: who answered the campaign
+require_once __DIR__ . '/../includes/contacts.php'; // the Tag / List filter
+$CF = contact_filter_from_get();
+[$cfSql, $cfP] = contact_filter_sql('campaign_messages.contact_id', $CF);
 
 $cid = (int) $CLIENT['id'];
 $id  = (int) ($_GET['id'] ?? 0);
@@ -25,14 +28,15 @@ if (($_GET['export'] ?? '') === '1') {
     $rcol = $rx ? ", (SELECT GROUP_CONCAT(CONCAT(IF(r.kind='button','[button] ',''), r.body) ORDER BY r.id SEPARATOR ' | ') FROM reply_events r WHERE r.campaign_message_id=campaign_messages.id) reply,
                     (SELECT MIN(r.created_at) FROM reply_events r WHERE r.campaign_message_id=campaign_messages.id) replied_at" : ", NULL reply, NULL replied_at";
     $rows = db_all("SELECT COALESCE(phone_e164, (SELECT COALESCE(NULLIF(k.name,''), CONCAT('@', k.ig_username)) FROM contacts k WHERE k.id=contact_id)) phone_e164,
-                           status,wa_message_id,error_title,sent_at,delivered_at,read_at{$rcol} FROM campaign_messages WHERE campaign_id=? AND $exF ORDER BY id", [$id]);
+                           status,wa_message_id,error_title,sent_at,delivered_at,read_at{$rcol}, (SELECT k.name FROM contacts k WHERE k.id=contact_id) cname,
+                           (SELECT k.tags FROM contacts k WHERE k.id=contact_id) ctags FROM campaign_messages WHERE campaign_id=? AND $exF{$cfSql} ORDER BY id", array_merge([$id], $cfP));
     header('Content-Type: text/csv; charset=UTF-8');
-    header('Content-Disposition: attachment; filename="campaign-' . $id . '-' . date('Y-m-d') . '.csv"');
+    header('Content-Disposition: attachment; filename="campaign-' . $id . ($CF['tag'] !== '' ? '-tag-' . preg_replace('/[^A-Za-z0-9_-]+/', '_', $CF['tag']) : '') . ($CF['list'] ? '-list-' . $CF['list'] : '') . '-' . date('Y-m-d') . '.csv"');
     echo "\xEF\xBB\xBF";
-    echo "phone,status,wa_message_id,error,sent_at,delivered_at,read_at,replied_at,reply\n";
+    echo "phone,name,tags,status,wa_message_id,error,sent_at,delivered_at,read_at,replied_at,reply\n";
     foreach ($rows as $r) {
         echo implode(',', array_map('csv_cell', [
-            (string) $r['phone_e164'], (string) $r['status'], (string) $r['wa_message_id'], (string) $r['error_title'],
+            (string) $r['phone_e164'], (string) $r['cname'], (string) $r['ctags'], (string) $r['status'], (string) $r['wa_message_id'], (string) $r['error_title'],
             (string) $r['sent_at'], (string) $r['delivered_at'], (string) $r['read_at'], (string) $r['replied_at'], (string) $r['reply'],
         ])) . "\n";
     }
@@ -69,6 +73,7 @@ $filterSql = ['sent' => "status IN ('sent','delivered','read')", 'delivered' => 
 $RX = replies_ready();
 if ($RX) $filterSql['replied'] = "EXISTS (SELECT 1 FROM reply_events r WHERE r.campaign_message_id=campaign_messages.id)";
 if (isset($filterSql[$statusFilter])) $where .= " AND " . $filterSql[$statusFilter];
+$where .= $cfSql; $params = array_merge($params, $cfP);   // only people with that tag / in that list
 /* Replies and actions: who answered this campaign, which buttons they tapped, who opted out. */
 $rep = $RX ? (db_row("SELECT COUNT(DISTINCT contact_id) people, COUNT(DISTINCT IF(kind='button', contact_id, NULL)) tapped, COUNT(DISTINCT IF(kind='stop', contact_id, NULL)) stopped,
                              COUNT(*) total FROM reply_events WHERE campaign_id=?", [$id]) ?: []) : [];
@@ -82,7 +87,7 @@ $messages = db_all("SELECT campaign_messages.*, (SELECT COALESCE(NULLIF(k.name,'
 $social = in_array((string) ($camp['channel'] ?? 'whatsapp'), ['messenger', 'instagram'], true);
 $pages = (int) max(1, ceil($msgTotal / $per));
 
-$actions = '<a class="btn btn-ghost btn-sm" href="report.php?id=' . $id . '&export=1' . ($statusFilter !== '' ? '&status=' . urlencode($statusFilter) : '') . '">Export CSV</a><a class="btn btn-ghost btn-sm" href="campaigns.php">← Campaigns</a>';
+$actions = '<a class="btn btn-ghost btn-sm" href="report.php?id=' . $id . '&export=1' . ($statusFilter !== '' ? '&status=' . urlencode($statusFilter) : '') . e(contact_filter_qs($CF)) . '">Export CSV' . ($CF['tag'] !== '' || $CF['list'] ? ' (filtered)' : '') . '</a><a class="btn btn-ghost btn-sm" href="campaigns.php">← Campaigns</a>';
 client_header('Report · ' . $camp['name'], 'campaigns', $CLIENT);
 ?>
 <div class="page-head">
@@ -230,11 +235,12 @@ if ($failReasons): ?>
       foreach ($filters as $val => $lbl):
         $on = ($val === $statusFilter || ($val === '' && $statusFilter === ''));
       ?>
-        <a class="btn <?= $on ? 'btn-dark' : 'btn-ghost' ?> btn-sm" href="report.php?id=<?= $id ?><?= $val ? '&status=' . $val : '' ?>"><?= $lbl ?></a>
+        <a class="btn <?= $on ? 'btn-dark' : 'btn-ghost' ?> btn-sm" href="report.php?id=<?= $id ?><?= $val ? '&status=' . $val : '' ?><?= e(contact_filter_qs($CF)) ?>"><?= $lbl ?></a>
       <?php endforeach; ?>
     </div>
     <span class="text-muted" style="font-size:12.5px"><?= number_format($msgTotal) ?> message<?= $msgTotal === 1 ? '' : 's' ?></span>
   </div>
+  <div style="padding:0 18px"><?= contact_filter_bar($cid, $CF, ['id' => $id, 'status' => $statusFilter]) ?></div>
   <div class="table-wrap">
     <table class="data">
       <thead><tr><th><?= $social ? 'Person' : 'Phone' ?></th><th>Status</th><th>Sent</th><th>Delivered</th><th>Read</th><th>Reply / action</th><th>Error</th></tr></thead>
@@ -259,7 +265,7 @@ if ($failReasons): ?>
   <?php if ($pages > 1): ?>
     <div style="padding:14px 18px;display:flex;gap:6px;justify-content:center;flex-wrap:wrap">
       <?php for ($p = 1; $p <= min($pages, 30); $p++): ?>
-        <a class="btn <?= $p === $page ? 'btn-dark' : 'btn-ghost' ?> btn-sm" href="report.php?id=<?= $id ?><?= $statusFilter ? '&status=' . $statusFilter : '' ?>&page=<?= $p ?>"><?= $p ?></a>
+        <a class="btn <?= $p === $page ? 'btn-dark' : 'btn-ghost' ?> btn-sm" href="report.php?id=<?= $id ?><?= $statusFilter ? '&status=' . $statusFilter : '' ?><?= e(contact_filter_qs($CF)) ?>&page=<?= $p ?>"><?= $p ?></a>
       <?php endfor; ?>
     </div>
   <?php endif; ?>

@@ -12,6 +12,9 @@ declare(strict_types=1);
 require __DIR__ . '/_init.php';
 require_once __DIR__ . '/../includes/stats.php';
 require_once __DIR__ . '/../includes/automation.php';
+require_once __DIR__ . '/../includes/contacts.php';   // the Tag / List filter: the whole report for those people
+$CF = contact_filter_from_get();
+[$cfSql, $cfP] = contact_filter_sql('r.contact_id', $CF);
 
 $cid  = (int) $CLIENT['id'];
 $fid  = (int) ($_GET['id'] ?? 0);
@@ -22,7 +25,7 @@ $P = viz_period($_GET, '90d');
 $CAP = 5000;      // the newest leads of the period; more than this is summarised from them
 $rows = db_all("SELECT r.id, r.contact_id, r.status, r.grade, r.score, r.context, r.created_at, r.updated_at, c.name, c.phone_e164
                   FROM flow_runs r JOIN contacts c ON c.id=r.contact_id
-                 WHERE r.flow_id=? AND r.created_at BETWEEN ? AND ? ORDER BY r.id DESC LIMIT " . ($CAP + 1), [$fid, $P['start'], $P['end']]);
+                 WHERE r.flow_id=? AND r.created_at BETWEEN ? AND ?{$cfSql} ORDER BY r.id DESC LIMIT " . ($CAP + 1), array_merge([$fid, $P['start'], $P['end']], $cfP));
 $capped = count($rows) > $CAP; if ($capped) array_pop($rows);
 
 // The outreach's delivery, per lead: the furthest any of its messages got, and why one failed.
@@ -85,7 +88,7 @@ $stageWords = fn(array $l) => $STAGES[$l['stage']][0] . ($l['stage'] === 'done' 
 if (($_GET['export'] ?? '') === '1') {
     $keys = array_keys($fieldVals);
     header('Content-Type: text/csv; charset=UTF-8');
-    header('Content-Disposition: attachment; filename="lead-qualifier-' . $fid . '-' . date('Y-m-d') . '.csv"');
+    header('Content-Disposition: attachment; filename="lead-qualifier-' . $fid . ($CF['tag'] !== '' ? '-tag-' . preg_replace('/[^A-Za-z0-9_-]+/', '_', $CF['tag']) : '') . ($CF['list'] ? '-list-' . $CF['list'] : '') . '-' . date('Y-m-d') . '.csv"');
     echo "\xEF\xBB\xBF" . implode(',', array_map('csv_cell', array_merge(['phone', 'name', 'stage', 'stopped_at_question', 'answers', 'last_reply', 'score', 'grade', 'started'], $keys, ['conversation']))) . "\n";
     foreach ($shown as $l) {
         echo implode(',', array_map('csv_cell', array_merge(
@@ -99,14 +102,15 @@ if (($_GET['export'] ?? '') === '1') {
 $page = max(1, (int) ($_GET['page'] ?? 1)); $per = 50; $pages = (int) max(1, ceil(count($shown) / $per));
 $pageRows = array_slice($shown, ($page - 1) * $per, $per);
 $qs = fn(array $o = []) => 'qualifier_report.php?' . http_build_query(array_filter(array_merge(['id' => $fid, 'p' => isset($_GET['p']) ? (string) $_GET['p'] : null, 'from' => isset($_GET['from']) ? (string) $_GET['from'] : null, 'to' => isset($_GET['to']) ? (string) $_GET['to'] : null,
-                                                                                               'stage' => $stageFilter, 'grade' => $gradeFilter], $o), fn($v) => $v !== null && $v !== ''));
+                                                                                               'stage' => $stageFilter, 'grade' => $gradeFilter, 'tag' => $CF['tag'], 'list' => $CF['list'] ?: null], $o), fn($v) => $v !== null && $v !== ''));
 $pct = fn(int $a, int $of) => $of > 0 ? round(100 * $a / $of) . '%' : '—';
 
-$actions = '<a class="btn btn-ghost btn-sm" href="' . e($qs(['export' => 1])) . '">Export CSV</a><a class="btn btn-ghost btn-sm" href="qualifier_edit.php?id=' . $fid . '">Edit</a>'
+$actions = '<a class="btn btn-ghost btn-sm" href="' . e($qs(['export' => 1])) . '">Export CSV' . ($CF['tag'] !== '' || $CF['list'] ? ' (filtered)' : '') . '</a><a class="btn btn-ghost btn-sm" href="qualifier_edit.php?id=' . $fid . '">Edit</a>'
          . '<a class="btn btn-ghost btn-sm" href="leads.php?flow=' . $fid . '">Leads</a><a class="btn btn-ghost btn-sm" href="qualifiers.php">← Lead Qualifier</a>';
 client_header('Report · ' . $flow['name'], 'qualifier', $CLIENT);
 page_head('Report — ' . $flow['name'], $actions);
 ?>
+<?= contact_filter_bar($cid, $CF, ['id' => $fid, 'p' => $_GET['p'] ?? '', 'from' => $_GET['from'] ?? '', 'to' => $_GET['to'] ?? '', 'stage' => $stageFilter, 'grade' => $gradeFilter], 'Report for') ?>
 <div class="stats-row">
   <a class="stat-tile" href="<?= e($qs(['stage' => '', 'grade' => ''])) ?>#leads"><span class="lbl">Leads</span><span class="val accent"><?= number_format($total) ?></span><span class="sub"><?= e(strtolower($P['label'])) ?></span></a>
   <div class="stat-tile"><span class="lbl">Delivered</span><span class="val"><?= number_format($n['delivered']) ?></span><span class="sub"><?= $pct($n['delivered'], $total) ?> of leads</span></div>
@@ -116,7 +120,7 @@ page_head('Report — ' . $flow['name'], $actions);
   <a class="stat-tile" href="<?= e($qs(['stage' => '', 'grade' => 'hot'])) ?>#leads"><span class="lbl">Hot leads</span><span class="val danger"><?= number_format($grades['hot']) ?></span><span class="sub"><?= number_format($grades['warm']) ?> warm · <?= number_format($grades['cold']) ?> cold</span></a>
 </div>
 
-<?= viz_period_bar($P, ['id' => $fid]) ?>
+<?= viz_period_bar($P, ['id' => $fid, 'tag' => $CF['tag'], 'list' => $CF['list'] ?: '']) ?>
 <?php if ($capped): ?><div class="alert info" style="font-size:12.5px">This period has more than <?= number_format($CAP) ?> leads; the report shows the newest <?= number_format($CAP) ?>. Choose a shorter period to see the rest.</div><?php endif; ?>
 
 <div class="viz-grid2" style="margin:16px 0">

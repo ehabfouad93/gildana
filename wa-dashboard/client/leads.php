@@ -60,10 +60,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'impor
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'upload_csv') {
     verify_csrf();
     if (empty($_FILES['leads_csv']['tmp_name']) || (int) ($_FILES['leads_csv']['error'] ?? 1) !== UPLOAD_ERR_OK) {
-        flash('Please choose a CSV file to upload.', 'error');
+        flash('Please choose a CSV or Excel file to upload.', 'error');
         redirect('leads.php?flow=' . $fid);
     }
-    $csv = (string) file_get_contents((string) $_FILES['leads_csv']['tmp_name']);
+    require_once __DIR__ . '/../includes/sheets_io.php';
+    $conv = sheet_to_csv((string) file_get_contents((string) $_FILES['leads_csv']['tmp_name']), (string) $_FILES['leads_csv']['name']);
+    if (!$conv['ok']) { flash('Upload failed: ' . $conv['error'], 'error'); redirect('leads.php?flow=' . $fid); }
+    $csv = $conv['csv'];
     $country = preg_replace('/\D+/', '', (string) ($_POST['import_country'] ?? ''));
     if ($country === '') {
         $scq = json_decode((string) $flow['source_config'], true) ?: [];
@@ -269,7 +272,7 @@ function grade_pill(?string $g): string {
 }
 
 $actions = '<button class="btn btn-primary btn-sm" onclick="document.getElementById(\'m-add\').classList.add(\'open\')">+ Add lead</button>'
-         . '<button class="btn btn-ghost btn-sm" onclick="document.getElementById(\'m-upload\').classList.add(\'open\')">&#8593; Upload CSV</button>'
+         . '<button class="btn btn-ghost btn-sm" onclick="document.getElementById(\'m-upload\').classList.add(\'open\')">&#8593; Upload CSV / Excel</button>'
          . '<form method="post" style="display:inline">' . csrf_field()
          . '<input type="hidden" name="action" value="import_now">'
          . '<button class="btn btn-ghost btn-sm">&#8635; Import now</button></form>'
@@ -437,7 +440,7 @@ page_head('Leads — ' . $flow['name'], $actions);
 <div class="modal-back" id="m-upload">
   <form class="modal" method="post" enctype="multipart/form-data"><?= csrf_field() ?><input type="hidden" name="action" value="upload_csv">
     <h2>Upload leads (CSV)</h2>
-    <div class="field"><span class="lbl">CSV file <span class="text-muted">(columns: phone, name)</span></span><input type="file" name="leads_csv" accept=".csv,.txt" required></div>
+    <div class="field"><span class="lbl">CSV or Excel file <span class="text-muted">(columns: phone, name)</span></span><input type="file" name="leads_csv" accept=".csv,.txt,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required></div>
     <div class="field"><span class="lbl">Country <span class="text-muted">(local numbers get this code)</span></span>
       <?php $qsc = json_decode((string) $flow['source_config'], true) ?: []; ?>
       <?= function_exists('country_picker_html')

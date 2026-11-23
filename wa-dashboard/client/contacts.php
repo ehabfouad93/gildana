@@ -177,6 +177,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_c
     }
 }
 
+/* ── The sample file for importing: the columns Revenect reads, with two example rows. ── */
+if (($_GET['sample'] ?? '') === '1') {
+    require_once __DIR__ . '/../includes/sheets_io.php';
+    xlsx_download('revenect-contacts-sample.xlsx', [
+        ['phone', 'name', 'email', 'tags', 'list', 'city'],
+        ['+201001234567', 'Ahmed Ali', 'ahmed@example.com', 'vip, porto golf', 'October offer', 'Cairo'],
+        ['01009876543', 'Mona Samir', '', 'new', 'October offer', 'Alexandria'],
+    ], [18, 20, 26, 22, 20, 14]);
+}
+
 /* ── Import (CSV or Excel) ──
    The same importer the CRM uses, so the two can never disagree about what counts as a phone
    number. It also now takes .xlsx, and reports each skipped row's reason instead of a count. */
@@ -193,10 +203,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'impor
         if (empty($read['ok'])) {
             $err = (string) $read['error'];
         } else {
+            // For the whole file: a tag on everyone, and a list (an existing one, or a new one by name).
+            $allTag = trim((string) ($_POST['import_tag'] ?? ''));
+            $toList = (int) ($_POST['import_list'] ?? 0);
+            if ($toList && !db_val("SELECT 1 FROM contact_lists WHERE id=? AND client_id=?", [$toList, $cid])) $toList = 0;
+            $newList = trim((string) ($_POST['import_new_list'] ?? ''));
+            if (($_POST['import_list'] ?? '') === 'new' && $newList !== '') {
+                $toList = (int) db_val("SELECT id FROM contact_lists WHERE client_id=? AND LOWER(name)=? LIMIT 1", [$cid, mb_strtolower($newList)])
+                       ?: db_insert("INSERT INTO contact_lists (client_id,name,created_at) VALUES (?,?,NOW())", [$cid, mb_substr($newList, 0, 160)]);
+            }
             $s = import_contacts($CLIENT, $read['header'], $read['rows'], import_guess_mapping($read['header']),
-                                 ['country' => $importCountry, 'crm' => false]);
+                                 ['country' => $importCountry, 'crm' => false, 'tags' => $allTag !== '' ? [$allTag] : [], 'list_id' => $toList]);
             $importSummary = ['total' => $s['total'], 'imported' => $s['added'], 'updated' => $s['updated'],
-                              'skipped' => $s['skipped'], 'problems' => $s['problems']];
+                              'skipped' => $s['skipped'], 'problems' => $s['problems'], 'new_lists' => $s['new_lists'] ?? [],
+                              'list' => $toList ? (string) db_val("SELECT name FROM contact_lists WHERE id=?", [$toList]) : '', 'tag' => $allTag];
         }
     }
 }
@@ -223,7 +243,7 @@ $list = db_all("SELECT * FROM contacts WHERE $where ORDER BY id DESC LIMIT $per 
 $pages = (int) max(1, ceil($totalContacts / $per));
 
 $actions = ($canExport ? '<a class="btn btn-ghost btn-sm" href="' . e($qs(['export' => '1'])) . '">Export CSV</a>' : '')
-         . '<button class="btn btn-ghost btn-sm" onclick="document.getElementById(\'m-import\').classList.add(\'open\')">Import CSV</button>'
+         . '<button class="btn btn-ghost btn-sm" onclick="document.getElementById(\'m-import\').classList.add(\'open\')">Import CSV / Excel</button>'
          . '<button class="btn btn-primary btn-sm" onclick="document.getElementById(\'m-add\').classList.add(\'open\')">+ Add Contact</button>';
 
 client_header('Contacts', 'contacts', $CLIENT);
@@ -231,7 +251,10 @@ page_head('Contacts', $actions);
 
 if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif;
 if ($importSummary): ?>
-  <div class="alert success">Import done — <?= (int) $importSummary['imported'] ?> added, <?= (int) $importSummary['updated'] ?> updated, <?= (int) $importSummary['skipped'] ?> skipped of <?= (int) $importSummary['total'] ?> rows.
+  <div class="alert success">Import done — <?= (int) $importSummary['imported'] ?> added, <?= (int) $importSummary['updated'] ?> updated, <?= (int) $importSummary['skipped'] ?> skipped of <?= (int) $importSummary['total'] ?> rows.<?php
+      if ($importSummary['tag'] !== '') echo ' Everyone tagged “' . e($importSummary['tag']) . '”.';
+      if ($importSummary['list'] !== '') echo ' Added to the list “' . e($importSummary['list']) . '”.';
+      if ($importSummary['new_lists']) echo ' New list' . (count($importSummary['new_lists']) > 1 ? 's' : '') . ' made from the file: ' . e(implode(', ', array_unique($importSummary['new_lists']))) . '.'; ?>
     <?php if (!empty($importSummary['problems'])): ?>
       <details style="margin-top:6px"><summary>What was skipped or changed, and why</summary>
         <ul style="margin:6px 0 0;padding-inline-start:18px;font-size:12.5px">
@@ -377,12 +400,24 @@ if ($importSummary): ?>
   <form class="modal" method="post" enctype="multipart/form-data">
     <?= csrf_field() ?>
     <input type="hidden" name="action" value="import_csv">
-    <h2>Import Contacts (CSV)</h2>
-    <p class="text-muted" style="font-size:12.5px;margin-bottom:14px">
-      First row = header. A <strong>phone</strong> column is required; <strong>name</strong> is optional.
-      Any extra columns are stored as personalization variables. Local numbers are normalized with the account country code<?= $country ? ' (+' . e($country) . ')' : '' ?>.
+    <h2>Import contacts</h2>
+    <p class="text-muted" style="font-size:12.5px;margin-bottom:10px">
+      An Excel (.xlsx) or CSV file, first row = column names. <strong>phone</strong> is required; <strong>name</strong>, <strong>email</strong>,
+      <strong>tags</strong> (comma separated) and <strong>list</strong> are read when present; any other column is kept for personalising messages ({{city}}).
+      Local numbers get the account's country code<?= $country ? ' (+' . e($country) . ')' : '' ?>.
     </p>
+    <a class="btn btn-ghost btn-sm" href="contacts.php?sample=1" style="margin-bottom:12px">&#8595; Download the sample Excel file</a>
     <div class="field"><span class="lbl">CSV or Excel file</span><input type="file" name="csv" accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required></div>
+    <div class="grid2" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div class="field"><span class="lbl">Tag everyone <span class="text-muted">(optional)</span></span><input name="import_tag" list="all-tags" maxlength="40" placeholder="e.g. October offer"></div>
+      <div class="field"><span class="lbl">Add everyone to a list <span class="text-muted">(optional)</span></span>
+        <select name="import_list" onchange="document.getElementById('imp-newlist').hidden=this.value!=='new'">
+          <option value="">— No list —</option>
+          <?php foreach ($lists as $l): ?><option value="<?= (int) $l['id'] ?>"><?= e((string) $l['name']) ?></option><?php endforeach; ?>
+          <option value="new">+ A new list…</option>
+        </select>
+        <input name="import_new_list" id="imp-newlist" maxlength="160" placeholder="Name of the new list" hidden style="margin-top:6px"></div>
+    </div>
     <div class="field"><span class="lbl">Country <span class="text-muted">(local numbers get this code; empty = account default<?= $country ? ' +' . e($country) : '' ?>)</span></span>
       <?= function_exists('country_picker_html')
             ? country_picker_html('import_country', '')

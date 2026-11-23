@@ -2052,3 +2052,8 @@ a.viz-kpi:hover { border-color: var(--brand); }
 .canvas .port { background: var(--white); border: 2.5px solid var(--c, var(--brand)); box-shadow: none; }
 .canvas .port:hover { background: var(--c, var(--brand)); }
 .canvas .node-ports .prow .port-out { right: -18px; }
+
+/* Tag / List filter on reports (includes/contacts.php contact_filter_bar) */
+.cf-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0 0 12px; }
+.cf-bar .cf-lbl { font-size: 12.5px; color: var(--muted); }
+.cf-bar select { width: auto; min-width: 150px; max-width: 240px; padding: 6px 10px; font-size: 13px; }

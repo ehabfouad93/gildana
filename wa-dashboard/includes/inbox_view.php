@@ -168,6 +168,10 @@ if (isset($CLIENT['id'])) { require_once __DIR__ . '/webchat.php'; if (webchat_r
       $IB_FROM = isset($CLIENT) && function_exists('inbox_from_options') ? inbox_from_options((int) $CLIENT['id']) : ['campaigns' => [], 'flows' => []];
       $IB_FROM_NOW = preg_match('/^[cf]\d+$/', (string) ($_GET['from'] ?? '')) ? (string) $_GET['from'] : '';
       $IB_HAS_LINES = count($IB_LINES) > 1 || $IB_OFF; $IB_HAS_FROM = $IB_FROM['campaigns'] || $IB_FROM['flows'];
+      /* Tag and List: the people with a tag, or in a list. */
+      $IB_TAGS = []; $IB_LISTS = [];
+      if (isset($CLIENT['id'])) { require_once __DIR__ . '/contacts.php'; $IB_TAGS = contact_tags((int) $CLIENT['id']); $IB_LISTS = db_all("SELECT id, name, (SELECT COUNT(*) FROM contact_list_members m WHERE m.list_id=l.id) n FROM contact_lists l WHERE client_id=? ORDER BY name", [(int) $CLIENT['id']]); }
+      $IB_HAS_FROM = $IB_HAS_FROM || $IB_TAGS || $IB_LISTS;
       $IB_SYNC = isset($CLIENT) && function_exists('inbox_sync_lines') && inbox_sync_lines($CLIENT) && (!function_exists('can_write') || can_write()); ?>
     <?php /* The choices live in these two (hidden) selects; the Filter panel below is drawn from them. */ ?>
     <?php if ($IB_HAS_LINES): ?>
@@ -185,9 +189,13 @@ if (isset($CLIENT['id'])) { require_once __DIR__ . '/webchat.php'; if (webchat_r
     </select>
     <input type="checkbox" id="ib-replied" hidden <?= !empty($_GET['replied']) ? 'checked' : '' ?>>
     <?php endif; ?>
+    <?php if ($IB_TAGS): ?><select id="ib-tag" hidden aria-hidden="true"><option value="">Any tag</option>
+      <?php foreach ($IB_TAGS as $t): ?><option value="<?= e((string) $t['tag']) ?>" data-sub="<?= (int) $t['n'] ?> contact<?= (int) $t['n'] === 1 ? '' : 's' ?>" <?= mb_strtolower((string) ($_GET['tag'] ?? '')) === mb_strtolower((string) $t['tag']) ? 'selected' : '' ?>><?= e((string) $t['tag']) ?></option><?php endforeach; ?></select><?php endif; ?>
+    <?php if ($IB_LISTS): ?><select id="ib-list" hidden aria-hidden="true"><option value="">Any list</option>
+      <?php foreach ($IB_LISTS as $l): ?><option value="<?= (int) $l['id'] ?>" data-sub="<?= (int) $l['n'] ?> contact<?= (int) $l['n'] === 1 ? '' : 's' ?>" <?= (int) ($_GET['list'] ?? 0) === (int) $l['id'] ? 'selected' : '' ?>><?= e((string) $l['name']) ?></option><?php endforeach; ?></select><?php endif; ?>
     <div class="ib-search" style="display:flex;gap:6px;padding-bottom:6px">
       <input type="text" id="ib-q" placeholder="Search name or number…" style="flex:1;min-width:0">
-      <?php if ($IB_HAS_LINES || $IB_HAS_FROM): ?><button type="button" id="ib-fbtn" class="btn btn-ghost btn-sm" style="white-space:nowrap" aria-haspopup="dialog" aria-expanded="false" title="Filter by number, campaign or automation">
+      <?php if ($IB_HAS_LINES || $IB_HAS_FROM): ?><button type="button" id="ib-fbtn" class="btn btn-ghost btn-sm" style="white-space:nowrap" aria-haspopup="dialog" aria-expanded="false" title="Filter by number, campaign, automation, tag or list">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" style="vertical-align:-2px"><path d="M3 5h18M6 12h12M10 19h4"/></svg> Filter<span id="ib-fcount" class="ib-fcount" hidden></span></button><?php endif; ?>
       <?php if ($IB_SYNC): ?><button type="button" id="ib-sync" class="btn btn-ghost btn-sm" style="white-space:nowrap" title="Bring in your linked phone's chats again — past messages and the real numbers WhatsApp has since revealed">&#8635; Sync</button><?php endif; ?></div>
     <div id="ib-chips" class="ib-chips" hidden></div>
@@ -195,7 +203,7 @@ if (isset($CLIENT['id'])) { require_once __DIR__ . '/webchat.php'; if (webchat_r
     <div id="ib-sync-st" class="text-muted" style="font-size:12px;padding:0 14px 6px" hidden></div>
     <?php if ($IB_HAS_LINES || $IB_HAS_FROM): ?>
     <div id="ib-fpanel" class="ib-fpanel" role="dialog" aria-label="Filter conversations" hidden>
-      <div class="ib-fhead"><input type="text" id="ib-fq" placeholder="Search numbers, campaigns, automations…" autocomplete="off">
+      <div class="ib-fhead"><input type="text" id="ib-fq" placeholder="Search numbers, campaigns, automations, tags, lists…" autocomplete="off">
         <button type="button" class="icon-btn" id="ib-fclose" title="Close" aria-label="Close">&#x2715;</button></div>
       <div id="ib-flist" class="ib-flist"></div>
       <div class="ib-ffoot">
@@ -319,7 +327,8 @@ async function loadThreads(){
   const q = encodeURIComponent(el('ib-q').value||'');
   const fs = el('ib-from-src') ? el('ib-from-src').value : '';
   const fr = fs && el('ib-replied') && el('ib-replied').checked ? '&replied=1' : '';
-  const r = await fetch(IB_URL+IB_SEP+'ajax=threads&q='+q+'&ch='+encodeURIComponent(ibFilter)+'&line='+encodeURIComponent(ibLineFilter)+(fs?'&from='+encodeURIComponent(fs):'')+fr); const d = await r.json();
+  const tg = el('ib-tag') && el('ib-tag').value ? '&tag='+encodeURIComponent(el('ib-tag').value) : '', ls = el('ib-list') && el('ib-list').value ? '&list='+encodeURIComponent(el('ib-list').value) : '';
+  const r = await fetch(IB_URL+IB_SEP+'ajax=threads&q='+q+'&ch='+encodeURIComponent(ibFilter)+'&line='+encodeURIComponent(ibLineFilter)+(fs?'&from='+encodeURIComponent(fs):'')+fr+tg+ls); const d = await r.json();
   if(!d.ok) return;
   ibSplit = !!d.split; ibSyncShow(d.sync);
   const box = el('ib-threads');
@@ -487,6 +496,7 @@ function ibFilterDraw(){
   const q = (el('ib-fq').value || '').trim().toLowerCase();
   const hit = o => !q || (o.label + ' ' + o.sub).toLowerCase().includes(q);
   const curLine = el('ib-line') ? el('ib-line').value : '', curFrom = el('ib-from-src') ? el('ib-from-src').value : '';
+  const curTag = el('ib-tag') ? el('ib-tag').value : '', curList = el('ib-list') ? el('ib-list').value : '';
   const opt = (sel, o, cur) => `<button type="button" class="ib-fopt${o.k===cur?' on':''}" data-sel="${sel}" data-k="${esc(o.k)}">${o.state ? `<i style="background:${ibDot(o.state)}"></i>` : ''}
       <span style="min-width:0"><b>${esc(o.label)}</b>${o.sub ? `<small>${esc(o.sub)}</small>` : ''}</span><span class="tk">✓</span></button>`;
   const sect = (title, sel, list, cur, key) => {
@@ -499,7 +509,9 @@ function ibFilterDraw(){
   };
   const h = sect('WhatsApp number', 'ib-line', ibOpts('ib-line'), curLine, 'n')
           + sect('Campaign', 'ib-from-src', ibOpts('ib-from-src', 'campaign'), curFrom, 'c')
-          + sect('Automation', 'ib-from-src', ibOpts('ib-from-src', 'flow'), curFrom, 'f');
+          + sect('Automation', 'ib-from-src', ibOpts('ib-from-src', 'flow'), curFrom, 'f')
+          + sect('Tag', 'ib-tag', ibOpts('ib-tag'), curTag, 't')
+          + sect('List', 'ib-list', ibOpts('ib-list'), curList, 'l');
   el('ib-flist').innerHTML = h || '<div class="ib-fempty">Nothing matches “' + esc(q) + '”.</div>';
   const rw = el('ib-freplied-wrap'); rw.hidden = !el('ib-from-src'); rw.classList.toggle('off', !curFrom);
   el('ib-freplied').disabled = !curFrom; el('ib-freplied').checked = !!curFrom && !!el('ib-replied') && el('ib-replied').checked;
@@ -510,6 +522,9 @@ function ibChips(){
   if (lo && lo.value) chips.push(['line', `<i style="background:${ibDot(lo.dataset.state)}"></i><span>${esc(lo.textContent.trim())}</span>`]);
   if (fo && fo.value) chips.push(['from', `<span>${fo.dataset.group==='campaign' ? 'Campaign' : 'Automation'}: ${esc(fo.textContent.trim())}</span>`]);
   if (fo && fo.value && el('ib-replied').checked) chips.push(['replied', '<span>Replied</span>']);
+  const to = el('ib-tag') && el('ib-tag').selectedOptions[0], lo2 = el('ib-list') && el('ib-list').selectedOptions[0];
+  if (to && to.value) chips.push(['tag', `<span>Tag: ${esc(to.textContent.trim())}</span>`]);
+  if (lo2 && lo2.value) chips.push(['list', `<span>List: ${esc(lo2.textContent.trim())}</span>`]);
   el('ib-chips').hidden = !chips.length;
   el('ib-chips').innerHTML = chips.map(([k, h]) => `<span class="ib-chip" data-chip="${k}">${h}<button type="button" title="Remove this filter" aria-label="Remove this filter">✕</button></span>`).join('');
   const c = el('ib-fcount'); if (c) { c.hidden = !chips.length; c.textContent = chips.length; }
@@ -528,7 +543,7 @@ if (el('ib-fbtn')) {
   el('ib-fclose').addEventListener('click', () => ibFilterOpen(false));
   el('ib-fdone').addEventListener('click', () => ibFilterOpen(false));
   el('ib-fq').addEventListener('input', ibFilterDraw);
-  el('ib-fclear').addEventListener('click', () => { if (el('ib-line')) el('ib-line').value = ''; if (el('ib-from-src')) el('ib-from-src').value = ''; ibFilterApply(); });
+  el('ib-fclear').addEventListener('click', () => { ['ib-line','ib-from-src','ib-tag','ib-list'].forEach(i => { if (el(i)) el(i).value = ''; }); ibFilterApply(); });
   el('ib-freplied').addEventListener('change', e => { el('ib-replied').checked = e.target.checked; ibFilterApply(); });
   el('ib-flist').addEventListener('click', e => {
     const more = e.target.closest('[data-more]'); if (more) { ibF.more[more.dataset.more] = true; ibFilterDraw(); return; }
@@ -539,7 +554,7 @@ if (el('ib-fbtn')) {
   el('ib-chips').addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
     const k = b.parentElement.dataset.chip;
-    if (k === 'line') el('ib-line').value = ''; else if (k === 'from') el('ib-from-src').value = ''; else el('ib-replied').checked = false;
+    if (k === 'line') el('ib-line').value = ''; else if (k === 'from') el('ib-from-src').value = ''; else if (k === 'tag') el('ib-tag').value = ''; else if (k === 'list') el('ib-list').value = ''; else el('ib-replied').checked = false;
     ibFilterApply();
   });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && ibF.open) ibFilterOpen(false); });

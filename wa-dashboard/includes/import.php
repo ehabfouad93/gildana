@@ -35,6 +35,8 @@ function import_fields(?int $clientId = null): array
         'ad'       => ['label' => 'Ad',               'guess' => ['ad_name', 'ad name', 'الإعلان']],
         'platform' => ['label' => 'Platform (facebook / instagram…)', 'guess' => ['platform', 'المنصة']],
         'qualification' => ['label' => 'Qualified (yes/no)', 'guess' => ['qualified', 'qualification', 'مؤهل']],
+        'tags'     => ['label' => 'Tags (comma separated)', 'guess' => ['tags', 'tag', 'labels', 'الوسوم', 'التاجات', 'تاج']],
+        'list'     => ['label' => 'List (comma separated)', 'guess' => ['list', 'lists', 'audience', 'القائمة', 'القوائم', 'ليست']],
     ];
     // The account's own fields can be filled from a column too.
     if ($clientId && function_exists('crm_fields')) {
@@ -255,7 +257,8 @@ function import_contacts(array $client, array $header, array $rows, array $map, 
     }
 
     $mapped = array_flip(array_filter($map, fn($v) => $v !== null && $v !== ''));
-    $sum = ['total' => 0, 'added' => 0, 'updated' => 0, 'skipped' => 0, 'leads' => 0, 'problems' => []];
+    $sum = ['total' => 0, 'added' => 0, 'updated' => 0, 'skipped' => 0, 'leads' => 0, 'problems' => [], 'new_lists' => []];
+    $listCache = [];
     $problem = function (int $line, string $why) use (&$sum) {
         if (count($sum['problems']) < 200) $sum['problems'][] = "Row {$line}: {$why}";
     };
@@ -371,6 +374,28 @@ function import_contacts(array $client, array $header, array $rows, array $map, 
                  $attrs ? json_encode($attrs, JSON_UNESCAPED_UNICODE) : null, $source]);
             $sum['added']++;
         }
+
+        /* Tags and lists: from the row's own columns, and the ones chosen for the whole file. */
+        $rowTags = array_merge(preg_split('/[,;|،]+/u', $col($r, 'tags')) ?: [], (array) ($opts['tags'] ?? []));
+        $rowTags = array_values(array_filter(array_map('trim', $rowTags), 'strlen'));
+        if ($rowTags) {
+            require_once __DIR__ . '/contacts.php';
+            $curT = (string) db_val("SELECT tags FROM contacts WHERE id=?", [$contactId]);
+            $nextT = tags_join(array_merge(tags_split($curT), $rowTags));
+            if ($nextT !== $curT) db_run("UPDATE contacts SET tags=? WHERE id=?", [$nextT, $contactId]);
+        }
+        $rowLists = array_values(array_filter(array_map('trim', preg_split('/[,;|،]+/u', $col($r, 'list')) ?: []), 'strlen'));
+        $listIds = array_filter([(int) ($opts['list_id'] ?? 0)]);
+        foreach ($rowLists as $ln) {
+            $key = mb_strtolower($ln);
+            if (!isset($listCache[$key])) {
+                $lid = (int) db_val("SELECT id FROM contact_lists WHERE client_id=? AND LOWER(name)=? LIMIT 1", [$cid, $key]);
+                if (!$lid) { $lid = db_insert("INSERT INTO contact_lists (client_id,name,created_at) VALUES (?,?,NOW())", [$cid, mb_substr($ln, 0, 160)]); $sum['new_lists'][] = $ln; }
+                $listCache[$key] = $lid;
+            }
+            $listIds[] = $listCache[$key];
+        }
+        foreach (array_unique($listIds) as $lid) db_run("INSERT IGNORE INTO contact_list_members (list_id,contact_id) VALUES (?,?)", [$lid, $contactId]);
 
         if (!$toCrm) continue;
 

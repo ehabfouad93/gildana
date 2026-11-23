@@ -223,7 +223,29 @@ function inbox_person(array &$r): void
  * automation (f<id>) — and, with $replied, only those who answered it. SQL on the contact `c`.
  * @return array{0:string, 1:array}
  */
+/** The Inbox's Tag / List filter for this request (set by the threads call). */
+function inbox_contact_filter(?array $set = null): array
+{
+    static $f = ['tag' => '', 'list' => 0];
+    if ($set !== null) $f = ['tag' => mb_substr(trim((string) ($set['tag'] ?? '')), 0, 60), 'list' => max(0, (int) ($set['list'] ?? 0))];
+    return $f;
+}
+
 function inbox_from_sql(int $clientId, string $from, bool $replied): array
+{
+    // Tag / List first: it applies with or without a campaign or automation picked.
+    $cf = inbox_contact_filter();
+    if ($cf['tag'] !== '' || $cf['list'] > 0) {
+        require_once __DIR__ . '/contacts.php';
+        if ($cf['list'] > 0 && !db_val("SELECT 1 FROM contact_lists WHERE id=? AND client_id=?", [$cf['list'], $clientId])) return [' AND 0', []];
+        [$cs, $cp] = contact_filter_sql('c.id', $cf);
+        [$fs, $fp] = inbox_from_sql_inner($clientId, $from, $replied);
+        return [$cs . $fs, array_merge($cp, $fp)];
+    }
+    return inbox_from_sql_inner($clientId, $from, $replied);
+}
+
+function inbox_from_sql_inner(int $clientId, string $from, bool $replied): array
 {
     if (!preg_match('/^([cf])(\d+)$/', $from, $m)) return ['', []];
     $id = (int) $m[2];
@@ -615,6 +637,7 @@ function inbox_handle_ajax(array $client): void
     if ($a === '') return;
 
     if ($a === 'threads') {
+        inbox_contact_filter(['tag' => (string) ($_GET['tag'] ?? ''), 'list' => (int) ($_GET['list'] ?? 0)]);
         json_out(['ok' => true, 'threads' => inbox_threads($cid, trim((string) ($_GET['q'] ?? '')), 200, (string) ($_GET['ch'] ?? ''), (string) ($_GET['line'] ?? ''),
                                                            (string) ($_GET['from'] ?? ''), !empty($_GET['replied'])),
                   'split' => inbox_split($client), 'sync' => inbox_sync_progress($client)]);

@@ -217,3 +217,63 @@ function tags_html(?string $raw, int $max = 3): string
     }
     return $html;
 }
+
+/* ───────────── Filtering by tag and list (reports, downloads, the Inbox) ───────────── */
+
+/** The tag and list picked on a page (?tag=…&list=…). */
+function contact_filter_from_get(): array
+{
+    return ['tag' => mb_substr(trim((string) ($_GET['tag'] ?? '')), 0, 60), 'list' => max(0, (int) ($_GET['list'] ?? 0))];
+}
+
+/**
+ * SQL that keeps only contacts with that tag and/or in that list. $idExpr is the contact id in
+ * the caller's query (e.g. "campaign_messages.contact_id", "r.contact_id", "c.id").
+ * @return array{0:string,1:array} " AND …" and its parameters ('' when nothing is picked)
+ */
+function contact_filter_sql(string $idExpr, array $f): array
+{
+    $sql = ''; $p = [];
+    $tag = mb_strtolower(trim((string) ($f['tag'] ?? '')));
+    if ($tag !== '') {
+        $sql .= " AND EXISTS (SELECT 1 FROM contacts kt WHERE kt.id={$idExpr} AND CONCAT(',', LOWER(REPLACE(kt.tags, ', ', ',')), ',') LIKE ?)";
+        $p[] = '%,' . addcslashes($tag, '%_\\') . ',%';
+    }
+    if ((int) ($f['list'] ?? 0) > 0) {
+        $sql .= " AND EXISTS (SELECT 1 FROM contact_list_members lm WHERE lm.contact_id={$idExpr} AND lm.list_id=?)";
+        $p[] = (int) $f['list'];
+    }
+    return [$sql, $p];
+}
+
+/** "&tag=…&list=…" for links that must keep the filter (paging, other filters, downloads). */
+function contact_filter_qs(array $f): string
+{
+    $q = '';
+    if (($f['tag'] ?? '') !== '') $q .= '&tag=' . rawurlencode((string) $f['tag']);
+    if ((int) ($f['list'] ?? 0) > 0) $q .= '&list=' . (int) $f['list'];
+    return $q;
+}
+
+/**
+ * The Tag / List filter: two pickers that apply at once. $keep: the page's other query
+ * parameters (id, status…), carried as they are.
+ */
+function contact_filter_bar(int $clientId, array $f, array $keep, string $label = 'Only people'): string
+{
+    $tags  = contact_tags($clientId);
+    $lists = db_all("SELECT id, name FROM contact_lists WHERE client_id=? ORDER BY name", [$clientId]);
+    if (!$tags && !$lists) return '';
+    $h = '<form method="get" class="cf-bar">';
+    foreach ($keep as $k => $v) if ($v !== '' && $v !== null && !in_array($k, ['tag', 'list', 'page'], true)) $h .= '<input type="hidden" name="' . e((string) $k) . '" value="' . e((string) $v) . '">';
+    $h .= '<span class="cf-lbl">' . e($label) . '</span>';
+    $h .= '<select name="tag" onchange="this.form.submit()" aria-label="Tag"><option value="">Any tag</option>';
+    foreach ($tags as $t) $h .= '<option value="' . e((string) $t['tag']) . '"' . (mb_strtolower((string) $t['tag']) === mb_strtolower((string) $f['tag']) ? ' selected' : '') . '>Tag: ' . e((string) $t['tag']) . '</option>';
+    $h .= '</select><select name="list" onchange="this.form.submit()" aria-label="List"><option value="">Any list</option>';
+    foreach ($lists as $l) $h .= '<option value="' . (int) $l['id'] . '"' . ((int) $l['id'] === (int) $f['list'] ? ' selected' : '') . '>List: ' . e((string) $l['name']) . '</option>';
+    $h .= '</select>';
+    if ($f['tag'] !== '' || $f['list'] > 0) {
+        $h .= '<a class="btn-link" href="?' . e(http_build_query(array_filter(array_diff_key($keep, ['tag' => 1, 'list' => 1, 'page' => 1]), fn($v) => $v !== '' && $v !== null))) . '">Clear</a>';
+    }
+    return $h . '<noscript><button class="btn btn-ghost btn-sm">Apply</button></noscript></form>';
+}

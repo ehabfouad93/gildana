@@ -2479,15 +2479,16 @@ function automation_ingest_flow(array $client, array $flow, int $maxRows = 500):
     $url = trim((string) ($sc['csv_url'] ?? ''));
     if ($url === '') { $res['error'] = 'No sheet chosen. Open the automation and pick one.'; return $res; }
 
-    $csv = auto_fetch_url(auto_normalize_sheet_url($url));
+    /* A Google Sheet, a CSV or Excel file in Google Drive or Dropbox, or any public link to one
+       (includes/sheets_io.php — https only, every redirect checked against private addresses). */
+    require_once __DIR__ . '/sheets_io.php';
+    $got = sheet_fetch_link($url);
     $sc['last_fetched_at'] = date('Y-m-d H:i:s');
     db_run("UPDATE flows SET source_config=? WHERE id=?", [json_encode($sc, JSON_UNESCAPED_UNICODE), (int) $flow['id']]);
-    if ($csv === null) { $res['error'] = "Couldn't read the sheet. Make sure it's Published to web as CSV and accessible to anyone with the link."; return $res; }
-    // Google returned an HTML page instead of CSV → the sheet isn't publicly readable.
-    if (preg_match('~^(?:\xEF\xBB\xBF)?\s*<(?:!doctype|html|\?xml)~i', $csv)) {
-        $res['error'] = "The sheet isn't shared publicly. In Google Sheets → Share → set \"Anyone with the link\" to Viewer, then paste the link again.";
-        return $res;
-    }
+    if (!$got['ok']) { $res['error'] = $got['error']; return $res; }
+    $conv = sheet_to_csv($got['bytes'], parse_url($url, PHP_URL_PATH) ?: '');
+    if (!$conv['ok']) { $res['error'] = $conv['error']; return $res; }
+    $csv = $conv['csv'];
     // Per-qualifier country overrides the account default; empty = auto-detect / account default.
     $country = trim((string) ($sc['country'] ?? '')) ?: (string) $client['default_country'];
     return automation_ingest_rows($client, $flow, $csv, $maxRows, $country);

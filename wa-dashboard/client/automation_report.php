@@ -2,6 +2,9 @@
 declare(strict_types=1);
 require __DIR__ . '/_init.php';
 require_once __DIR__ . '/../includes/stats.php';
+require_once __DIR__ . '/../includes/contacts.php';   // the Tag / List filter
+$CF = contact_filter_from_get();
+[$cfSql, $cfP] = contact_filter_sql('r.contact_id', $CF);
 
 $cid  = (int) $CLIENT['id'];
 $fid  = (int) ($_GET['id'] ?? 0);
@@ -37,7 +40,7 @@ $captured = function (array $r): array {
 };
 
 if (($_GET['export'] ?? '') === 'runs') {
-    $rows = db_all("SELECT r.*, c.phone_e164, c.name FROM flow_runs r JOIN contacts c ON c.id=r.contact_id WHERE r.flow_id=? ORDER BY r.id DESC", [$fid]);
+    $rows = db_all("SELECT r.*, c.phone_e164, c.name, c.tags ctags FROM flow_runs r JOIN contacts c ON c.id=r.contact_id WHERE r.flow_id=?{$cfSql} ORDER BY r.id DESC", array_merge([$fid], $cfP));
     // One column per captured answer, across all runs.
     $keys = [];
     foreach ($rows as $r) foreach (array_keys($captured($r)) as $k) $keys[$k] = true;
@@ -48,12 +51,12 @@ if (($_GET['export'] ?? '') === 'runs') {
         $ans[(int) $a['run_id']][] = (isset($steps[(int) $a['step_id']]) ? $steps[(int) $a['step_id']]['n'] . '. ' : '') . ($a['kind'] === 'button' ? '[button] ' : '') . $a['body'];
     }
     header('Content-Type: text/csv; charset=UTF-8');
-    header('Content-Disposition: attachment; filename="automation-' . $fid . '-runs.csv"');
-    echo "\xEF\xBB\xBF"; echo implode(',', array_map('csv_cell', array_merge(['phone', 'name', 'status', 'where', 'score', 'grade', 'created', 'answers'], $keys))) . "\n";
+    header('Content-Disposition: attachment; filename="automation-' . $fid . '-runs' . ($CF['tag'] !== '' ? '-tag-' . preg_replace('/[^A-Za-z0-9_-]+/', '_', $CF['tag']) : '') . ($CF['list'] ? '-list-' . $CF['list'] : '') . '.csv"');
+    echo "\xEF\xBB\xBF"; echo implode(',', array_map('csv_cell', array_merge(['phone', 'name', 'tags', 'status', 'where', 'score', 'grade', 'created', 'answers'], $keys))) . "\n";
     foreach ($rows as $r) {
         $cap = $captured($r);
         echo implode(',', array_map('csv_cell', array_merge(
-            [(string) $r['phone_e164'], (string) $r['name'], (string) $r['status'], $whereNow($r), (string) (int) $r['score'], (string) ($r['grade'] ?? ''), (string) $r['created_at'],
+            [(string) $r['phone_e164'], (string) $r['name'], (string) $r['ctags'], (string) $r['status'], $whereNow($r), (string) (int) $r['score'], (string) ($r['grade'] ?? ''), (string) $r['created_at'],
              implode(' | ', $ans[(int) $r['id']] ?? [])],
             array_map(fn($k) => (string) ($cap[$k] ?? ''), $keys)))) . "\n";
     }
@@ -70,8 +73,8 @@ $perStep = db_all(
 // Recent runs — or the people at one step (?at=): the ones who stopped or are waiting there.
 $atStep = (int) ($_GET['at'] ?? 0);
 $runs = $atStep && isset($steps[$atStep])
-    ? db_all("SELECT r.*, c.phone_e164, c.name FROM flow_runs r JOIN contacts c ON c.id=r.contact_id WHERE r.flow_id=? AND r.current_step_id=? AND r.status<>'completed' ORDER BY r.id DESC LIMIT 200", [$fid, $atStep])
-    : db_all("SELECT r.*, c.phone_e164, c.name FROM flow_runs r JOIN contacts c ON c.id=r.contact_id WHERE r.flow_id=? ORDER BY r.id DESC LIMIT 100", [$fid]);
+    ? db_all("SELECT r.*, c.phone_e164, c.name FROM flow_runs r JOIN contacts c ON c.id=r.contact_id WHERE r.flow_id=? AND r.current_step_id=? AND r.status<>'completed'{$cfSql} ORDER BY r.id DESC LIMIT 200", array_merge([$fid, $atStep], $cfP))
+    : db_all("SELECT r.*, c.phone_e164, c.name FROM flow_runs r JOIN contacts c ON c.id=r.contact_id WHERE r.flow_id=?{$cfSql} ORDER BY r.id DESC LIMIT 100", array_merge([$fid], $cfP));
 /* Step by step: who got there, who went on, who is still there, and what they answered. */
 $sStats = automation_step_stats($fid);
 $here = [];
@@ -103,7 +106,7 @@ $pc = db_row("SELECT COUNT(*) total, SUM(status='completed') completed, SUM(stat
                 FROM flow_runs WHERE flow_id=? AND created_at BETWEEN ? AND ?", [$fid, $P['start'], $P['end']]) ?: [];
 $grades = db_all("SELECT COALESCE(NULLIF(grade,''),'—') g, COUNT(*) n FROM flow_runs WHERE flow_id=? AND created_at BETWEEN ? AND ? GROUP BY g", [$fid, $P['start'], $P['end']]);
 
-$actions = '<a class="btn btn-ghost btn-sm" href="automation_edit.php?id=' . $fid . '">Edit</a><a class="btn btn-ghost btn-sm" href="automation_report.php?id=' . $fid . '&export=runs">Export CSV</a>';
+$actions = '<a class="btn btn-ghost btn-sm" href="automation_edit.php?id=' . $fid . '">Edit</a><a class="btn btn-ghost btn-sm" href="automation_report.php?id=' . $fid . '&export=runs' . e(contact_filter_qs($CF)) . '">Export CSV' . ($CF['tag'] !== '' || $CF['list'] ? ' (filtered)' : '') . '</a>';
 client_header('Report · ' . $flow['name'], 'automations', $CLIENT);
 page_head('Report — ' . $flow['name'], $actions);
 ?>
@@ -115,7 +118,7 @@ page_head('Report — ' . $flow['name'], $actions);
   <div class="stat-tile"><span class="lbl">Blocked</span><span class="val <?= (int) ($counts['blocked'] ?? 0) ? 'danger' : '' ?>"><?= (int) ($counts['blocked'] ?? 0) ?></span></div>
 </div>
 
-<?= viz_period_bar($P, ['id' => $fid]) ?>
+<?= viz_period_bar($P, ['id' => $fid, 'tag' => $CF['tag'], 'list' => $CF['list'] ?: '']) ?>
 <?= viz_card('Runs over time', viz_trend($fs['labels'], [['label' => 'Started', 'values' => $fs['runs'], 'slot' => 1], ['label' => 'Finished', 'values' => $fs['done'], 'slot' => 3]],
       ['aria' => 'Runs started and finished', 'x_label' => ucfirst($P['bucket']), 'empty' => 'No runs in this period.']),
     'People who entered this automation, by the ' . $P['bucket'] . ' they started (' . strtolower($P['label']) . ').', 'flow-trend') ?>
@@ -160,7 +163,8 @@ page_head('Report — ' . $flow['name'], $actions);
 
 <div class="card card-flush" id="runs">
   <div style="padding:16px 22px" class="row-between"><h2 style="border:0;padding:0;margin:0"><?= $atStep && isset($steps[$atStep]) ? 'People at step ' . e($stepLabel($atStep)) : 'Recent runs' ?></h2>
-    <?php if ($atStep): ?><a class="btn btn-ghost btn-sm" href="automation_report.php?id=<?= $fid ?>#runs">Show all runs</a><?php endif; ?></div>
+    <?php if ($atStep): ?><a class="btn btn-ghost btn-sm" href="automation_report.php?id=<?= $fid ?><?= e(contact_filter_qs($CF)) ?>#runs">Show all runs</a><?php endif; ?></div>
+  <div style="padding:0 22px"><?= contact_filter_bar($cid, $CF, ['id' => $fid, 'at' => $atStep ?: '']) ?></div>
   <div class="table-wrap"><table class="data">
     <thead><tr><th>Person</th><th>Where they are</th><th>Captured</th><th>Score</th><th>Started</th><th></th></tr></thead>
     <tbody>
