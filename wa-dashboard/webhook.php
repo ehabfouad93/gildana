@@ -160,6 +160,11 @@ foreach (($data['entry'] ?? []) as $entry) {
             $ts     = isset($st['timestamp']) ? date('Y-m-d H:i:s', (int) $st['timestamp']) : date('Y-m-d H:i:s');
             if ($wamid === '' || $status === '') continue;
 
+            // An automation holding its next step until this picture went out: carry on now.
+            if (in_array($status, ['sent', 'delivered', 'read', 'failed'], true) && function_exists('automation_media_sent')) {
+                try { automation_media_sent($wamid); } catch (Throwable $e) { error_log('webhook media_sent: ' . $e->getMessage()); }
+            }
+
             // Automation (flow) message delivery status — forward-only.
             if ($status === 'delivered') {
                 db_run("UPDATE flow_messages SET status='delivered' WHERE wa_message_id=? AND status='sent'", [$wamid]);

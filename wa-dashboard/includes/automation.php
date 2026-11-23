@@ -336,6 +336,20 @@ function automation_run_steps(array $client, array $contact, array $run, array $
             $cap  = auto_render((string) ($cfg['caption'] ?? ''), $contact, $ctx);
             if (!auto_send($client, $run, $step, $contact, 'image', fn() => channel_send_image($client, $to, $link, $cap), '🖼️ ' . ($cap !== '' ? $cap : 'image'))) break;
             $run['current_step_id'] = $step['next_step_id'];
+            /* Meta fetches the picture from its link before delivering it, while a text or buttons
+               sent right after go out at once — and arrive first. So on the Business API the next
+               step waits until Meta reports the picture sent (webhook.php → automation_media_sent),
+               or a minute at most (automation_tick). */
+            if ($step['next_step_id'] && !auto_dry_run() && !(function_exists('channel_route') && channel_route())
+                && !(function_exists('channel_is_personal') && channel_is_personal($client)) && db_has_column('flow_runs', 'await_wamid')) {
+                $wamid = (string) db_val("SELECT wa_message_id FROM flow_messages WHERE run_id=? AND step_id=? ORDER BY id DESC LIMIT 1", [(int) $run['id'], (int) $step['id']]);
+                if ($wamid !== '') {
+                    db_run("UPDATE flow_runs SET await_wamid=? WHERE id=?", [$wamid, (int) $run['id']]);
+                    $run['status'] = 'waiting_timer';
+                    $run['wait_until'] = date('Y-m-d H:i:s', time() + 60);
+                    break;
+                }
+            }
         } elseif ($type === 'template') {
             // A personal number has no approved templates, so the outreach node carries its own
             // text (and optional image) instead of a template id. Same node type either way, so
@@ -1090,10 +1104,32 @@ function automation_tick(int $limit = 100): int
         $client = auto_line_client($client, (string) ($run['line'] ?? '') ?: null);   // on the number the run started on
         $run['status'] = 'active';
         $run['wait_until'] = null;
+        if (!empty($run['await_wamid'])) db_run("UPDATE flow_runs SET await_wamid=NULL WHERE id=?", [(int) $run['id']]);
         automation_run_steps($client, $contact, $run, auto_ctx($run));
         $n++;
     }
     return $n;
+}
+
+/**
+ * Meta reported a message sent (or delivered, read, failed). An automation that was holding its
+ * next step until this picture went out carries on now — so the picture arrives first.
+ */
+function automation_media_sent(string $wamid): bool
+{
+    if ($wamid === '' || !db_has_column('flow_runs', 'await_wamid')) return false;
+    $run = db_row("SELECT * FROM flow_runs WHERE await_wamid=? AND status='waiting_timer' LIMIT 1", [$wamid]);
+    if (!$run) return false;
+    // Claim it, so the worker (or a second status for the same message) does not run it too.
+    if (db_run("UPDATE flow_runs SET await_wamid=NULL, wait_until=NULL, status='active' WHERE id=? AND await_wamid=? AND status='waiting_timer'", [(int) $run['id'], $wamid]) === 0) return false;
+    $client  = db_row("SELECT * FROM clients WHERE id=?", [(int) $run['client_id']]);
+    $contact = db_row("SELECT * FROM contacts WHERE id=?", [(int) $run['contact_id']]);
+    if (!$client || !$contact) return false;
+    $client = auto_line_client($client, (string) ($run['line'] ?? '') ?: null);
+    $run['status'] = 'active'; $run['wait_until'] = null; $run['await_wamid'] = null;
+    auto_replying(true);   // a conversation in progress, not cold outreach
+    try { automation_run_steps($client, $contact, $run, auto_ctx($run)); } finally { auto_replying(false); }
+    return true;
 }
 
 /**
