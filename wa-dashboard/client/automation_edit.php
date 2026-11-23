@@ -1687,11 +1687,11 @@ function cfgForm(n){ const c=n.config;
     case 'list_msg': {
       const opts = c.options && c.options.length ? c.options : [{title:'',description:''}];
       return `<label><span class="lbl">Message</span><textarea data-k="body" rows="2">${esc(c.body)}</textarea></label>
-        <label><span class="lbl">Button text</span><input data-k="button" value="${esc(c.button||'Choose')}" maxlength="20"></label>
-        <label><span class="lbl">List title</span><input data-k="header" value="${esc(c.header)}" maxlength="24" placeholder="Options"></label>
+        <label><span class="lbl">Button text</span><input data-k="button" value="${esc(c.button||'Choose')}" maxlength="20" data-limit></label>
+        <label><span class="lbl">List title</span><input data-k="header" value="${esc(c.header)}" maxlength="24" data-limit placeholder="Options"></label>
         <div class="lbl" style="margin-top:10px">Options (up to 10)</div>` +
         opts.map((o,i)=>`<div style="display:flex;gap:6px;margin-bottom:6px">
-            <input data-k="options.${i}.title" value="${esc(o.title)}" placeholder="Title" maxlength="24" style="flex:1">
+            <input data-k="options.${i}.title" value="${esc(o.title)}" placeholder="Title" maxlength="24" data-limit style="flex:1">
             <input data-k="options.${i}.description" value="${esc(o.description)}" placeholder="Description (optional)" maxlength="72" style="flex:1.4">
             ${opts.length>1?`<button type="button" class="btn-link" onclick="listDel(${i})">✕</button>`:''}
           </div>`).join('') +
@@ -1715,7 +1715,7 @@ function cfgForm(n){ const c=n.config;
   }
   return '';
 }
-function btnRow(b,i){ return `<div class="rowitem" style="display:grid;grid-template-columns:1fr .5fr auto;gap:6px;margin-bottom:6px"><input class="ri-title" placeholder="Label" maxlength="20" value="${esc(b.title)}"><input class="ri-points" type="number" placeholder="pts" value="${b.points||0}"><button type="button" class="icon-btn" onclick="this.closest('.rowitem').remove();syncRows()">✕</button></div>`; }
+function btnRow(b,i){ return `<div class="rowitem" style="display:grid;grid-template-columns:1fr .5fr auto;gap:6px;margin-bottom:6px"><input class="ri-title" placeholder="Label" maxlength="20" data-limit value="${esc(b.title)}"><input class="ri-points" type="number" placeholder="pts" value="${b.points||0}"><button type="button" class="icon-btn" onclick="this.closest('.rowitem').remove();syncRows()">✕</button></div>`; }
 function brRow(b,i){ return `<div class="rowitem" style="display:grid;grid-template-columns:1fr 1.3fr .5fr auto;gap:6px;margin-bottom:6px"><input class="ri-label" placeholder="Label" value="${esc(b.label)}"><input class="ri-desc" placeholder="When reply means…" value="${esc(b.description)}"><input class="ri-points" type="number" placeholder="pts" value="${b.points||0}"><button type="button" class="icon-btn" onclick="this.closest('.rowitem').remove();syncRows()">✕</button></div>`; }
 function addRow(kind){ const wrap=document.getElementById('rows'); if(!wrap) return; const max=kind==='buttons'?3:5; if(wrap.children.length>=max) return; wrap.insertAdjacentHTML('beforeend', kind==='buttons'?btnRow({},wrap.children.length):brRow({},wrap.children.length)); syncRows(); }
 function syncRows(){ // rebuild config buttons/branches from panel, re-render node (ports may change)

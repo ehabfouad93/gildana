@@ -1975,3 +1975,9 @@ a.viz-kpi:hover { border-color: var(--brand); }
 .sc-live-help { margin-top: 10px; }
 .sc-live-help summary { cursor: pointer; color: var(--brand); font-weight: 600; }
 .sc-live-help ol { padding-inline-start: 20px; line-height: 1.6; max-width: 80ch; }
+
+/* Length-limit hint under a short field (includes/view.php) */
+.mlc-tip { position: absolute; z-index: 9000; display: none; font-size: 11.5px; line-height: 1.3; padding: 3px 8px; border-radius: 6px;
+           background: var(--white); color: var(--muted, #6b7280); border: 1px solid var(--line); box-shadow: 0 2px 8px rgba(0,0,0,.08); pointer-events: none; max-width: 320px; }
+.mlc-tip.on { display: block; }
+.mlc-tip.full { color: #fff; background: var(--danger, #DC2626); border-color: transparent; }

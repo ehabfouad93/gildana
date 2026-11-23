@@ -163,13 +163,13 @@ function render(){
       <p class="text-muted" style="font-size:12.5px">WhatsApp writes the text itself: "<b>123456</b> is your verification code." Revenect fills the code when it sends.</p>
       <label class="mod-all"><input type="checkbox" data-a="security" ${a.security?'checked':''}> Add "For your security, do not share this code."</label>
       <div class="tb-row" style="margin-top:8px"><div class="field"><span class="lbl">Code expires after (minutes, optional)</span><input type="number" min="1" max="90" data-a="expiry" value="${esc(a.expiry||'')}" placeholder="10"></div>
-        <div class="field"><span class="lbl">Button text</span><input data-a="copy_text" maxlength="25" value="${esc(a.copy_text||'Copy code')}"></div></div>
+        <div class="field"><span class="lbl">Button text</span><input data-a="copy_text" maxlength="25" data-limit value="${esc(a.copy_text||'Copy code')}"></div></div>
       <div class="field"><span class="lbl">How the code is filled in</span><div class="tb-seg">
         ${[['COPY_CODE','Copy code','They tap the button and paste the code'],['ONE_TAP','One-tap autofill','Your Android app fills it in when they tap'],['ZERO_TAP','Zero-tap','Your Android app fills it in by itself']].map(([v,l,d])=>
           `<label><input type="radio" name="otp" value="${v}" ${otp===v?'checked':''} onchange="S.auth.otp_type='${v}';render()"><span><b>${l}</b><small>${d}</small></span></label>`).join('')}</div></div>
       ${otp!=='COPY_CODE' ? `<div class="tb-row"><div class="field"><span class="lbl">Android package name</span><input data-a="package" value="${esc(a.package||'')}" placeholder="com.example.app"></div>
         <div class="field"><span class="lbl">App signature hash</span><input data-a="signature" maxlength="11" value="${esc(a.signature||'')}" placeholder="K8a/AINcGX7"></div></div>
-        <div class="field"><span class="lbl">Autofill button text (optional)</span><input data-a="autofill_text" maxlength="25" value="${esc(a.autofill_text||'')}" placeholder="Autofill"></div>
+        <div class="field"><span class="lbl">Autofill button text (optional)</span><input data-a="autofill_text" maxlength="25" data-limit value="${esc(a.autofill_text||'')}" placeholder="Autofill"></div>
         ${otp==='ZERO_TAP' ? `<label class="mod-all"><input type="checkbox" data-a="zero_tap_terms" ${a.zero_tap_terms?'checked':''}> I accept WhatsApp's zero-tap terms (the code is filled in without the customer seeing it).</label>` : ''}` : ''}
     </div>`;
   } else {
@@ -184,7 +184,7 @@ function render(){
       </div>`;
     }
     if (k === 'lto') {
-      h += `<div class="card"><h2>Offer</h2><div class="field"><span class="lbl">Offer line</span><input data-o="text" maxlength="16" value="${esc(S.lto.text||'')}" placeholder="Ends soon!"><div class="tb-count">${(S.lto.text||'').length}/16</div></div>
+      h += `<div class="card"><h2>Offer</h2><div class="field"><span class="lbl">Offer line</span><input data-o="text" maxlength="16" data-limit value="${esc(S.lto.text||'')}" placeholder="Ends soon!"><div class="tb-count">${(S.lto.text||'').length}/16</div></div>
         <label class="mod-all"><input type="checkbox" data-o="has_expiration" ${S.lto.has_expiration?'checked':''}> Show a countdown to when the offer ends (the end time is set when sending)</label></div>`;
     }
     const max = k==='lto' ? 600 : 1024;
@@ -239,7 +239,7 @@ function mediaHtml(key, fmt, url){
 function buttonHtml(b, where, i, removable){
   const t = b.type; const p = `data-btn="${where}" data-i="${i}"`;
   let f = '';
-  if (t !== 'COPY_CODE') f += `<div class="field"><span class="lbl">Button text</span><input ${p} data-f="text" maxlength="25" value="${esc(b.text||'')}" placeholder="${t==='URL'?'Shop now':t==='PHONE_NUMBER'?'Call us':'Yes, interested'}"></div>`;
+  if (t !== 'COPY_CODE') f += `<div class="field"><span class="lbl">Button text</span><input ${p} data-f="text" maxlength="25" data-limit value="${esc(b.text||'')}" placeholder="${t==='URL'?'Shop now':t==='PHONE_NUMBER'?'Call us':'Yes, interested'}"></div>`;
   if (t === 'URL') f += `<div class="field"><span class="lbl">Web address</span><input ${p} data-f="url" value="${esc(b.url||'')}" placeholder="https://example.com/offer or …/{{1}}"></div>`
      + (/\{\{\s*1\s*\}\}$/.test(b.url||'') ? `<div class="field"><span class="lbl">Sample for {{1}}</span><input ${p} data-f="url_sample" value="${esc(b.url_sample||'')}" placeholder="summer26"></div>` : '');
   if (t === 'PHONE_NUMBER') f += `<div class="field"><span class="lbl">Phone number</span><input ${p} data-f="phone" value="${esc(b.phone||'')}" placeholder="+201001234567"></div>`;

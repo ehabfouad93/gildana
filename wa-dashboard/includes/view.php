@@ -723,6 +723,40 @@ function showToast(msg, err){
   t.className='toast show'+(err?' err':'');
   clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('show'),3200);
 }
+/* Global: a WhatsApp button or similar label (marked data-limit: a reply button is 20 characters, a
+   list row 24, a template button 25) shows how much is left while it is typed in, says so when the
+   limit is reached, and says so when pasted text was cut — instead of the browser silently refusing more. Fields drawn later (the
+   automation and template editors) are covered too: it listens on the document. */
+(function(){
+  var tip=null;
+  function lim(el){ var m=parseInt(el.getAttribute('maxlength')||'0',10);
+    return (el.hasAttribute && el.hasAttribute('data-limit') && m>0) ? m : 0; }
+  function show(el, extra){
+    var m=lim(el); if(!m) return;
+    if(!tip){ tip=document.createElement('div'); tip.className='mlc-tip'; tip.setAttribute('aria-live','polite'); document.body.appendChild(tip); }
+    var n=el.value.length, full=n>=m;
+    tip.textContent = extra || (full ? n+' / '+m+' — WhatsApp\'s limit, nothing more fits' : n+' / '+m);
+    tip.className='mlc-tip on'+(full||extra?' full':'');
+    var r=el.getBoundingClientRect();
+    tip.style.top=(window.scrollY+r.bottom+4)+'px';
+    var left=window.scrollX+(document.dir==='rtl'?r.right-tip.offsetWidth:r.left);
+    tip.style.left=Math.max(4,left)+'px';
+  }
+  function hide(){ if(tip) tip.className='mlc-tip'; }
+  document.addEventListener('focusin',function(e){ if(lim(e.target)) show(e.target); });
+  document.addEventListener('input',function(e){ if(lim(e.target)) show(e.target); });
+  document.addEventListener('focusout',function(e){ if(lim(e.target)) hide(); });
+  document.addEventListener('paste',function(e){
+    var el=e.target, m=lim(el); if(!m) return;
+    var add=((e.clipboardData||window.clipboardData)||{getData:function(){return '';}}).getData('text')||'';
+    var room=m-(el.value.length-((el.selectionEnd||0)-(el.selectionStart||0)));
+    if(add.length>room){
+      var msg='Cut to '+m+' characters — WhatsApp\'s limit here ('+(add.length-Math.max(0,room))+' left out)';
+      setTimeout(function(){ show(el,msg); if(typeof showToast==='function') showToast(msg,true); },0);
+    }
+  });
+  window.addEventListener('scroll',hide,true);
+})();
 /* Global: every pop-up gets a × close button; click-outside + Escape also close. */
 (function(){
   function enhance(){
