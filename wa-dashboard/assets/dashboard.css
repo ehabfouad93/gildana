@@ -2070,3 +2070,18 @@ a.viz-kpi:hover { border-color: var(--brand); }
 .canvas .edge-del { position: absolute; z-index: 4; width: 30px; height: 30px; margin: -15px 0 0 -15px; border-radius: 50%; border: 1px solid var(--line-strong); background: var(--white); color: var(--danger, #DC2626); display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 3px 10px rgba(26,22,18,.18); padding: 0; }
 .canvas .edge-del[hidden] { display: none; }
 .canvas .edge-del:hover { background: var(--danger, #DC2626); color: #fff; border-color: transparent; }
+
+/* Campaign: the lists to send to (several can be ticked) */
+.ls-pick { border: 1px solid var(--line-strong); border-radius: 10px; background: var(--white); max-height: 260px; overflow-y: auto; }
+.ls-pick .ls-q { border: 0; border-bottom: 1px solid var(--line); border-radius: 10px 10px 0 0; width: 100%; padding: 9px 12px; position: sticky; top: 0; background: var(--white); z-index: 1; }
+.ls-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--line); cursor: pointer; font-weight: 400; margin: 0; }
+.ls-row:last-child { border-bottom: 0; }
+.ls-row:hover { background: var(--paper); }
+.ls-row input { width: auto; margin: 0; }
+.ls-row .ls-n { flex: 1; min-width: 0; }
+.ls-row .ls-c { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.ls-row[hidden] { display: none; }
+.ls-row:has(input:checked) { background: rgba(124,58,237,.06); }
+.c-listf { display: inline-flex; }
+.c-listf select { width: auto; max-width: 240px; padding: 4px 10px; font-size: 12.5px; border-radius: 999px; min-height: 0; }
+.c-listf select.on { border-color: var(--brand); background: rgba(124,58,237,.08); font-weight: 600; }

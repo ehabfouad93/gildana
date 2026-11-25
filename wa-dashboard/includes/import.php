@@ -60,25 +60,57 @@ function import_read(string $path, string $filename): array
     $grid = $ext === 'xlsx' ? import_read_xlsx($path) : import_read_csv($path);
     if ($grid === null) return ['ok' => false, 'error' => 'That file could not be read. Upload a .csv or .xlsx file.'];
 
-    // Drop fully blank rows — spreadsheets are full of them at the bottom.
-    $grid = array_values(array_filter($grid, fn($r) => implode('', array_map('trim', $r)) !== ''));
+    $sheets = (int) ($grid['__sheets'] ?? 1);
+    unset($grid['__sheets']);
+    /* Drop fully blank rows — spreadsheets are full of them at the bottom — but remember which
+       row of the file each one was, so "Row 57: …" in the summary is row 57 in Excel too. */
+    $grid = array_filter($grid, fn($r) => implode('', array_map(fn($v) => trim((string) $v), $r)) !== '');
     if (count($grid) < 2) return ['ok' => false, 'error' => 'The file needs a header row and at least one row of data.'];
 
-    $header = array_map(fn($h) => trim((string) $h), array_shift($grid));
+    $keys   = array_keys($grid);
+    $header = array_map(fn($h) => trim((string) $h), $grid[array_shift($keys)]);
     $width  = count($header);
-    foreach ($grid as &$r) $r = array_slice(array_pad($r, $width, ''), 0, max($width, count($r)));
-    unset($r);
-    return ['ok' => true, 'header' => $header, 'rows' => $grid];
+    $rows = []; $lines = [];
+    foreach ($keys as $k) {
+        $r = $grid[$k];
+        $rows[]  = array_slice(array_pad($r, $width, ''), 0, max($width, count($r)));
+        $lines[] = (int) $k + 1;
+    }
+    return ['ok' => true, 'header' => $header, 'rows' => $rows, 'lines' => $lines, 'sheets' => $sheets];
+}
+
+/** Bytes in whatever text encoding Excel or a phone app saved → UTF-8. */
+function import_to_utf8(string $raw): string
+{
+    if (str_starts_with($raw, "\xFF\xFE")) return (string) mb_convert_encoding(substr($raw, 2), 'UTF-8', 'UTF-16LE');   // Excel "Unicode text"
+    if (str_starts_with($raw, "\xFE\xFF")) return (string) mb_convert_encoding(substr($raw, 2), 'UTF-8', 'UTF-16BE');
+    $raw = preg_replace('/^\xEF\xBB\xBF/', '', $raw);                       // Excel's UTF-8 BOM
+    if (mb_check_encoding($raw, 'UTF-8')) return $raw;
+    // Not UTF-8: an Arabic Windows CSV is almost always Windows-1256. Read as that rather than
+    // letting the database refuse the first name with an Arabic letter in it.
+    $conv = @iconv('WINDOWS-1256', 'UTF-8//IGNORE', $raw);
+    return $conv !== false ? $conv : (string) mb_convert_encoding($raw, 'UTF-8', 'ISO-8859-1');
 }
 
 function import_read_csv(string $path): ?array
 {
     $raw = @file_get_contents($path);
     if ($raw === false) return null;
-    $raw = preg_replace('/^\xEF\xBB\xBF/', '', $raw);                       // Excel's UTF-8 BOM
-    // Excel in some locales saves "CSV" separated by semicolons; decide from the header line.
+    $raw = import_to_utf8($raw);
+    // Old Mac line endings (\r only) would read as one enormous row.
+    if (!str_contains($raw, "\n") && str_contains($raw, "\r")) $raw = str_replace("\r", "\n", $raw);
+    // Excel in some locales saves "CSV" separated by semicolons, "Unicode text" by tabs, and
+    // sometimes writes a "sep=;" line first; decide from the header line.
     $first = strtok($raw, "\n") ?: '';
-    $sep = substr_count($first, ';') > substr_count($first, ',') ? ';' : ',';
+    if (preg_match('/^sep=(.)\s*$/i', $first, $sm)) {
+        $sep = $sm[1];
+        $raw = substr($raw, strpos($raw, "\n") + 1);
+    } else {
+        $counts = [',' => substr_count($first, ','), ';' => substr_count($first, ';'), "\t" => substr_count($first, "\t")];
+        arsort($counts);
+        $sep = (string) array_key_first($counts);
+        if ($counts[$sep] === 0) $sep = ',';
+    }
 
     $fh = fopen('php://temp', 'r+');
     fwrite($fh, $raw); rewind($fh);
@@ -142,8 +174,12 @@ function import_read_xlsx(string $path): ?array
     $sheet = @simplexml_load_string($sheetXml);
     if (!$sheet || !isset($sheet->sheetData)) return null;
 
-    $grid = [];
+    $grid = ['__sheets' => $wb && isset($wb->sheets) ? max(1, count($wb->sheets->sheet)) : 1];
+    $next = 0;
     foreach ($sheet->sheetData->row as $row) {
+        // Keyed by the row's own number (r="57"), so line numbers survive skipped rows.
+        $rowNo = (string) $row['r'] !== '' ? max($next, (int) $row['r'] - 1) : $next;
+        $next  = $rowNo + 1;
         $cells = [];
         $pos = 0;
         foreach ($row->c as $c) {
@@ -165,10 +201,10 @@ function import_read_xlsx(string $path): ?array
             }
             $cells[$idx] = $v;
         }
-        if (!$cells) { $grid[] = []; continue; }
+        if (!$cells) { $grid[$rowNo] = []; continue; }
         $line = array_fill(0, max(array_keys($cells)) + 1, '');
         foreach ($cells as $i => $v) $line[$i] = $v;
-        $grid[] = $line;
+        $grid[$rowNo] = $line;
     }
     return $grid;
 }
@@ -257,10 +293,15 @@ function import_contacts(array $client, array $header, array $rows, array $map, 
     }
 
     $mapped = array_flip(array_filter($map, fn($v) => $v !== null && $v !== ''));
-    $sum = ['total' => 0, 'added' => 0, 'updated' => 0, 'skipped' => 0, 'leads' => 0, 'problems' => [], 'new_lists' => []];
+    $sum = ['total' => 0, 'added' => 0, 'updated' => 0, 'skipped' => 0, 'leads' => 0, 'problems' => [], 'more_problems' => 0,
+            'repeated' => 0, 'new_lists' => []];
     $listCache = [];
+    $seen = [];                                                 // phone → first row it was on, in this file
+    $lines = (array) ($opts['lines'] ?? []);
+    @set_time_limit(max(300, (int) ceil(count($rows) / 40)));   // a big sheet must not stop half way
     $problem = function (int $line, string $why) use (&$sum) {
         if (count($sum['problems']) < 200) $sum['problems'][] = "Row {$line}: {$why}";
+        else $sum['more_problems']++;
     };
     $col = fn(array $r, string $f) => isset($map[$f]) && $map[$f] !== '' ? trim((string) ($r[(int) $map[$f]] ?? '')) : '';
     /* No country chosen and none on the account: the country most of this file's numbers are
@@ -272,7 +313,7 @@ function import_contacts(array $client, array $header, array $rows, array $map, 
     $importId = (int) ($opts['import_id'] ?? 0);
 
     foreach ($rows as $n => $r) {
-        $line = $n + 2;                                         // +1 for the header, +1 for 1-based
+        $line = (int) ($lines[$n] ?? $n + 2);                   // the row number in the file itself
         $sum['total']++;
 
         /* Update mode: change leads the account already has, found by phone or by code. Nothing
@@ -365,6 +406,15 @@ function import_contacts(array $client, array $header, array $rows, array $map, 
             }
         }
 
+        /* The same number twice in one file is one person. Say so — otherwise "1,000 rows"
+           turning into 950 contacts looks like 50 went missing. */
+        $isRepeat = isset($seen[$phone]);
+        if ($isRepeat) {
+            $sum['repeated']++;
+            $problem($line, "+{$phone} is also on row {$seen[$phone]} — merged into one contact.");
+        } else {
+            $seen[$phone] = $line;
+        }
         $existing = db_row("SELECT * FROM contacts WHERE client_id=? AND phone_e164=?", [$cid, $phone]);
         if ($existing) {
             // Fill in what we learned; never blank out a name or email we already had.
@@ -373,7 +423,7 @@ function import_contacts(array $client, array $header, array $rows, array $map, 
                            attributes=COALESCE(?, attributes) WHERE id=?",
                    [$name, $email, $merged ? json_encode($merged, JSON_UNESCAPED_UNICODE) : null, (int) $existing['id']]);
             $contactId = (int) $existing['id'];
-            $sum['updated']++;
+            if (!$isRepeat) $sum['updated']++;
         } else {
             $contactId = db_insert("INSERT INTO contacts (client_id,phone_e164,name,email,attributes,opt_in_status,source,created_at)
                                     VALUES (?,?,?,?,?, 'in', ?, NOW())",
@@ -466,4 +516,21 @@ function import_contacts(array $client, array $header, array $rows, array $map, 
         if (($note = $col($r, 'note')) !== '') crm_add_note($client, $contactId, $note, $by);
     }
     return $sum;
+}
+
+/**
+ * One sentence that adds up to every row of the file, so nothing looks lost: what was added,
+ * what already existed, what repeated a number further up, and what was left out (and why).
+ */
+function import_summary_line(array $sum, int $sheets = 1): string
+{
+    $f = fn(int $n) => number_format($n);
+    $parts = [$f((int) $sum['added']) . ' new'];
+    if ((int) $sum['updated'])  $parts[] = $f((int) $sum['updated']) . ' already in your contacts (updated)';
+    if ((int) ($sum['repeated'] ?? 0)) $parts[] = $f((int) $sum['repeated']) . ' repeated a number from an earlier row (merged)';
+    if ((int) $sum['skipped'])  $parts[] = $f((int) $sum['skipped']) . ' left out — see the rows below';
+    $s = 'All ' . $f((int) $sum['total']) . ' rows of the file: ' . implode(', ', $parts) . '.';
+    if ($sheets > 1) $s .= " Only the first sheet was read — this file has {$sheets}. Put everyone on one sheet, or import each sheet as its own file.";
+    if ((int) ($sum['more_problems'] ?? 0)) $s .= ' ' . $f((int) $sum['more_problems']) . ' more rows with a note are not listed.';
+    return $s;
 }

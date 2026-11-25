@@ -12,15 +12,10 @@ $fromLine = (string) ($_POST['line'] ?? $_GET['from'] ?? '');
 if (!isset($fromOpts[$fromLine])) $fromLine = isset($fromOpts[wa_line_default($CLIENT)]) ? wa_line_default($CLIENT) : (string) (array_key_first($fromOpts) ?? '');
 $fromKind = $fromLine !== '' ? (wa_lines($CLIENT, true)[$fromLine]['kind'] ?? 'cloud') : (channel_is_personal($CLIENT) ? 'personal' : 'cloud');
 
-/* ── AJAX: opted-in recipient count for a list ── */
+/* ── AJAX: how many people the chosen lists reach — opted in, with a number, once each ── */
 if (isset($_GET['count'])) {
-    $lid = (int) $_GET['count'];
-    $n = (int) db_val(
-        "SELECT COUNT(*) FROM contact_list_members m JOIN contacts c ON c.id=m.contact_id
-          WHERE m.list_id=? AND c.client_id=? AND c.opt_in_status='in'",
-        [$lid, $cid]
-    );
-    json_out(['count' => $n]);
+    $ids = array_map('intval', explode(',', (string) $_GET['count']));
+    json_out(['count' => campaign_audience($cid, $ids, true)]);
 }
 
 $templates = db_all("SELECT * FROM templates WHERE client_id=? AND status='APPROVED' ORDER BY wa_name", [$cid]);
@@ -60,6 +55,7 @@ if (($copyId = (int) ($_GET['copy'] ?? 0)) > 0) {
             'name'        => campaign_copy_name((string) $src['name'], $cid),
             'template_id' => (int) $src['template_id'],
             'list_id'     => (int) $src['list_id'],
+            'list_ids'    => campaign_list_ids($src),
             'body_text'   => (string) $src['body_text'],
             'body_media'  => (string) ($vm['header_media'] ?? ''),
             'fields'      => $vm,
@@ -79,7 +75,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
     verify_csrf();
     $name       = trim((string) ($_POST['name'] ?? ''));
     $templateId = (int) ($_POST['template_id'] ?? 0);
-    $listId     = (int) ($_POST['list_id'] ?? 0);
+    // One list or several: everyone on them, once each.
+    $listIds    = array_values(array_unique(array_filter(array_map('intval', (array) ($_POST['list_ids'] ?? [$_POST['list_id'] ?? 0])))));
+    if ($listIds) $listIds = array_map('intval', array_column(db_all("SELECT id FROM contact_lists WHERE client_id=? AND id IN (" . implode(',', $listIds) . ")", [$cid]), 'id'));
+    $listId     = (int) ($listIds[0] ?? 0);
     // A personal number has no approved templates — the campaign carries its own text.
     $isPersonal = $fromKind === 'personal';
     $bodyText   = trim((string) ($_POST['body_text'] ?? ''));
@@ -134,7 +133,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
     if ($name === '')                      $err = $err ?: 'Enter a campaign name.';
     elseif ($isPersonal && $bodyText === '') $err = $err ?: 'Write the message you want to send.';
     elseif (!$isPersonal && !$template)      $err = $err ?: 'Choose an approved template.';
-    elseif (!$list)                          $err = $err ?: 'Choose an audience list.';
+    elseif (!$list)                          $err = $err ?: 'Choose at least one list to send to.';
 
     // ── Build the FULL field config from POST (header media/text/location, body vars,
     //    dynamic buttons) so templates with an image header send correctly.
@@ -208,14 +207,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
     }
 
     if (!$err) {
-        $recipients = db_all(
-            "SELECT c.* FROM contact_list_members m JOIN contacts c ON c.id=m.contact_id
-              WHERE m.list_id=? AND c.client_id=? AND c.opt_in_status='in'
-                AND c.phone_e164 IS NOT NULL AND c.phone_e164 <> ''",   // Messenger/Instagram people with no number yet
-            [$listId, $cid]
-        );
+        // Messenger/Instagram people with no number yet are left out; someone on two lists gets one message.
+        $recipients = campaign_audience($cid, $listIds);
         if (!$recipients) {
-            $err = 'That list has no opted-in contacts to message.';
+            $err = count($listIds) > 1 ? 'Those lists have no opted-in contacts to message.' : 'That list has no opted-in contacts to message.';
         } else {
             $pdo = db();
             $pdo->beginTransaction();
@@ -236,6 +231,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
                     db_run("UPDATE campaigns SET follow_buttons=? WHERE id=?", [json_encode($followButtons, JSON_UNESCAPED_UNICODE), $campaignId]);
                 }
                 if ($fromLine !== '' && wa_lines_ready()) db_run("UPDATE campaigns SET line=? WHERE id=?", [$fromLine, $campaignId]);
+                if (count($listIds) > 1 && db_has_column('campaigns', 'list_ids')) db_run("UPDATE campaigns SET list_ids=? WHERE id=?", [json_encode($listIds), $campaignId]);
 
                 $ins = $pdo->prepare(
                     "INSERT INTO campaign_messages (campaign_id,client_id,contact_id,phone_e164,rendered_components,status,updated_at)
@@ -370,13 +366,17 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
   <div class="card">
     <h2>3 · Audience &amp; Timing</h2>
     <div class="field">
-      <span class="lbl">Send to List</span>
-      <select name="list_id" id="list_id" required onchange="onList()">
-        <option value="">— choose a list —</option>
+      <span class="lbl">Send to lists <span class="text-muted">(one or more — someone on two lists gets one message)</span></span>
+      <?php $picked = array_map('intval', (array) ($_POST['list_ids'] ?? ($copy['list_ids'] ?? []))); ?>
+      <div class="ls-pick" id="ls-pick">
+        <?php if (count($lists) > 6): ?><input type="search" class="ls-q" id="ls-q" placeholder="Search lists…" aria-label="Search lists"><?php endif; ?>
+        <div class="ls-rows">
         <?php foreach ($lists as $l): ?>
-          <option value="<?= (int) $l['id'] ?>" <?= (int) ($copy['list_id'] ?? 0) === (int) $l['id'] ? 'selected' : '' ?>><?= e((string) $l['name']) ?> (<?= (int) $l['members'] ?> members)</option>
+          <label class="ls-row"><input type="checkbox" name="list_ids[]" value="<?= (int) $l['id'] ?>" <?= in_array((int) $l['id'], $picked, true) ? 'checked' : '' ?>>
+            <span class="ls-n"><?= e((string) $l['name']) ?></span><span class="ls-c"><?= number_format((int) $l['members']) ?> members</span></label>
         <?php endforeach; ?>
-      </select>
+        </div>
+      </div>
       <div class="hint" id="reach-hint"></div>
     </div>
     <div class="field">
@@ -664,15 +664,30 @@ function bindUpload(){
     }catch(e){ st.textContent='⚠ Upload failed'; }
   });
 })();
-async function onList(){
-  const lid = document.getElementById('list_id').value;
-  if(!lid){ reach=0; updateCost(); document.getElementById('reach-hint').textContent=''; return; }
-  const r = await fetch('campaign_new.php?count='+lid);
-  const d = await r.json();
-  reach = d.count||0;
-  document.getElementById('reach-hint').textContent = reach+' opted-in contact(s) will receive this.';
-  updateCost();
+/* The lists picked → how many people that reaches. One count at a time, after the clicking
+   stops: a slow answer for an earlier choice can never overwrite the one for the current. */
+let listSeq = 0, listT = null;
+function pickedLists(){ return [...document.querySelectorAll('#ls-pick input[name="list_ids[]"]:checked')].map(i => i.value); }
+function onList(){
+  clearTimeout(listT);
+  const ids = pickedLists(), hint = document.getElementById('reach-hint');
+  if(!ids.length){ reach=0; updateCost(); hint.textContent='Choose at least one list.'; return; }
+  hint.textContent = 'Counting…';
+  listT = setTimeout(async () => {
+    const my = ++listSeq;
+    try {
+      const r = await fetch('campaign_new.php?count='+ids.join(',')); const d = await r.json();
+      if(my !== listSeq) return;                 // a newer choice is on its way
+      reach = d.count||0;
+      hint.textContent = reach.toLocaleString()+' opted-in contact'+(reach===1?'':'s')+' will receive this'+(ids.length>1?' (from '+ids.length+' lists, each person once).':'.');
+      updateCost();
+    } catch(e){ if(my === listSeq) hint.textContent = 'Could not count — check your connection.'; }
+  }, 250);
 }
+document.getElementById('ls-pick').addEventListener('change', onList);
+const lsQ = document.getElementById('ls-q');
+if(lsQ) lsQ.addEventListener('input', () => { const q = lsQ.value.trim().toLowerCase();
+  document.querySelectorAll('#ls-pick .ls-row').forEach(r => r.hidden = q && !r.textContent.toLowerCase().includes(q)); });
 /* A personal number has no 24-hour window, so the warning below only concerns Cloud API
    accounts. Sent from PHP so the two never disagree about which channel this client is on. */
 const ON_CLOUD = <?= $PERSONAL ? 'false' : 'true' ?>;

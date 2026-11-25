@@ -114,7 +114,7 @@ function sheet_to_csv(string $bytes, string $nameHint = ''): array
     if (str_starts_with($bytes, "\xD0\xCF\x11\xE0")) return ['ok' => false, 'csv' => '', 'error' => 'That is an old-style .xls file. In Excel choose File → Save As → "Excel Workbook (.xlsx)" or "CSV", then use that.'];
     $r = sheet_parse_bytes($bytes, $nameHint);
     if (empty($r['ok'])) return ['ok' => false, 'csv' => '', 'error' => (string) ($r['error'] ?? 'The file could not be read. Use a .csv or .xlsx file.')];
-    return ['ok' => true, 'csv' => sheet_rows_to_csv((array) $r['header'], (array) $r['rows']), 'error' => ''];
+    return ['ok' => true, 'csv' => sheet_rows_to_csv((array) $r['header'], (array) $r['rows']), 'error' => '', 'sheets' => (int) ($r['sheets'] ?? 1)];
 }
 
 /**

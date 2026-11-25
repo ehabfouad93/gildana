@@ -82,6 +82,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'stage_id' => (int) ($_POST['stage_id'] ?? 0) ?: null,
                     'extras'   => !empty($_POST['extras']),
                     'data_type'=> (string) ($_POST['data_type'] ?? 'cold'),
+                    'lines'    => $read['lines'] ?? [],
                     'country'  => preg_replace('/\D+/', '', (string) ($_POST['country'] ?? '')) ?: (string) ($CLIENT['default_country'] ?? ''),
                 ]);
                 if ($importId) db_run("UPDATE crm_imports SET total=?, added=?, updated=?, leads=?, skipped=?, problems=? WHERE id=?",
@@ -199,6 +200,7 @@ if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif; ?>
       <div class="stat-tile"><span class="lbl">New leads</span><span class="val accent"><?= number_format($summary['leads']) ?></span></div>
       <div class="stat-tile"><span class="lbl">Skipped</span><span class="val"><?= number_format($summary['skipped']) ?></span></div>
     </div>
+    <p class="text-muted" style="font-size:13px"><?= e(import_summary_line($summary, (int) ($read['sheets'] ?? 1))) ?></p>
     <?php if ($summary['problems']): ?>
       <h2 style="margin-top:14px">Worth a look</h2>
       <ul style="font-size:13px;padding-inline-start:18px"><?php foreach ($summary['problems'] as $p): ?><li><?= e($p) ?></li><?php endforeach; ?></ul>

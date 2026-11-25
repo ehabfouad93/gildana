@@ -153,7 +153,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save'
             $r = automation_ingest_rows($CLIENT, $fresh, $conv['csv'], 5000, trim((string) ($scq['country'] ?? '')) ?: (string) ($CLIENT['default_country'] ?? ''));
             if ($r['error'] !== '') { flash('Saved, but the file could not be imported: ' . $r['error'], 'error'); redirect('qualifier_edit.php?id=' . $id); }
             if (function_exists('trigger_worker')) trigger_worker();
-            $msg .= " From the file: {$r['imported']} new · {$r['skipped']} already in this qualifier · {$r['invalid']} invalid number(s) of {$r['rows']} rows." . ($fresh['status'] === 'active' ? ' Outreach is sending in the background.' : ' They are messaged once the qualifier is switched on.');
+            $msg .= ' From the file — ' . automation_ingest_summary($r) . (($conv['sheets'] ?? 1) > 1 ? " Only the first sheet was read — this file has {$conv['sheets']}." : '') . ($fresh['status'] === 'active' ? ' Outreach is sending in the background.' : ' They are messaged once the qualifier is switched on.');
         }
         flash($msg);
         redirect('qualifier_edit.php?id=' . $id);

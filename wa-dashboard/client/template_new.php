@@ -138,7 +138,10 @@ function cardTypes(){ return (S && S.cards && S.cards[0] ? S.cards[0].buttons.ma
 const BTN = {QUICK_REPLY:'Quick reply', URL:'Visit website', PHONE_NUMBER:'Call phone number', COPY_CODE:'Copy offer code'};
 
 /* ── the form, drawn from S; every input writes back into S and redraws the preview ── */
+/* Which sample boxes the form needs: it is redrawn only when this changes. */
+function varKey(){ return JSON.stringify([varsIn(S.header.text), varsIn(S.body.text), S.cards.map(c=>varsIn(c.text)), S.buttons.map(b=>/\{\{1\}\}$/.test(b.url||'')), S.cards.map(c=>c.buttons.map(b=>/\{\{1\}\}$/.test(b.url||'')))]); }
 function render(){
+  render.lastKey = varKey();
   const m = $('tb-main'); const k = S.kind; const cat = S.category;
   let h = '';
   h += `<div class="card"><h2>Basics</h2>
@@ -267,26 +270,37 @@ async function upload(key, input){
     render();
   } catch (e) { st.textContent = 'Upload failed.'; }
 }
-document.addEventListener('input', e => {
-  const t = e.target, d = t.dataset; let redraw = false;
+/* Typing must never be interrupted. Each key only updates the state, the counter and the
+   preview; the form is redrawn only when a {{n}} appears or goes (its sample boxes change), and
+   never in the middle of a composition — phone keyboards compose every word, and redrawing the
+   field under them drops or doubles letters. */
+function onField(e){
+  const t = e.target, d = t.dataset || {}; let redraw = false;
+  const composing = e.isComposing;
   if (d.k) S[d.k] = t.type==='checkbox' ? t.checked : t.value;
-  else if (d.h) S.header[d.h] = t.value, redraw = true;
+  else if (d.h) { S.header[d.h] = t.value; redraw = 'soft'; }
   else if (d.b) { S.body[d.b] = t.value; redraw = 'soft'; }
   else if (d.o) S.lto[d.o] = t.type==='checkbox' ? t.checked : t.value;
   else if (d.a) S.auth[d.a] = t.type==='checkbox' ? t.checked : t.value;
   else if (d.c !== undefined) { S.cards[+d.c][d.f] = t.value; redraw = 'soft'; }
   else if (d.s) { const tgt = d.s==='h' ? S.header : d.s==='b' ? S.body : S.cards[+d.s.slice(1)]; (tgt.samples = tgt.samples||[])[+d.i] = t.value; }
   else if (d.btn) { const list = d.btn==='buttons' ? S.buttons : S.cards[+d.btn.slice(4)].buttons; list[+d.i][d.f] = t.value; if (d.f==='url') redraw = 'soft'; }
+  if (composing) { const cnt0 = t.parentElement && t.parentElement.querySelector('.tb-count'); if (cnt0 && t.maxLength > 0) cnt0.textContent = t.value.length + '/' + t.maxLength; schedulePreview(); return; }
   if (d.k === 'name') { const v = t.value.toLowerCase().replace(/[\s-]+/g,'_').replace(/[^a-z0-9_]/g,''); if (v !== t.value) { const p = t.selectionStart; t.value = v; S.name = v; t.selectionStart = t.selectionEnd = Math.min(p, v.length); } }
   // Redraw when the set of variables (and so the sample boxes) changed; keep the caret where it was.
-  if (redraw) { const key = JSON.stringify([varsIn(S.header.text), varsIn(S.body.text), S.cards.map(c=>varsIn(c.text)), S.buttons.map(b=>/\{\{1\}\}$/.test(b.url||'')), S.cards.map(c=>c.buttons.map(b=>/\{\{1\}\}$/.test(b.url||'')))]);
-    if (redraw === true || key !== render.lastKey) { render.lastKey = key; const sel = [t.dataset.b, t.dataset.c, t.dataset.f, t.dataset.btn, t.dataset.i, t.dataset.h, t.selectionStart]; render();
+  if (redraw) { const key = varKey();
+    if (key !== render.lastKey) { const sel = [t.dataset.b, t.dataset.c, t.dataset.f, t.dataset.btn, t.dataset.i, t.dataset.h, t.selectionStart, t.selectionEnd, t.scrollTop]; const wy = window.scrollY; render();
       const q = sel[0] ? `[data-b="${sel[0]}"]` : sel[1] !== undefined ? `[data-c="${sel[1]}"][data-f="${sel[2]}"]` : sel[3] ? `[data-btn="${sel[3]}"][data-i="${sel[4]}"][data-f="${sel[2]}"]` : sel[5] ? `[data-h="${sel[5]}"]` : null;
-      const el2 = q && document.querySelector(q); if (el2) { el2.focus(); try { el2.selectionStart = el2.selectionEnd = sel[6]; } catch(_){} } return; } }
+      const el2 = q && document.querySelector(q); if (el2) { el2.focus({preventScroll:true}); try { el2.selectionStart = sel[6]; el2.selectionEnd = sel[7]; el2.scrollTop = sel[8]; } catch(_){} }
+      window.scrollTo(window.scrollX, wy); return; } }
   // Counters and preview without redrawing (so typing is not interrupted).
   const cnt = t.parentElement && t.parentElement.querySelector('.tb-count'); if (cnt && t.maxLength > 0) cnt.textContent = t.value.length + '/' + t.maxLength;
-  preview();
-});
+  schedulePreview();
+}
+let previewQueued = false;
+function schedulePreview(){ if (previewQueued) return; previewQueued = true; requestAnimationFrame(() => { previewQueued = false; preview(); }); }
+document.addEventListener('input', onField);
+document.addEventListener('compositionend', e => { if (e.target.closest && e.target.closest('#tb-main')) onField({target: e.target, isComposing: false}); });
 
 /* ── the preview: the same components Meta gets ── */
 function comps(){

@@ -51,7 +51,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'impor
         flash('Import failed: ' . $r['error'], 'error');
     } else {
         trigger_worker();
-        flash("Imported {$r['imported']} new · {$r['skipped']} already in this qualifier · {$r['invalid']} invalid number(s) of {$r['rows']} rows. Outreach is sending in the background.");
+        flash(automation_ingest_summary($r) . (($conv['sheets'] ?? 1) > 1 ? " Only the first sheet was read — this file has {$conv['sheets']}." : '') . ' Outreach is sending in the background.', ($r['invalid'] || ($r['over'] ?? 0)) ? 'warn' : 'success');
     }
     redirect('leads.php?flow=' . $fid);
 }
@@ -77,7 +77,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'uploa
         flash('Upload failed: ' . $r['error'], 'error');
     } else {
         trigger_worker();
-        flash("Imported {$r['imported']} new · {$r['skipped']} already in this qualifier · {$r['invalid']} invalid number(s) of {$r['rows']} rows. Outreach is sending in the background.");
+        flash(automation_ingest_summary($r) . (($conv['sheets'] ?? 1) > 1 ? " Only the first sheet was read — this file has {$conv['sheets']}." : '') . ' Outreach is sending in the background.', ($r['invalid'] || ($r['over'] ?? 0)) ? 'warn' : 'success');
     }
     redirect('leads.php?flow=' . $fid);
 }

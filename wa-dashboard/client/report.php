@@ -2,6 +2,7 @@
 declare(strict_types=1);
 require __DIR__ . '/_init.php';
 require_once __DIR__ . '/../includes/charts.php';
+require_once __DIR__ . '/../includes/campaign.php';   // campaign_list_names
 require_once __DIR__ . '/../includes/sms.php';   // sms_error_explain for SMS campaigns
 require_once __DIR__ . '/../includes/inbox.php'; // replies.php: who answered the campaign
 require_once __DIR__ . '/../includes/contacts.php'; // the Tag / List filter
@@ -31,7 +32,8 @@ if (($_GET['export'] ?? '') === '1') {
                            status,wa_message_id,error_title,sent_at,delivered_at,read_at{$rcol}, (SELECT k.name FROM contacts k WHERE k.id=contact_id) cname,
                            (SELECT k.tags FROM contacts k WHERE k.id=contact_id) ctags FROM campaign_messages WHERE campaign_id=? AND $exF{$cfSql} ORDER BY id", array_merge([$id], $cfP));
     header('Content-Type: text/csv; charset=UTF-8');
-    header('Content-Disposition: attachment; filename="campaign-' . $id . ($CF['tag'] !== '' ? '-tag-' . preg_replace('/[^A-Za-z0-9_-]+/', '_', $CF['tag']) : '') . ($CF['list'] ? '-list-' . $CF['list'] : '') . '-' . date('Y-m-d') . '.csv"');
+    $stF = preg_replace('/[^a-z]/', '', (string) ($_GET['status'] ?? ''));
+    header('Content-Disposition: attachment; filename="campaign-' . $id . ($stF !== '' ? '-' . $stF : '') . ($CF['tag'] !== '' ? '-tag-' . preg_replace('/[^A-Za-z0-9_-]+/', '_', $CF['tag']) : '') . ($CF['list'] ? '-list-' . $CF['list'] : '') . '-' . date('Y-m-d') . '.csv"');
     echo "\xEF\xBB\xBF";
     echo "phone,name,tags,status,wa_message_id,error,sent_at,delivered_at,read_at,replied_at,reply\n";
     foreach ($rows as $r) {
@@ -87,7 +89,14 @@ $messages = db_all("SELECT campaign_messages.*, (SELECT COALESCE(NULLIF(k.name,'
 $social = in_array((string) ($camp['channel'] ?? 'whatsapp'), ['messenger', 'instagram'], true);
 $pages = (int) max(1, ceil($msgTotal / $per));
 
-$actions = '<a class="btn btn-ghost btn-sm" href="report.php?id=' . $id . '&export=1' . ($statusFilter !== '' ? '&status=' . urlencode($statusFilter) : '') . e(contact_filter_qs($CF)) . '">Export CSV' . ($CF['tag'] !== '' || $CF['list'] ? ' (filtered)' : '') . '</a><a class="btn btn-ghost btn-sm" href="campaigns.php">← Campaigns</a>';
+/* With a filter on, both downloads are offered: just what the filter shows, or everyone. */
+$isFiltered = isset($filterSql[$statusFilter]) || $CF['tag'] !== '' || $CF['list'];
+$allTotal = $isFiltered ? (int) db_val("SELECT COUNT(*) FROM campaign_messages WHERE campaign_id=?", [$id]) : $msgTotal;
+$actions = ($isFiltered
+        ? '<a class="btn btn-primary btn-sm" href="report.php?id=' . $id . '&export=1' . (isset($filterSql[$statusFilter]) ? '&status=' . urlencode($statusFilter) : '') . e(contact_filter_qs($CF)) . '" title="Only the messages the filter shows">Export filtered (' . number_format($msgTotal) . ')</a>'
+        . '<a class="btn btn-ghost btn-sm" href="report.php?id=' . $id . '&export=1" title="Every message of this campaign, ignoring the filter">Export all (' . number_format($allTotal) . ')</a>'
+        : '<a class="btn btn-ghost btn-sm" href="report.php?id=' . $id . '&export=1">Export CSV (' . number_format($allTotal) . ')</a>')
+    . '<a class="btn btn-ghost btn-sm" href="campaigns.php">← Campaigns</a>';
 client_header('Report · ' . $camp['name'], 'campaigns', $CLIENT);
 ?>
 <div class="page-head">
@@ -103,7 +112,8 @@ client_header('Report · ' . $camp['name'], 'campaigns', $CLIENT);
   <?php else: ?>
   Template <strong><?= e((string) ($camp['template_name'] ?? '—')) ?></strong> ·
   <?php endif; ?>
-  List <strong><?= e((string) ($camp['list_name'] ?? '—')) ?></strong> ·
+  <?php $lnames = function_exists('campaign_list_names') ? campaign_list_names($camp) : (string) ($camp['list_name'] ?? ''); ?>
+  <?= count(campaign_list_ids($camp)) > 1 ? 'Lists' : 'List' ?> <strong><?= e($lnames !== '' ? $lnames : '—') ?></strong> ·
   Created <?= e(date('d M Y, H:i', strtotime((string) $camp['created_at']))) ?>
 </p>
 

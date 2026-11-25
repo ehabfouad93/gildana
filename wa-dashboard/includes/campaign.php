@@ -207,3 +207,37 @@ function campaign_copy_name(string $name, int $clientId): string
     for ($n = 2; in_array($try, $taken, true) && $n < 200; $n++) $try = $fit(" (copy {$n})");
     return $try;
 }
+
+/** The lists a campaign went to (ids): list_ids when it has several, else list_id. */
+function campaign_list_ids(array $camp): array
+{
+    $ids = array_values(array_filter(array_map('intval', (array) (json_decode((string) ($camp['list_ids'] ?? ''), true) ?: []))));
+    if (!$ids && (int) ($camp['list_id'] ?? 0) > 0) $ids = [(int) $camp['list_id']];
+    return $ids;
+}
+
+/** Their names, for screens: "October offer, Golf VIP". */
+function campaign_list_names(array $camp): string
+{
+    $ids = campaign_list_ids($camp);
+    if (!$ids) return '';
+    $names = db_all("SELECT id, name FROM contact_lists WHERE id IN (" . implode(',', $ids) . ")");
+    $by = array_column($names, 'name', 'id');
+    return implode(', ', array_filter(array_map(fn($i) => (string) ($by[$i] ?? ''), $ids), 'strlen'));
+}
+
+/**
+ * Everyone opted in on these lists, once each (someone on two lists gets one message).
+ * Only people with a WhatsApp number.
+ */
+function campaign_audience(int $clientId, array $listIds, bool $countOnly = false)
+{
+    $ids = array_values(array_unique(array_filter(array_map('intval', $listIds))));
+    if (!$ids) return $countOnly ? 0 : [];
+    $in = implode(',', array_fill(0, count($ids), '?'));
+    $where = "c.client_id=? AND c.opt_in_status='in' AND c.phone_e164 IS NOT NULL AND c.phone_e164 <> ''
+              AND EXISTS (SELECT 1 FROM contact_list_members m WHERE m.contact_id=c.id AND m.list_id IN ($in))";
+    $p = array_merge([$clientId], $ids);
+    return $countOnly ? (int) db_val("SELECT COUNT(*) FROM contacts c WHERE $where", $p)
+                      : db_all("SELECT c.* FROM contacts c WHERE $where ORDER BY c.id", $p);
+}

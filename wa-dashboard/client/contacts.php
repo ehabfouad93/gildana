@@ -213,11 +213,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'impor
                        ?: db_insert("INSERT INTO contact_lists (client_id,name,created_at) VALUES (?,?,NOW())", [$cid, mb_substr($newList, 0, 160)]);
             }
             $s = import_contacts($CLIENT, $read['header'], $read['rows'], import_guess_mapping($read['header']),
-                                 ['country' => $importCountry, 'crm' => false, 'tags' => $allTag !== '' ? [$allTag] : [], 'list_id' => $toList]);
+                                 ['country' => $importCountry, 'crm' => false, 'tags' => $allTag !== '' ? [$allTag] : [], 'list_id' => $toList, 'lines' => $read['lines'] ?? []]);
             $importSummary = ['total' => $s['total'], 'imported' => $s['added'], 'updated' => $s['updated'],
                               'skipped' => $s['skipped'], 'problems' => $s['problems'], 'new_lists' => $s['new_lists'] ?? [],
                               'list' => $toList ? (string) db_val("SELECT name FROM contact_lists WHERE id=?", [$toList]) : '', 'tag' => $allTag,
-                              'guess' => (string) ($s['country_guess'] ?? '')];
+                              'guess' => (string) ($s['country_guess'] ?? ''), 'line' => import_summary_line($s, (int) ($read['sheets'] ?? 1))];
         }
     }
 }
@@ -230,15 +230,16 @@ $off   = ($page - 1) * $per;
 
 $tagQ = trim((string) ($_GET['tag'] ?? ''));
 $optQ = in_array(($_GET['opt'] ?? ''), ['in', 'out'], true) ? (string) $_GET['opt'] : '';
+$listQ = max(0, (int) ($_GET['list'] ?? 0));
 
 // The same helper the bulk actions use, so what you see and what "select everything
 // matching" acts on can never be two different sets.
-[$where, $params] = contact_selection_where($cid, ['scope' => 'filter', 'q' => $q, 'tag' => $tagQ, 'opt' => $optQ]);
+[$where, $params] = contact_selection_where($cid, ['scope' => 'filter', 'q' => $q, 'tag' => $tagQ, 'opt' => $optQ, 'list' => $listQ]);
 $allTags = contact_tags($cid);
-$lists   = db_all("SELECT id, name FROM contact_lists WHERE client_id=? ORDER BY name", [$cid]);
-$filtered = $q !== '' || $tagQ !== '' || $optQ !== '';
+$lists   = db_all("SELECT l.id, l.name, (SELECT COUNT(*) FROM contact_list_members m WHERE m.list_id=l.id) n FROM contact_lists l WHERE l.client_id=? ORDER BY l.name", [$cid]);
+$filtered = $q !== '' || $tagQ !== '' || $optQ !== '' || $listQ > 0;
 $qs = fn(array $over = []) => 'contacts.php?' . http_build_query(array_filter(
-        ['q' => $q, 'tag' => $tagQ, 'opt' => $optQ] + $over, fn($v) => $v !== '' && $v !== null));
+        array_merge(['q' => $q, 'tag' => $tagQ, 'opt' => $optQ, 'list' => $listQ ?: null], $over), fn($v) => $v !== '' && $v !== null));
 $totalContacts = (int) db_val("SELECT COUNT(*) FROM contacts WHERE $where", $params);
 $list = db_all("SELECT * FROM contacts WHERE $where ORDER BY id DESC LIMIT $per OFFSET $off", $params);
 $pages = (int) max(1, ceil($totalContacts / $per));
@@ -252,7 +253,7 @@ page_head('Contacts', $actions);
 
 if ($err): ?><div class="alert error"><?= e($err) ?></div><?php endif;
 if ($importSummary): ?>
-  <div class="alert success">Import done — <?= (int) $importSummary['imported'] ?> added, <?= (int) $importSummary['updated'] ?> updated, <?= (int) $importSummary['skipped'] ?> skipped of <?= (int) $importSummary['total'] ?> rows.<?php
+  <div class="alert <?= $importSummary['skipped'] ? 'warn' : 'success' ?>">Import done. <?= e($importSummary['line']) ?><?php
       if ($importSummary['tag'] !== '') echo ' Everyone tagged “' . e($importSummary['tag']) . '”.';
       if ($importSummary['list'] !== '') echo ' Added to the list “' . e($importSummary['list']) . '”.';
       if ($importSummary['guess'] !== '') echo ' Numbers written without a country code were taken as +' . e($importSummary['guess']) . ', like most of the file.';
@@ -271,6 +272,7 @@ if ($importSummary): ?>
       <input type="search" name="q" value="<?= e($q) ?>" placeholder="Search name or number…">
       <?php if ($tagQ !== ''): ?><input type="hidden" name="tag" value="<?= e($tagQ) ?>"><?php endif; ?>
       <?php if ($optQ !== ''): ?><input type="hidden" name="opt" value="<?= e($optQ) ?>"><?php endif; ?>
+      <?php if ($listQ): ?><input type="hidden" name="list" value="<?= (int) $listQ ?>"><?php endif; ?>
       <button class="btn btn-ghost btn-sm" type="submit">Search</button>
     </form>
     <span class="text-muted" style="font-size:12.5px">
@@ -280,8 +282,18 @@ if ($importSummary): ?>
 
   <?php /* Tags as filters. Clicking one is how you get from "everyone" to "everyone tagged
            hot", which is where the bulk actions become worth having. */ ?>
-  <?php if ($allTags || $filtered): ?>
+  <?php if ($allTags || $filtered || $lists): ?>
     <div class="c-tags">
+      <?php if ($lists): ?>
+        <form method="get" class="c-listf">
+          <?php foreach (['q' => $q, 'tag' => $tagQ, 'opt' => $optQ] as $hk => $hv) if ($hv !== '') echo '<input type="hidden" name="' . $hk . '" value="' . e($hv) . '">'; ?>
+          <select name="list" onchange="this.form.submit()" aria-label="Filter by list" class="<?= $listQ ? 'on' : '' ?>">
+            <option value="">All lists</option>
+            <?php foreach ($lists as $l): ?><option value="<?= (int) $l['id'] ?>" <?= (int) $l['id'] === $listQ ? 'selected' : '' ?>>List: <?= e((string) $l['name']) ?> (<?= (int) $l['n'] ?>)</option><?php endforeach; ?>
+          </select><noscript><button class="btn btn-ghost btn-sm">Go</button></noscript>
+        </form>
+        <span class="c-sep"></span>
+      <?php endif; ?>
       <a class="tag-chip filt <?= $tagQ === '' ? 'on' : '' ?>" href="<?= e($qs(['tag' => null, 'page' => null])) ?>">All</a>
       <?php foreach (array_slice($allTags, 0, 24) as $t): ?>
         <a class="tag-chip filt <?= strcasecmp($tagQ, $t['tag']) === 0 ? 'on' : '' ?>"
@@ -474,7 +486,7 @@ if ($importSummary): ?>
 const CSRF = <?= json_encode(csrf_token()) ?>;
 /* The filter the page is currently showing. "Select all matching" sends this instead of
    thousands of ids, so the browser never has to carry the whole set. */
-const FILTER = <?= json_encode(['q' => $q, 'tag' => $tagQ, 'opt' => $optQ]) ?>;
+const FILTER = <?= json_encode(['q' => $q, 'tag' => $tagQ, 'opt' => $optQ, 'list' => $listQ]) ?>;
 const TOTAL  = <?= (int) $totalContacts ?>;
 
 async function post(data){

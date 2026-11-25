@@ -99,6 +99,11 @@ function contact_selection_where(int $clientId, array $post): array
         if ($q !== '')   { $sql .= " AND (phone_e164 LIKE ? OR name LIKE ?)"; $params[] = "%$q%"; $params[] = "%$q%"; }
         if ($tag !== '') { $sql .= " AND FIND_IN_SET(?, tags)";               $params[] = $tag; }
         if ($opt === 'in' || $opt === 'out') { $sql .= " AND opt_in_status = ?"; $params[] = $opt; }
+        // A list: its members (the list must be this account's).
+        if (($lid = (int) ($post['list'] ?? 0)) > 0) {
+            $sql .= " AND EXISTS (SELECT 1 FROM contact_list_members lm JOIN contact_lists ll ON ll.id=lm.list_id WHERE lm.contact_id=contacts.id AND lm.list_id=? AND ll.client_id=?)";
+            $params[] = $lid; $params[] = $clientId;
+        }
         return [$sql, $params];
     }
 

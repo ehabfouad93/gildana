@@ -2489,7 +2489,9 @@ function auto_col_index(array $cols, array $map, string $key, array $aliases): ?
  */
 function automation_ingest_flow(array $client, array $flow, int $maxRows = 500): array
 {
-    $res = ['imported' => 0, 'skipped' => 0, 'invalid' => 0, 'rows' => 0, 'error' => ''];
+    $res = ['imported' => 0, 'skipped' => 0, 'invalid' => 0, 'repeated' => 0, 'over' => 0, 'rows' => 0, 'error' => '', 'notes' => []];
+    $seen = [];
+    $line = 1;
     $sc  = json_decode((string) $flow['source_config'], true) ?: [];
 
     // Preferred path: the client connected their Google account and picked this sheet, so we
@@ -2541,7 +2543,9 @@ function automation_ingest_flow(array $client, array $flow, int $maxRows = 500):
  */
 function automation_ingest_rows(array $client, array $flow, string $csv, int $maxRows = 500, string $country = ''): array
 {
-    $res = ['imported' => 0, 'skipped' => 0, 'invalid' => 0, 'rows' => 0, 'error' => ''];
+    $res = ['imported' => 0, 'skipped' => 0, 'invalid' => 0, 'repeated' => 0, 'over' => 0, 'rows' => 0, 'error' => '', 'notes' => []];
+    $seen = [];
+    $line = 1;
     $sc  = json_decode((string) $flow['source_config'], true) ?: [];
 
     /* Parse as a real CSV stream. Splitting on newlines first silently destroyed any row
@@ -2571,13 +2575,24 @@ function automation_ingest_rows(array $client, array $flow, string $csv, int $ma
     }
     $cid = (int) $client['id'];
 
+    @set_time_limit(300);
     while (($row = fgetcsv($fh)) !== false) {
+        $line++;
         // fgetcsv yields [null] for a blank line.
         if ($row === [null] || (count($row) === 1 && trim((string) $row[0]) === '')) continue;
-        if ($res['imported'] >= $maxRows) break;
+        // Past the cap: counted, so the summary says how many were left for next time.
+        if ($res['imported'] >= $maxRows) { $res['over']++; continue; }
         $res['rows']++;
-        $phone = normalize_phone((string) ($row[$phoneIdx] ?? ''), $country, $hint);
-        if ($phone === '') { $res['invalid']++; continue; }
+        $rawPh = trim((string) ($row[$phoneIdx] ?? ''));
+        $phone = normalize_phone($rawPh, $country, $hint);
+        if ($phone === '') {
+            $res['invalid']++;
+            if (count($res['notes']) < 15) $res['notes'][] = "Row {$line}: " . ($rawPh === '' ? 'no phone number' : "\"{$rawPh}\" is not a number we can place");
+            continue;
+        }
+        // The same number twice in the file is one lead.
+        if (isset($seen[$phone])) { $res['repeated']++; continue; }
+        $seen[$phone] = true;
         $name  = $nameIdx !== null ? trim((string) ($row[$nameIdx] ?? '')) : '';
 
         // Find-or-create the contact (don't skip just because it exists elsewhere).
@@ -2600,8 +2615,23 @@ function automation_ingest_rows(array $client, array $flow, string $csv, int $ma
             $res['skipped']++;   // lost the race to a concurrent import
         }
     }
+    $res['rows'] += $res['over'];
     fclose($fh);
     return $res;
+}
+
+/** What an upload of leads did, adding up to every row in the file. */
+function automation_ingest_summary(array $r): string
+{
+    $f = fn($n) => number_format((int) $n);
+    $parts = [$f($r['imported']) . ' new'];
+    if ($r['skipped'])            $parts[] = $f($r['skipped']) . ' already in this qualifier';
+    if ($r['repeated'] ?? 0)      $parts[] = $f($r['repeated']) . ' repeated a number from an earlier row';
+    if ($r['invalid'])            $parts[] = $f($r['invalid']) . ' with no usable phone number';
+    if ($r['over'] ?? 0)          $parts[] = $f($r['over']) . ' not imported — over the limit for one upload, upload the rest as another file';
+    $s = 'All ' . $f($r['rows']) . ' rows: ' . implode(', ', $parts) . '.';
+    if (!empty($r['notes'])) $s .= ' ' . implode('; ', $r['notes']) . (count($r['notes']) < (int) $r['invalid'] ? '; …' : '') . '.';
+    return $s;
 }
 
 /**
