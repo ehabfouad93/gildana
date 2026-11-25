@@ -539,12 +539,14 @@ export function buildLeads(platform: Platform, accountExternalId: string, from: 
 
 export function demoAccounts(platform: Platform, seed: string) {
   const r = rng(`${platform}:${seed}:accounts`);
-  const n = 2 + Math.floor(r() * 2);
+  const n = 3 + Math.floor(r() * 2);
   const currency = platform === "LINKEDIN" ? "USD" : pick(r, ["USD", "EGP", "SAR"]);
   return Array.from({ length: n }, (_, i) => ({
     externalId: `demo-${platform.toLowerCase()}-${hash(seed + i) % 100000}`,
     name: `${pick(r, ["Main", "Brand", "Performance", "Real Estate", "E-commerce"])} account ${i + 1}`,
-    currency, timezone: "Africa/Cairo",
+    currency, timezone: "Africa/Cairo", status: "1",
+    // Like Meta: the first ones were picked in the dialog, the others come through a business.
+    source: i < 2 ? "chosen" : "Demo Business",
   }));
 }
 
@@ -555,6 +557,10 @@ export function demoConnector(platform: Platform): Connector {
     authUrl: (state) => `/api/oauth/${platform.toLowerCase()}/callback?demo=1&state=${encodeURIComponent(state)}&code=demo`,
     exchange: async (code) => ({ accessToken: `demo-token-${platform}`, externalUser: `demo-${code}`, label: `${platform} demo login` }),
     listAccounts: async (token) => demoAccounts(platform, token),
+    getAccount: async (_token, externalId) => {
+      if (!/^\d{6,}$/.test(externalId.replace(/^act_/, ""))) throw new Error("(#100) This ad account doesn't exist or this login has no access to it.");
+      return { externalId: externalId.replace(/^act_/, ""), name: `Demo account ${externalId.slice(-4)}`, currency: "USD", timezone: "Africa/Cairo", status: "1", source: "added by id" };
+    },
     fetchStructure: async (ctx: SyncContext) => buildStructure(platform, ctx.account.externalId, ctx.splitTests),
     fetchStats: async (ctx, from, to) => buildStats(platform, ctx.account.externalId, from, to, ctx.account.currency, ctx.splitTests),
     fetchLeads: async (ctx, from, to) => buildLeads(platform, ctx.account.externalId, from, to, ctx.account.currency, ctx.splitTests),

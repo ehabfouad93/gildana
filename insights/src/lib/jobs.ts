@@ -151,7 +151,28 @@ export async function refreshIfStale(accountIds: string[], olderThanMs = 5 * 60_
     where: { id: { in: due }, enabled: true, lastSyncAt: { lt: new Date(Date.now() - olderThanMs) }, connection: { status: "active" } },
     select: { id: true },
   });
-  for (const a of stale) await enqueueLive(a.id, 8);
+  if (stale.length) await enqueueLiveMany(stale.map((a) => a.id), 8);
+}
+
+/**
+ * Live refresh for many accounts in one short transaction (instead of one
+ * per account): accounts that already have a job covering today, or are in
+ * a rate-limit pause, are skipped. One lock serialises concurrent page views.
+ */
+export async function enqueueLiveMany(accountIds: string[], priority = 5): Promise<number> {
+  if (!accountIds.length) return 0;
+  const yesterday = toDate(addDays(ymd(new Date()), -1));
+  return db.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('live:batch'))`;
+    const busy = await tx.syncRun.findMany({
+      where: { accountId: { in: accountIds }, OR: [{ status: { in: ["QUEUED", "RUNNING"] }, toDate: { gte: yesterday } }, { status: "QUEUED", runAfter: { gt: new Date() }, error: { contains: THROTTLED } }] },
+      select: { accountId: true }, distinct: ["accountId"],
+    });
+    const skip = new Set(busy.map((b) => b.accountId));
+    const todo = accountIds.filter((id) => !skip.has(id));
+    if (todo.length) await tx.syncRun.createMany({ data: todo.map((accountId) => ({ accountId, kind: "live", fromDate: yesterday, toDate: toDate(ymd(new Date())), priority })) });
+    return todo.length;
+  });
 }
 
 /** "Updated 3 min ago" for a set of accounts, and whether a refresh is in progress. */

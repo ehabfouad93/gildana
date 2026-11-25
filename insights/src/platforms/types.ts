@@ -15,7 +15,11 @@ export type TokenSet = {
   label?: string;
 };
 
-export type RemoteAccount = { externalId: string; name: string; currency: string; timezone: string; status?: string; parentId?: string };
+export type RemoteAccount = {
+  externalId: string; name: string; currency: string; timezone: string; status?: string; parentId?: string;
+  /** Where the login reaches it: "chosen" (picked in the platform's dialog / the user's own), or the business it comes through. */
+  source?: string;
+};
 
 export type RemoteCampaign = {
   externalId: string; name: string; objective: string; status: string;
@@ -96,6 +100,8 @@ export interface Connector {
   exchange(code: string, redirectUri: string): Promise<TokenSet>;
   refresh?(refreshToken: string): Promise<TokenSet>;
   listAccounts(accessToken: string): Promise<RemoteAccount[]>;
+  /** One account by its id, when the login can read it (for "add by ID"). Throws the platform's reason otherwise. */
+  getAccount?(accessToken: string, externalId: string): Promise<RemoteAccount>;
   fetchStructure(ctx: SyncContext): Promise<{ campaigns: RemoteCampaign[]; adSets: RemoteAdSet[]; ads: RemoteAd[] }>;
   fetchStats(ctx: SyncContext, from: string, to: string): Promise<StatsBundle>;
   /** `adIds`: only these ads (the ones that got leads in the window), when known. */

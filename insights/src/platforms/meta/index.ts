@@ -101,19 +101,25 @@ export const meta: Connector & { preview(token: string, adId: string, format?: s
     const fields = "account_id,name,currency,timezone_name,account_status";
     const found = new Map<string, any>();
     const errors: string[] = [];
-    const take = async (label: string, path: string) => {
-      try { for (const r of await all(q(path, token, { fields, limit: 200 }))) found.set(String(r.account_id), r); }
+    // Accounts picked in Meta's dialog (or the person's own) come first and win; business ones are listed with their business.
+    const take = async (label: string, path: string, source: string) => {
+      try { for (const r of await all(q(path, token, { fields, limit: 200 }))) if (!found.has(String(r.account_id))) found.set(String(r.account_id), { ...r, source }); }
       catch (e) { errors.push(`${label}: ${(e as Error).message}`); }
     };
-    await take("your ad accounts", "me/adaccounts");
-    let businesses: { id: string }[] = [];
+    await take("your ad accounts", "me/adaccounts", "chosen");
+    let businesses: { id: string; name?: string }[] = [];
     try { businesses = await all(q("me/businesses", token, { fields: "id,name", limit: 100 })); } catch (e) { errors.push(`businesses: ${(e as Error).message}`); }
     for (const biz of businesses) {
-      await take("business ad accounts", `${biz.id}/owned_ad_accounts`);
-      await take("partner ad accounts", `${biz.id}/client_ad_accounts`);
+      await take("business ad accounts", `${biz.id}/owned_ad_accounts`, biz.name ?? "Business");
+      await take("partner ad accounts", `${biz.id}/client_ad_accounts`, `${biz.name ?? "Business"} (partner)`);
     }
     if (!found.size && errors.length) throw new PlatformError(`Meta didn't return any ad accounts (${errors[0]}). Check that the login configuration includes Ad accounts and the ads_read and business_management permissions.`, 400);
-    return [...found.values()].map((r: any) => ({ externalId: String(r.account_id), name: r.name, currency: r.currency, timezone: r.timezone_name, status: String(r.account_status) }));
+    return [...found.values()].map((r: any) => ({ externalId: String(r.account_id), name: r.name, currency: r.currency, timezone: r.timezone_name, status: String(r.account_status), source: r.source }));
+  },
+
+  async getAccount(token, externalId) {
+    const r: any = await fetchJson(q(act(externalId.replace(/\D/g, "")), token, { fields: "account_id,name,currency,timezone_name,account_status" }));
+    return { externalId: String(r.account_id), name: r.name, currency: r.currency, timezone: r.timezone_name, status: String(r.account_status), source: "added by id" };
   },
 
   async fetchStructure(ctx: SyncContext) {

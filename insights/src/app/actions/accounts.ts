@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { enqueueInitialSync, syncAll, syncBreakdownsNow, syncNow } from "@/lib/jobs";
+import { reachableAccounts, choiceDiff, lookupAccount } from "@/lib/account-choice";
+import { autoAssign, enqueueInitialSync, syncAll, syncBreakdownsNow, syncNow } from "@/lib/jobs";
 import { accessWhere, canEdit, canFeature, canSeeCompany, requireModule, scopedAccountIds, type Viewer } from "@/lib/tenancy";
 import type { ModuleKey } from "@/lib/modules";
 
@@ -130,6 +131,12 @@ export async function bulkAccountsAction(form: FormData) {
   if (!ids.length) return;
   const accounts = await db.adAccount.findMany({ where: { id: { in: ids }, connection: { clientId: v.clientId }, ...accessWhere(v.access) } });
   const op = String(form.get("op"));
+  if (op === "remove") {
+    if (v.access) throw new Error("Only users with access to every ad account can do this — ask an owner.");
+    await db.adAccount.deleteMany({ where: { id: { in: accounts.map((a) => a.id) } } });
+    revalidatePath("/connections");
+    return;
+  }
   if (op !== "sync" && v.access) throw new Error("Only users with access to every ad account can do this — ask an owner.");
   if (op === "assign") {
     const companyId = String(form.get("companyId") || "");
@@ -157,4 +164,63 @@ export async function syncBreakdownsAction(form: FormData) {
   const ids = asked.length ? await scopedAccountIds(v.clientId, { access: v.access, accountIds: asked }) : [];
   await syncBreakdownsNow(ids);
   revalidatePath(String(form.get("path") || "/audiences"));
+}
+
+// ───────── choosing which ad accounts a login adds ─────────
+
+async function loginFor(v: Viewer & { clientId: string }, connectionId: string) {
+  return db.adConnection.findFirst({ where: { id: connectionId, clientId: v.clientId }, include: { accounts: { select: { id: true, externalId: true } } } });
+}
+
+/**
+ * Saves the ticked accounts of a login: new ones are added (and start
+ * syncing), unticked ones are removed from the dashboard with their synced
+ * data. Nothing changes on the ad platform.
+ */
+export async function saveChosenAccountsAction(connectionId: string, ticked: string[]): Promise<{ ok: boolean; message: string }> {
+  const v = await organiser();
+  const conn = await loginFor(v, connectionId);
+  if (!conn) return { ok: false, message: "Login not found." };
+  let reachable;
+  try { reachable = await reachableAccounts(conn); } catch (e) { return { ok: false, message: `The platform refused to list the accounts: ${(e as Error).message}` }; }
+  const d = choiceDiff(conn.accounts.map((a) => a.externalId), reachable.map((a) => a.externalId), ticked.map(String).slice(0, 2000));
+  if (d.remove.length) await db.adAccount.deleteMany({ where: { connectionId: conn.id, externalId: { in: d.remove } } });
+  const rows = reachable.filter((a) => d.add.includes(a.externalId));
+  if (rows.length) {
+    await db.adAccount.createMany({ skipDuplicates: true, data: rows.map((a) => ({ connectionId: conn.id, platform: conn.platform, externalId: a.externalId, parentId: a.parentId ?? "", name: a.name, currency: a.currency, timezone: a.timezone })) });
+    const created = await db.adAccount.findMany({ where: { connectionId: conn.id, externalId: { in: d.add } }, select: { id: true } });
+    await autoAssign(v.clientId, created.map((a) => a.id));
+    for (const a of created) await enqueueInitialSync(a.id);
+  }
+  revalidatePath("/connections");
+  revalidatePath("/welcome");
+  return { ok: true, message: `Saved: ${d.keep.length + rows.length} account${d.keep.length + rows.length === 1 ? "" : "s"} in the dashboard${rows.length ? `, ${rows.length} added and syncing` : ""}${d.remove.length ? `, ${d.remove.length} removed` : ""}.` };
+}
+
+/** Adds one account by its ID, after checking with the platform that this login can read it. */
+export async function addAccountByIdAction(connectionId: string, rawId: string): Promise<{ ok: boolean; message: string }> {
+  const v = await organiser();
+  const conn = await loginFor(v, connectionId);
+  if (!conn) return { ok: false, message: "Login not found." };
+  const id = String(rawId ?? "").trim().replace(/^act_/, "").replace(/[\s-]/g, "");
+  if (!/^\d{5,20}$/.test(id)) return { ok: false, message: "Enter the ad account's number, e.g. 1234567890 (act_ in front is fine)." };
+  if (conn.accounts.some((a) => a.externalId === id)) return { ok: false, message: "This account is already in the dashboard." };
+  let acc;
+  try { acc = await lookupAccount(conn, id); }
+  catch (e) {
+    return { ok: false, message: `This login can't read that account: ${(e as Error).message}. Add the Facebook user of this login to the ad account (Business Settings → Ad accounts → Add people), then try again — or reconnect and tick it in Meta's window.` };
+  }
+  const created = await db.adAccount.create({ data: { connectionId: conn.id, platform: conn.platform, externalId: acc.externalId, name: acc.name, currency: acc.currency, timezone: acc.timezone } });
+  await autoAssign(v.clientId, [created.id]);
+  await enqueueInitialSync(created.id);
+  revalidatePath("/connections");
+  return { ok: true, message: `“${acc.name}” added and syncing.` };
+}
+
+/** Removes accounts from the dashboard (with their synced data). Nothing changes on the ad platform. */
+export async function removeAccountsAction(form: FormData) {
+  const v = await organiser();
+  const ids = form.getAll("ids").map(String).concat(form.getAll("accountId").map(String)).slice(0, 2000);
+  if (ids.length) await db.adAccount.deleteMany({ where: { id: { in: ids }, connection: { clientId: v.clientId } } });
+  revalidatePath("/connections");
 }

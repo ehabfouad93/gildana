@@ -1,5 +1,6 @@
 import { AutoRefresh, SelectAll } from "@/components/auto-refresh";
-import { assignAccountAction, bulkAccountsAction, syncAllAction, removeConnectionAction, syncNowAction, toggleAccountAction } from "@/app/actions/accounts";
+import { ConfirmButton } from "@/components/confirm-button";
+import { assignAccountAction, bulkAccountsAction, syncAllAction, removeAccountsAction, removeConnectionAction, syncNowAction, toggleAccountAction } from "@/app/actions/accounts";
 import { PageHeader } from "@/components/shell";
 import { ShareAccess } from "@/components/share-access";
 import { shareInfo } from "@/lib/share-info";
@@ -98,8 +99,9 @@ export default async function Connections({ searchParams }: { searchParams: Prom
                     {c.expiresAt && <span className="text-xs text-muted">token expires {c.expiresAt.toISOString().slice(0, 10)}</span>}
                     {p === "META" && !c.isDemo && <span className="text-xs text-muted">{c.scopes.split(",").includes("ads_management") ? "split tests allowed" : "read-only"}</span>}
                     {c.lastError && <span className="text-xs text-bad">{c.lastError}</span>}
+                    {organise && !c.agencySourceId && <a className="ms-auto btn-ghost !py-0.5 text-xs" href={`/connections/choose?conn=${c.id}`}>Choose accounts</a>}
                     {organise && (
-                      <form action={removeConnectionAction} className="ms-auto">
+                      <form action={removeConnectionAction} className={c.agencySourceId ? "ms-auto" : ""}>
                         <input type="hidden" name="connectionId" value={c.id} />
                         <button className="text-xs text-bad hover:underline">Remove login</button>
                       </form>
@@ -116,6 +118,7 @@ export default async function Connections({ searchParams }: { searchParams: Prom
                       <button name="op" value="sync" className="btn-ghost !py-1">Sync now</button>
                       <button name="op" value="disable" className="btn-ghost !py-1">Disable</button>
                       <button name="op" value="enable" className="btn-ghost !py-1">Enable</button>
+                      <ConfirmButton name="op" value="remove" className="btn-ghost !py-1 !text-bad" message="Remove the ticked accounts from the dashboard? Their synced numbers here are deleted. Nothing changes on the ad platform, and you can add them back from “Choose accounts”.">Remove</ConfirmButton>
                     </form>
                   )}
                   <div className="overflow-x-auto">
@@ -164,6 +167,7 @@ export default async function Connections({ searchParams }: { searchParams: Prom
                                     <form action={syncNowAction}><input type="hidden" name="accountId" value={a.id} /><button className="text-accent hover:underline">Sync now</button></form>
                                   )}
                                   {organise && <form action={toggleAccountAction}><input type="hidden" name="accountId" value={a.id} /><button className="text-muted hover:underline">{a.enabled ? "Disable" : "Enable"}</button></form>}
+                                  {organise && <form action={removeAccountsAction}><input type="hidden" name="accountId" value={a.id} /><ConfirmButton className="text-bad hover:underline" message={`Remove “${a.name}” from the dashboard? Its synced numbers here are deleted. Nothing changes on the ad platform.`}>Remove</ConfirmButton></form>}
                                 </div>
                               )}
                             </td>

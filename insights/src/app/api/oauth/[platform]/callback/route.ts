@@ -40,19 +40,26 @@ export async function GET(req: Request, { params }: { params: Promise<{ platform
         expiresAt: tok.expiresAt ?? null, scopes: tok.scopes ?? "",
       },
     });
-    // Accounts start unassigned; nothing syncs until someone puts them in a company.
-    await db.adAccount.createMany({
-      skipDuplicates: true,
-      data: accounts.map((a) => ({ connectionId: conn.id, platform, externalId: a.externalId, parentId: a.parentId ?? "", name: a.name, currency: a.currency, timezone: a.timezone })),
-    });
-    if (agency) await refreshClaimVisibility(platform);
-    else {
-      // Everything starts syncing straight away; obvious company matches are filled in.
-      const created = await db.adAccount.findMany({ where: { connectionId: conn.id }, select: { id: true } });
-      await autoAssign(st.clientId, created.map((a) => a.id), v!.access?.companyIds ?? []);
-      for (const a of created) await enqueueInitialSync(a.id);
+    if (agency) {
+      // Gildana's shared login keeps every account it can reach, for clients' share requests.
+      await db.adAccount.createMany({
+        skipDuplicates: true,
+        data: accounts.map((a) => ({ connectionId: conn.id, platform, externalId: a.externalId, parentId: a.parentId ?? "", name: a.name, currency: a.currency, timezone: a.timezone })),
+      });
+      await refreshClaimVisibility(platform);
+      return back(`connected=${conn.id}`);
     }
-    return back(`connected=${conn.id}`);
+    // A client's login: the person chooses which accounts come in (the ones picked in the platform's window are pre-ticked).
+    if (v!.access) {
+      // Users limited to some companies don't see the chooser: keep the accounts picked in the platform's window.
+      const picked = accounts.filter((a) => (a.source ?? "chosen") === "chosen");
+      await db.adAccount.createMany({ skipDuplicates: true, data: picked.map((a) => ({ connectionId: conn.id, platform, externalId: a.externalId, parentId: a.parentId ?? "", name: a.name, currency: a.currency, timezone: a.timezone })) });
+      const created = await db.adAccount.findMany({ where: { connectionId: conn.id }, select: { id: true } });
+      await autoAssign(st.clientId, created.map((a) => a.id), v!.access.companyIds);
+      for (const a of created) await enqueueInitialSync(a.id);
+      return back(`connected=${conn.id}`);
+    }
+    return NextResponse.redirect(publicUrl(`/connections/choose?conn=${conn.id}&new=1&next=${encodeURIComponent(next)}`, req));
   } catch (e) {
     return back(`error=${encodeURIComponent((e as Error).message.slice(0, 200))}`);
   }

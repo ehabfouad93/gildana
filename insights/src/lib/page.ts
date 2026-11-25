@@ -36,8 +36,9 @@ export async function pageContext(spP: Promise<SP>, module: ModuleKey) {
   const byEntity = await entityFromParams(sp, accountIds);
   const picked = byEntity ?? (await entityFromTags(sp, accountIds, tags.map((x) => x.id)));
   if (picked) accountIds = picked.accountIds;
-  // Opening a report refreshes any of its accounts whose numbers are more than five minutes old.
-  await refreshIfStale(accountIds);
+  // Opening a report refreshes any of its accounts whose numbers are more than five minutes old —
+  // queued in the background, so the page never waits for it.
+  void refreshIfStale(accountIds).catch(() => {});
   const fresh = await freshness(accountIds);
   const accounts = await db.adAccount.findMany({
     where: { connection: { clientId: client.id }, enabled: true, ...accessWhere(viewer.access) },
