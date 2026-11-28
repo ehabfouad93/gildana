@@ -26,6 +26,7 @@ export default async function SettingsPage() {
           <h2 className="font-semibold">Also here</h2>
           <p><a className="text-accent underline" href="/team">Team</a> — add people, change roles, limit them to some companies, remove them.</p>
           <p><a className="text-accent underline" href="/connections">Ad accounts</a> — connect platforms and put accounts in companies.</p>
+          <p><a className="text-accent underline" href="/settings/api">API keys</a> — let your CRM, WhatsApp provider or website back-end send and read customer data (<a className="underline" href="/api/v1/docs" target="_blank" rel="noreferrer">API docs</a>).</p>
           <p><a className="text-accent underline" href="/account">My account</a> — your own name, language and password.</p>
         </div>
       </div>

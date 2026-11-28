@@ -2,6 +2,8 @@ import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { addDays, ymd } from "@/lib/dates";
 import { classifyChannel } from "@/lib/track";
+import { leadContact } from "@/modules/customers/profile";
+import { identifyVisitor } from "@/modules/customers/service";
 
 /**
  * Synthetic visits for a demo site, laid out to match public/demo-site so
@@ -77,8 +79,17 @@ export async function generateDemoTraffic(siteId: string, days = 30) {
             const type = r() < 0.04 ? "rage_click" : sel.includes("img") && r() < 0.6 ? "dead_click" : "click";
             events.push({ sessionId: sid, siteId, path: p, type: "click", ts: new Date(t + 2000 + c * 4000), device, xPct: Math.max(0, Math.min(100, x + jitter() * 3)), yPx: Math.round(yy + jitter() * 12), docW, docH, selector: sel, text });
             if (type !== "click") events.push({ sessionId: sid, siteId, path: p, type, ts: new Date(t + 2100 + c * 4000), device, xPct: x, yPx: yy, docW, docH, selector: sel, text });
-            if (sel === "#cta-brochure") events.push({ sessionId: sid, siteId, path: p, type: "custom", name: "brochure", ts: new Date(t + 2200 + c * 4000), device, selector: "", text: "" });
+            if (sel === "#cta-brochure") {
+              events.push({ sessionId: sid, siteId, path: p, type: "custom", name: "brochure", ts: new Date(t + 2200 + c * 4000), device, selector: "", text: "" });
+              events.push({ sessionId: sid, siteId, path: p, type: "custom", name: "brochure_download", ts: new Date(t + 2300 + c * 4000), device, selector: "", text: "", props: { project: "Nile Heights" } });
+            }
+            if (sel.startsWith("div.card")) events.push({ sessionId: sid, siteId, path: p, type: "custom", name: "unit_view", ts: new Date(t + 2400 + c * 4000), device, selector: "", text: "", props: { project: "Nile Heights", unit: text || "Apartment" } });
           }
+          if (p.includes("pricing")) {
+            events.push({ sessionId: sid, siteId, path: p, type: "custom", name: "price_view", ts: new Date(t + 1500), device, selector: "", text: "", props: { project: "Nile Heights" } });
+            if (r() < 0.55) events.push({ sessionId: sid, siteId, path: p, type: "custom", name: "payment_plan_view", ts: new Date(t + 6000), device, selector: "", text: "", props: { project: "Nile Heights", plan: r() < 0.5 ? "8 years" : "10% down" } });
+          }
+          if (!bounced && r() < 0.08) events.push({ sessionId: sid, siteId, path: p, type: "custom", name: "whatsapp_click", ts: new Date(t + 7000), device, selector: "a.whatsapp", text: "WhatsApp" });
           if (!bounced && r() < 0.5) events.push({ sessionId: sid, siteId, path: p, type: "form_start", name: "lead-form", ts: new Date(t + 9000), device, selector: "#lead-form", text: "" });
           if (converted && k === paths.length - 2) events.push({ sessionId: sid, siteId, path: p, type: "form_submit", name: "lead-form", ts: new Date(t + 15000), device, selector: "#lead-form", text: "" });
         }
@@ -100,4 +111,31 @@ export async function generateDemoTraffic(siteId: string, days = 30) {
     await db.trackPageview.createMany({ data: views });
     await db.trackEvent.createMany({ data: events });
   }
+  await demoIdentify(siteId);
 }
+
+/**
+ * Demo: visitors who sent the contact form identify themselves with a phone
+ * number — about half with the number of one of the company's ad leads, so the
+ * Customers section shows ads and website joining on one profile.
+ */
+async function demoIdentify(siteId: string) {
+  const site = await db.site.findUniqueOrThrow({ where: { id: siteId }, select: { id: true, companyId: true, company: { select: { clientId: true } } } });
+  // The demo site sells one project; registering it lets project matching and the value score show.
+  await db.project.upsert({
+    where: { clientId_slug: { clientId: site.company.clientId, slug: "nile-heights" } },
+    update: {},
+    create: { clientId: site.company.clientId, companyId: site.companyId, name: "Nile Heights", slug: "nile-heights", aliases: ["nile heights new cairo"], priceFrom: 3_500_000, priceTo: 12_000_000, currency: "EGP" },
+  });
+  const leads = await db.lead.findMany({ where: { account: { companyId: site.companyId } }, select: { fields: true }, take: 300, orderBy: { createdAt: "desc" } });
+  const phones = leads.map((l) => leadContact((l.fields as Record<string, unknown>) ?? {})).filter((f) => f.phone);
+  const converted = await db.trackSession.findMany({ where: { siteId, converted: true }, select: { visitorId: true, lastSeenAt: true }, distinct: ["visitorId"], take: 120 });
+  const r = rng(`${siteId}:identify`);
+  for (const s of converted) {
+    const lead = phones.length && r() < 0.5 ? phones[Math.floor(r() * phones.length)] : null;
+    const who = lead ? { phone: lead.phone, name: lead.name } : { phone: `+2011${Math.floor(10000000 + r() * 89999999)}`, name: pickName(r) };
+    await identifyVisitor({ id: site.id, companyId: site.companyId, clientId: site.company.clientId }, s.visitorId, who, { analytics: true, ads: r() < 0.8, marketing: r() < 0.6 }, s.lastSeenAt).catch((e) => console.error("[demo identify]", e.message));
+  }
+}
+
+const pickName = (r: () => number) => `${["Hany", "Rania", "Tarek", "Dina", "Sherif", "Yasmin"][Math.floor(r() * 6)]} ${["Mansour", "Fouad", "Nabil", "Zaki"][Math.floor(r() * 4)]}`;

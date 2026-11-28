@@ -7,6 +7,7 @@ export const MODULES = [
   { key: "campaigns", label: "Campaigns", path: "/campaigns" },
   { key: "creatives", label: "Creatives", path: "/creatives" },
   { key: "audiences", label: "Audiences", path: "/audiences" },
+  { key: "customers", label: "Customers (360 profiles, identity)", path: "/customers" },
   { key: "google", label: "Google Search", path: "/google" },
   { key: "sites", label: "Websites (analytics, heatmaps, SEO, GEO)", path: "/sites" },
   { key: "reports", label: "Reports & share links", path: "/reports" },
@@ -56,6 +57,10 @@ export const FEATURES = [
   { key: "campaigns.create", module: "campaigns", label: "Create new campaigns" },
   { key: "creatives.grid", module: "creatives", label: "Creative split-test grid (create ad variations)" },
   { key: "companies.leads_sync", module: "companies", label: "Leads sync (send new leads to a CRM or sheet)" },
+  { key: "customers.pii", module: "customers", label: "See phone numbers and emails" },
+  { key: "customers.review", module: "customers", label: "Review, merge and undo merges of profiles" },
+  { key: "customers.delete", module: "customers", label: "Delete customer profiles" },
+  { key: "customers.projects", module: "customers", label: "Manage projects" },
   { key: "general.sync_breakdowns", module: "general", label: "“Sync breakdowns now” button" },
   { key: "general.ai_chat", module: "general", label: "Ask AI about your numbers" },
 ] as const;

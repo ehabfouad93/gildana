@@ -30,7 +30,7 @@ export async function POST(req: Request) {
   if (!originAllowed(origin, site.domain)) return new Response(null, { status: 403, headers: CORS });
 
   try {
-    await ingest(site.id, site.domain, parsed.data, {
+    await ingest(site, parsed.data, {
       ua: req.headers.get("user-agent") ?? "",
       country: (req.headers.get("cf-ipcountry") ?? req.headers.get("x-vercel-ip-country") ?? req.headers.get("x-country-code") ?? "").slice(0, 2).toUpperCase(),
       city: decodeURIComponent(req.headers.get("x-vercel-ip-city") ?? req.headers.get("cf-ipcity") ?? "").slice(0, 80),

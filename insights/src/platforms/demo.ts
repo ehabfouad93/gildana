@@ -520,14 +520,20 @@ export function buildLeads(platform: Platform, accountExternalId: string, from: 
       const n = Math.min(adDay(platform, ad, day, currency, quality.get(ad.adSetExternalId) ?? 1).leads, 6); // a sample, not every lead
       for (let i = 0; i < n; i++) {
         const r = rng(`${ad.externalId}:${day}:lead${i}`);
-        const fn = pick(r, first), ln = pick(r, last);
+        const rf = pick(r, first), rl = pick(r, last);
+        // About one lead in eight is someone who already filled a form before (same phone and email),
+        // like real campaigns — so matching has repeat people to join.
+        const repeat = r() < 0.12;
+        const num = repeat ? Math.floor(r() * 40) : Math.floor(10000000 + r() * 89999999);
+        const phone = repeat ? `+20100${String(hash(accountExternalId) % 1000).padStart(3, "0")}${String(num).padStart(4, "0")}` : `+2010${num}`;
+        const fn = repeat ? first[num % first.length] : rf, ln = repeat ? last[num % last.length] : rl;
         out.push({
           externalId: `${ad.externalId}-${day}-${i}`, campaignExternalId: ad.campaignExternalId,
           adSetExternalId: ad.adSetExternalId, adExternalId: ad.externalId, formName: "Lead form – Brochure",
           createdAt: `${day}T${String(8 + Math.floor(r() * 14)).padStart(2, "0")}:${String(Math.floor(r() * 60)).padStart(2, "0")}:00Z`,
           fields: {
-            full_name: `${fn} ${ln}`, phone_number: `+2010${Math.floor(10000000 + r() * 89999999)}`,
-            email: `${fn.toLowerCase()}.${ln.toLowerCase()}@example.com`, city: pick(r, REGIONS),
+            full_name: `${fn} ${ln}`, phone_number: phone,
+            email: `${fn.toLowerCase()}.${ln.toLowerCase()}.${phone.slice(-5)}@example.com`, city: pick(r, REGIONS),
             budget: pick(r, ["< 2M", "2M – 5M", "5M – 10M", "> 10M"]),
           },
         });

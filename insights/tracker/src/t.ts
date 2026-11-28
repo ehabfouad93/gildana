@@ -8,9 +8,17 @@
  * Optional session replay loads rrweb only for sampled sessions.
  *
  *   window.gildana("event", "video_play")
+ *   window.gildana("event", "payment_plan_view", { project: "porto-sokhna", unit: "2-bed" })
  *   window.gildana("conversion", "purchase", 149.0)
+ *   window.gildana("identify", { phone: "+20100…", email: "…", name: "…", crm_id: "…", user_id: "…" })
+ *   window.gildana("consent", { analytics: true, ads: true, marketing: false })
  *
- * Honours Do Not Track when the tag has data-dnt="1".
+ * WhatsApp, call and PDF-brochure link clicks and video plays are recorded on
+ * their own. With data-identify="1" a sent form that contains a phone or email
+ * field identifies the visitor (values go only to this site's own Insights).
+ * With data-consent="required" nothing is stored or sent until
+ * gildana("consent", { analytics: true }). Honours Do Not Track with data-dnt="1".
+ * No fingerprinting: the only identifier is a random first-party id.
  */
 (() => {
   const script = document.currentScript as HTMLScriptElement | null;
@@ -31,8 +39,13 @@
     } catch { return make(); }
   };
 
+  // Consent mode: keep everything in memory until analytics consent is given.
+  const needsConsent = script.dataset.consent === "required";
+  const prior = (() => { try { return localStorage.getItem("gi_c"); } catch { return null; } })();
+  let allowed = !needsConsent || prior === "1";
+  if (needsConsent && prior === "0") return;
   const isNewVisitor = (() => { try { return !localStorage.getItem("gi_v"); } catch { return true; } })();
-  const visitor = store(localStorage, "gi_v", rand);
+  let visitor = allowed ? store(localStorage, "gi_v", rand) : (() => { try { return localStorage.getItem("gi_v") ?? rand(); } catch { return rand(); } })();
   // A session ends after 30 minutes without activity.
   const sessionId = (() => {
     try {
@@ -42,7 +55,7 @@
     } catch { /* storage blocked */ }
     return rand();
   })();
-  const touch = () => { try { sessionStorage.setItem("gi_s", `${sessionId}|${Date.now()}`); } catch { /* ignore */ } };
+  const touch = () => { if (!allowed) return; try { sessionStorage.setItem("gi_s", `${sessionId}|${Date.now()}`); } catch { /* ignore */ } };
   touch();
 
   const device = () => { const w = window.innerWidth; return w < 768 ? "mobile" : w < 1024 ? "tablet" : "desktop"; };
@@ -53,7 +66,7 @@
   let queue: Record<string, unknown>[] = [];
   const push = (e: Record<string, unknown>) => { queue.push({ ...e, ts: Date.now(), p: path(), d: device() }); touch(); if (queue.length >= 20) flush(); };
   const flush = (beacon = false) => {
-    if (!queue.length) return;
+    if (!queue.length || !allowed) return;
     const body = JSON.stringify({ k: KEY, v: visitor, s: sessionId, e: queue });
     queue = [];
     // text/plain keeps the request "simple" — no CORS preflight, and sendBeacon accepts it.
@@ -132,6 +145,13 @@
     const x = ev.pageX, y = ev.pageY;
     const base = { xp: Math.round((x / docW()) * 10000) / 100, y: Math.round(y), dw: docW(), dh: docH(), sel: selector(target), tx: (target?.textContent ?? "").trim().replace(/\s+/g, " ").slice(0, 80) };
     push({ t: "click", ...base });
+    const link = target?.closest?.("a") as HTMLAnchorElement | null;
+    const href = (link?.getAttribute("href") ?? "").trim().toLowerCase();
+    if (href) {
+      if (/^(https?:\/\/)?(wa\.me|api\.whatsapp\.com|chat\.whatsapp\.com|web\.whatsapp\.com)|^whatsapp:/.test(href)) push({ t: "custom", n: "whatsapp_click" });
+      else if (href.startsWith("tel:")) push({ t: "custom", n: "call_click" });
+      else if (/\.pdf(\?|#|$)/.test(href) || link?.hasAttribute("download")) push({ t: "custom", n: "brochure_download", pr: { file: href.split("/").pop()!.split("?")[0].slice(0, 120) } });
+    }
 
     const now = Date.now();
     recent = recent.filter((c) => now - c.t < 700 && Math.abs(c.x - x) < 30 && Math.abs(c.y - y) < 30);
@@ -148,23 +168,70 @@
     }
   }, { capture: true, passive: true });
 
+  // ── video ──
+  const videoSrc = (v: HTMLMediaElement) => (v.currentSrc || v.getAttribute("src") || "").split("/").pop()!.split("?")[0].slice(0, 120);
+  const played = new WeakSet<EventTarget>();
+  addEventListener("play", (ev) => { const v = ev.target as HTMLMediaElement; if (v?.tagName === "VIDEO" && !played.has(v)) { played.add(v); push({ t: "custom", n: "video_play", pr: { video: videoSrc(v) } }); } }, true);
+  addEventListener("ended", (ev) => { const v = ev.target as HTMLMediaElement; if (v?.tagName === "VIDEO") push({ t: "custom", n: "video_complete", pr: { video: videoSrc(v) } }); }, true);
+
   // ── forms ──
   const started = new WeakSet<HTMLFormElement>();
   addEventListener("focusin", (ev) => {
     const f = (ev.target as Element | null)?.closest?.("form") as HTMLFormElement | null;
     if (f && !started.has(f)) { started.add(f); push({ t: "form_start", n: f.id || f.getAttribute("name") || selector(f) }); }
   });
+  const autoIdentify = script.dataset.identify === "1";
+  const formIdentity = (f: HTMLFormElement) => {
+    const who: Record<string, string> = {};
+    for (const el of Array.from(f.elements) as HTMLInputElement[]) {
+      if (!el.name && !el.id && !el.type) continue;
+      const key = `${el.name} ${el.id} ${el.getAttribute("autocomplete") ?? ""} ${el.type}`.toLowerCase();
+      const v = (el.value ?? "").trim();
+      if (!v || el.type === "password" || el.type === "hidden" && !/crm/.test(key)) continue;
+      if (!who.email && (el.type === "email" || /e-?mail/.test(key))) who.email = v.slice(0, 200);
+      else if (!who.phone && (el.type === "tel" || /phone|mobile|tel|whats/.test(key))) who.phone = v.slice(0, 40);
+      else if (!who.name && /(^|\s)(full_?name|name|first_?name)(\s|$)/.test(key)) who.name = v.slice(0, 120);
+    }
+    return who;
+  };
   addEventListener("submit", (ev) => {
     const f = ev.target as HTMLFormElement;
     push({ t: "form_submit", n: f.id || f.getAttribute("name") || selector(f) });
+    if (autoIdentify && f.dataset.giIgnore !== "1") { const who = formIdentity(f); if (who.phone || who.email) push({ t: "identify", id: who }); }
     flush(true);
   }, { capture: true });
 
   // ── public API ──
-  const api = (cmd: string, name?: string, value?: number) => {
-    if (cmd === "event" || cmd === "conversion") push({ t: cmd === "event" ? "custom" : "conversion", n: String(name ?? "").slice(0, 100), val: typeof value === "number" ? value : undefined });
+  const clean = (o: unknown, max = 20): Record<string, string | number | boolean> => {
+    const out: Record<string, string | number | boolean> = {};
+    if (!o || typeof o !== "object") return out;
+    for (const [k, v] of Object.entries(o as Record<string, unknown>).slice(0, max)) {
+      if (typeof v === "string") out[k.slice(0, 40)] = v.slice(0, 200);
+      else if (typeof v === "number" || typeof v === "boolean") out[k.slice(0, 40)] = v;
+    }
+    return out;
   };
-  const pending = ((window as any).gildana?.q ?? []) as [string, string?, number?][];
+  const api = (cmd: string, name?: unknown, value?: unknown) => {
+    if (cmd === "event" || cmd === "conversion") {
+      const pr = typeof value === "object" ? clean(value) : undefined;
+      const val = typeof value === "number" ? value : typeof pr?.value === "number" ? (pr.value as number) : undefined;
+      push({ t: cmd === "event" ? "custom" : "conversion", n: String(name ?? "").slice(0, 100), val, pr });
+    } else if (cmd === "identify") {
+      const w = clean(name) as Record<string, string>;
+      const id = { phone: w.phone, email: w.email, name: w.name, crm: w.crm_id ?? w.crm, uid: w.user_id ?? w.uid };
+      if (Object.values(id).some(Boolean)) { push({ t: "identify", id }); flush(); }
+    } else if (cmd === "consent") {
+      const c = clean(name) as Record<string, boolean>;
+      if (typeof c.analytics === "boolean") {
+        try { localStorage.setItem("gi_c", c.analytics ? "1" : "0"); } catch { /* ignore */ }
+        if (!c.analytics) { queue = []; allowed = false; return; }
+        if (!allowed) { allowed = true; visitor = store(localStorage, "gi_v", () => visitor); touch(); }
+      }
+      push({ t: "consent", cs: { analytics: c.analytics, ads: c.ads, marketing: c.marketing } });
+      flush();
+    }
+  };
+  const pending = ((window as any).gildana?.q ?? []) as [string, unknown?, unknown?][];
   (window as any).gildana = api;
   pending.forEach((a) => api(...a));
 

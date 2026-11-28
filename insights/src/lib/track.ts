@@ -1,6 +1,8 @@
 import type { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { db } from "@/lib/db";
+import { customerOfVisitor, identifyVisitor, recordConsent, refreshCustomer } from "@/modules/customers/service";
+import { isKeyWebEvent } from "@/modules/customers/profile";
 
 // ───────── classification (pure, unit-tested) ─────────
 
@@ -52,7 +54,7 @@ export function originAllowed(origin: string, domain: string): boolean {
 // ───────── payload ─────────
 
 const ev = z.object({
-  t: z.enum(["pv", "leave", "click", "rage_click", "dead_click", "form_start", "form_submit", "custom", "conversion"]),
+  t: z.enum(["pv", "leave", "click", "rage_click", "dead_click", "form_start", "form_submit", "custom", "conversion", "identify", "consent"]),
   ts: z.number(), p: z.string().max(1000), d: z.enum(["mobile", "tablet", "desktop"]),
   pv: z.string().max(40).optional(), ti: z.string().max(300).optional(), r: z.string().max(1000).optional(),
   vw: z.number().optional(), vh: z.number().optional(), dh: z.number().optional(), dw: z.number().optional(),
@@ -60,6 +62,9 @@ const ev = z.object({
   a: z.number().optional(), sc: z.number().optional(),
   xp: z.number().min(0).max(100).optional(), y: z.number().optional(), sel: z.string().max(400).optional(), tx: z.string().max(200).optional(),
   n: z.string().max(200).optional(), val: z.number().optional(),
+  pr: z.record(z.string().max(40), z.union([z.string().max(200), z.number(), z.boolean()])).optional(),
+  id: z.object({ phone: z.string().max(40).optional(), email: z.string().max(200).optional(), name: z.string().max(120).optional(), crm: z.string().max(120).optional(), uid: z.string().max(120).optional() }).optional(),
+  cs: z.object({ analytics: z.boolean().optional(), ads: z.boolean().optional(), marketing: z.boolean().optional() }).optional(),
 });
 
 export const payloadSchema = z.object({
@@ -74,11 +79,13 @@ export type Payload = z.infer<typeof payloadSchema>;
 const CLICK_IDS = ["gclid", "fbclid", "ttclid", "li_fat_id", "ScCid", "msclkid"];
 
 // Site lookups are hot (every beacon); cache briefly.
-const siteCache = new Map<string, { at: number; site: { id: string; domain: string } | null }>();
-export async function siteByKey(key: string) {
+type SiteRef = { id: string; domain: string; companyId: string; clientId: string };
+const siteCache = new Map<string, { at: number; site: SiteRef | null }>();
+export async function siteByKey(key: string): Promise<SiteRef | null> {
   const c = siteCache.get(key);
   if (c && Date.now() - c.at < 60_000) return c.site;
-  const site = await db.site.findUnique({ where: { trackingKey: key }, select: { id: true, domain: true } });
+  const row = await db.site.findUnique({ where: { trackingKey: key }, select: { id: true, domain: true, companyId: true, company: { select: { clientId: true } } } });
+  const site = row ? { id: row.id, domain: row.domain, companyId: row.companyId, clientId: row.company.clientId } : null;
   siteCache.set(key, { at: Date.now(), site });
   return site;
 }
@@ -89,7 +96,8 @@ type Meta = { ua: string; country: string; city: string };
  * Writes one beacon. The session row is created by its first page view and
  * updated by everything after; goals are evaluated as events arrive.
  */
-export async function ingest(siteId: string, siteDomain: string, p: Payload, meta: Meta) {
+export async function ingest(site: SiteRef, p: Payload, meta: Meta) {
+  const siteId = site.id, siteDomain = site.domain;
   const ua = parseUA(meta.ua);
   if (ua.bot) return;
   const sid = `${siteId}:${p.s}`;
@@ -124,8 +132,16 @@ export async function ingest(siteId: string, siteDomain: string, p: Payload, met
   let pageviews = 0, events = 0, maxScroll = session.maxScroll, lastTs = session.lastSeenAt, exitPath = session.exitPath;
   const eventRows: Prisma.TrackEventCreateManyInput[] = [];
 
+  type Who = NonNullable<Payload["e"][number]["id"]>;
+  type Consent = NonNullable<Payload["e"][number]["cs"]>;
+  const found: { identity: { who: Who; at: Date } | null; consent: Consent | null } = { identity: null, consent: null };
+  let keyEvent = false;
   for (const e of p.e) {
     const ts = at(e.ts);
+    // Contact details are never written to the event tables; they go to the encrypted customer profile.
+    if (e.t === "identify") { if (e.id) found.identity = { who: { ...(found.identity?.who ?? {}), ...e.id }, at: ts }; continue; }
+    if (e.t === "consent") { found.consent = { ...(found.consent ?? {}), ...(e.cs ?? {}) }; eventRows.push({ sessionId: sid, siteId, path: e.p, type: "consent", name: "", ts, device: e.d, props: e.cs ?? {} }); continue; }
+    if ((e.t === "custom" && isKeyWebEvent(e.n ?? "")) || e.t === "form_submit" || e.t === "conversion") keyEvent = true;
     if (ts > lastTs) { lastTs = ts; exitPath = e.p; }
     if (e.t === "pv") {
       pageviews++;
@@ -143,7 +159,7 @@ export async function ingest(siteId: string, siteDomain: string, p: Payload, met
     eventRows.push({
       sessionId: sid, siteId, path: e.p, type: e.t, name: e.n ?? "", value: e.val ?? null, ts, device: e.d,
       xPct: e.xp ?? null, yPx: e.y != null ? Math.round(e.y) : null, docW: e.dw != null ? Math.round(e.dw) : null, docH: e.dh != null ? Math.round(e.dh) : null,
-      selector: e.sel ?? "", text: e.tx ?? "",
+      selector: e.sel ?? "", text: e.tx ?? "", ...(e.pr ? { props: e.pr } : {}),
     });
   }
   if (eventRows.length) await db.trackEvent.createMany({ data: eventRows });
@@ -155,4 +171,16 @@ export async function ingest(siteId: string, siteDomain: string, p: Payload, met
       durationSec: Math.max(0, Math.round((lastTs.getTime() - session.startedAt.getTime()) / 1000)),
     },
   });
+
+  // Customers: a browser that identifies itself joins (or creates) a profile; a known
+  // browser's key actions refresh that profile's stage and scores.
+  const { identity, consent } = found;
+  if (identity) await identifyVisitor(site, p.v, identity.who, consent, identity.at);
+  else if (keyEvent || consent) {
+    const customerId = await customerOfVisitor(site, p.v);
+    if (customerId) {
+      if (consent) await recordConsent(site.clientId, customerId, consent, "website");
+      await refreshCustomer(customerId);
+    }
+  }
 }

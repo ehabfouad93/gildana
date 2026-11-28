@@ -8,6 +8,7 @@ import { db } from "@/lib/db";
 import { lastNDays, ymd } from "@/lib/dates";
 import { refreshFxRates } from "@/lib/fx";
 import { deliverLeads } from "@/lib/lead-sync";
+import { resolveLeads } from "@/modules/customers/service";
 import { auditDue, backfillStages, runAudit, runRules } from "@/lib/optimise-run";
 import { RateLimitError } from "@/platforms/types";
 import { enqueueInitialSync, enqueueLive, enqueueSync, liveMinutes } from "@/lib/jobs";
@@ -161,6 +162,7 @@ async function main() {
         await schedule().catch((e) => console.error("[schedule]", e));
         await scheduleVisibility().catch((e) => console.error("[visibility]", e));
         await dailyOptimise().catch((e) => console.error("[audit]", e.message));
+        await resolveLeads({ budgetMs: 20_000 }).then((n) => n && console.log(`[customers] ${n} leads resolved into customer profiles`)).catch((e) => console.error("[customers]", e.message));
         await deliverLeads().then((r) => (r.sent || r.failed) && console.log(`[leads] sent ${r.sent}, failed ${r.failed}`)).catch((e) => console.error("[leads]", e.message));
         await refreshFxRates().then((n) => n && console.log(`[fx] stored ${n} exchange rates`)).catch((e) => console.error("[fx]", e.message));
       }

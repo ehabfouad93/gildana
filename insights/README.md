@@ -89,6 +89,29 @@ Each site gets a snippet from its Setup tab:
 
 A demo landing page ships at `/demo-site` with 30 days of generated visits (seed) — visiting it records real data too.
 
+Real-estate events and identity (feed the Customers section):
+
+```js
+gildana("event", "payment_plan_view", { project: "porto-sokhna", unit: "2-bed" }) // also project_view, unit_view, price_view, meeting_booking…
+gildana("identify", { phone: "+20100…", email: "…", name: "…", crm_id: "…", user_id: "…" })
+gildana("consent", { analytics: true, ads: true, marketing: false })
+```
+
+WhatsApp (`wa.me`, `api.whatsapp.com`), `tel:` and PDF link clicks and video plays are recorded automatically. `data-identify="1"` on the tag makes a sent form with a phone or email field identify the visitor; `data-consent="required"` stores and sends nothing until `gildana("consent", { analytics: true })`. The only identifier is a random first-party id — no fingerprinting.
+
+## Customers (CDP and identity graph)
+
+One profile per person across ad leads, the website, CRM and WhatsApp (`src/modules/identity`, `src/modules/customers`).
+
+- **Matching is deterministic**: CRM ID → account ID / WhatsApp ID → verified phone → phone → verified email → email. The website's anonymous id joins a profile only when that browser identifies itself; nothing is joined on IP, device or behaviour. Exact phone matches attach automatically; two existing profiles merge automatically only when both sides match on strong identifiers (CRM ID, verified phone, WhatsApp, account ID). Weaker matches (email only, a phone shared by two CRM contacts) go to **Customers → Identity review**. Every attach and merge stores its method, confidence and evidence, and merges can be undone.
+- Brand workspaces share one identity space; an agency's companies each have their own, so different businesses never share profiles.
+- Phones and emails are stored AES-GCM encrypted plus a SHA-256 hash of the normalised value (the form Meta, Google and TikTok accept for audience uploads). Who sees them in full is the “See phone numbers and emails” switch per team member.
+- Scores are transparent rules (v1): purchase intent (last 30 days of actions, fading), customer value (budget vs project prices, purchases), identity confidence — each with its points listed. Conversion probability waits for CRM outcomes.
+- The worker turns synced ad leads into profiles (`resolveLeads`, ~20 s of each minute); **Customers → Process now** does it on demand.
+- **Projects** (Customers → Projects) are matched in URLs, event properties, campaign/form names, lead answers and API events.
+
+REST API `/api/v1` (OpenAPI at `/api/v1/openapi.json`, Swagger UI at `/api/v1/docs`), authenticated with workspace keys from **Settings → API keys** (scopes `read`, `write`, `pii`; 600 calls/min) or the signed-in session: `GET /customers`, `/customers/{id}`, `/customers/{id}/timeline`, `/customers/{id}/scores`, `POST /customers/identify`, `/events/track`, `/events/batch` (deduplicated by `event_id`). Writes go to the audit log.
+
 ## SEO and GEO
 
 Crawls and audits are queued from the site pages and run in the worker. The crawler respects robots.txt, follows the sitemap and internal links, and records per-page facts and issues. Optional:

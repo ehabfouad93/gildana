@@ -17,5 +17,7 @@ describe("modules the worker imports", () => {
     expect(typeof run.runRules).toBe("function");
     expect(typeof proposals.propose).toBe("function");
     expect(typeof (await import("@/lib/lead-sync")).deliverLeads).toBe("function");
+    expect(typeof (await import("@/modules/customers/service")).resolveLeads).toBe("function");
+    expect(typeof (await import("@/lib/demo-traffic")).generateDemoTraffic).toBe("function");
   });
 });

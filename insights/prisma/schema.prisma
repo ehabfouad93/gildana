@@ -85,29 +85,32 @@ model User {
 }
 
 model Client {
-  id                String   @id @default(cuid())
+  id                String    @id @default(cuid())
   name              String
-  isAgency          Boolean  @default(false)
-  reportingCurrency String   @default("USD")
-  timezone          String   @default("Africa/Cairo")
-  logoUrl           String   @default("")
+  isAgency          Boolean   @default(false)
+  reportingCurrency String    @default("USD")
+  timezone          String    @default("Africa/Cairo")
+  logoUrl           String    @default("")
   /// Date range a report opens with, in days.
-  defaultDays       Int      @default(30)
+  defaultDays       Int       @default(30)
   /// Campaign pages: "account" = each ad account's own currency, "reporting" = converted.
-  campaignCurrency  String   @default("account")
+  campaignCurrency  String    @default("account")
   /// When the daily audit last ran for this workspace.
   lastAuditAt       DateTime?
   /// New campaigns, ad sets and ads can only be launched from an approval the client accepted.
-  requireApproval   Boolean  @default(false)
-  active            Boolean  @default(true)
+  requireApproval   Boolean   @default(false)
+  active            Boolean   @default(true)
   onboardedAt       DateTime?
-  createdAt         DateTime @default(now())
+  createdAt         DateTime  @default(now())
 
   users       User[]
   companies   Company[]
   connections AdConnection[]
   shareLinks  ShareLink[]
   claims      AccountClaim[]
+  projects    Project[]
+  customers   Customer[]
+  apiKeys     ApiKey[]
 }
 
 model Company {
@@ -129,26 +132,26 @@ model Company {
 /// One OAuth login on one platform. A single login usually exposes many ad
 /// accounts, which are then assigned to companies individually.
 model AdConnection {
-  id          String    @id @default(cuid())
+  id             String    @id @default(cuid())
   /// null for Gildana's own (agency) logins, which serve accounts clients share with Gildana.
-  clientId    String?
-  client      Client?   @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  isAgency    Boolean   @default(false)
+  clientId       String?
+  client         Client?   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  isAgency       Boolean   @default(false)
   /// Set on a client's "shared with Gildana" connection: the agency login whose token it uses.
   agencySourceId String?
-  userId      String?
-  user        User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
-  platform    Platform
-  label       String    @default("")
-  externalUser String   @default("") // platform user/login id
-  tokenEnc    String?
-  refreshEnc  String?
-  expiresAt   DateTime?
-  scopes      String    @default("")
-  isDemo      Boolean   @default(false)
-  status      String    @default("active") // active | expired | revoked | error
-  lastError   String    @default("")
-  createdAt   DateTime  @default(now())
+  userId         String?
+  user           User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  platform       Platform
+  label          String    @default("")
+  externalUser   String    @default("") // platform user/login id
+  tokenEnc       String?
+  refreshEnc     String?
+  expiresAt      DateTime?
+  scopes         String    @default("")
+  isDemo         Boolean   @default(false)
+  status         String    @default("active") // active | expired | revoked | error
+  lastError      String    @default("")
+  createdAt      DateTime  @default(now())
 
   accounts AdAccount[]
 
@@ -156,36 +159,36 @@ model AdConnection {
 }
 
 model AdAccount {
-  id           String       @id @default(cuid())
-  connectionId String
-  connection   AdConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
-  companyId    String?
-  company      Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
-  platform     Platform
-  externalId   String
+  id             String       @id @default(cuid())
+  connectionId   String
+  connection     AdConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  companyId      String?
+  company        Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  platform       Platform
+  externalId     String
   /// Manager account the login reaches this one through (Google MCC login-customer-id).
-  parentId     String       @default("")
-  name         String
-  currency     String       @default("USD")
-  timezone     String       @default("UTC")
-  enabled      Boolean      @default(true)
+  parentId       String       @default("")
+  name           String
+  currency       String       @default("USD")
+  timezone       String       @default("UTC")
+  enabled        Boolean      @default(true)
   /// Last successful sync of any kind (the 15-minute live refresh included).
-  lastSyncAt   DateTime?
+  lastSyncAt     DateTime?
   /// Last 28-day / backfill sync, which picks up late conversions.
   lastFullSyncAt DateTime?
-  syncError    String       @default("")
-  createdAt    DateTime     @default(now())
+  syncError      String       @default("")
+  createdAt      DateTime     @default(now())
 
-  campaigns Campaign[]
-  adSets    AdSet[]
-  ads       Ad[]
-  stats     StatDaily[]
-  breakdown StatBreakdown[]
-  keywords  Keyword[]
-  terms     SearchTerm[]
+  campaigns  Campaign[]
+  adSets     AdSet[]
+  ads        Ad[]
+  stats      StatDaily[]
+  breakdown  StatBreakdown[]
+  keywords   Keyword[]
+  terms      SearchTerm[]
   placements Placement[]
-  leads     Lead[]
-  syncRuns  SyncRun[]
+  leads      Lead[]
+  syncRuns   SyncRun[]
 
   @@unique([connectionId, externalId])
   @@index([companyId])
@@ -217,24 +220,24 @@ model Campaign {
 
 /// Meta ad set · Google ad group · LinkedIn campaign · Snapchat ad squad · TikTok ad group.
 model AdSet {
-  id               String    @id @default(cuid())
-  accountId        String
-  account          AdAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  campaignId       String
-  campaign         Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  platform         Platform
-  externalId       String
-  name             String
-  status           String    @default("")
-  optimizationGoal String    @default("")
-  bidStrategy      String    @default("")
-  dailyBudget      Decimal?  @db.Decimal(14, 2)
-  targetingRaw     Json?
+  id                String    @id @default(cuid())
+  accountId         String
+  account           AdAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  campaignId        String
+  campaign          Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  platform          Platform
+  externalId        String
+  name              String
+  status            String    @default("")
+  optimizationGoal  String    @default("")
+  bidStrategy       String    @default("")
+  dailyBudget       Decimal?  @db.Decimal(14, 2)
+  targetingRaw      Json?
   /// prospecting | reengagement | retargeting | retention — detected from the targeting on sync.
-  funnelStage      String    @default("")
+  funnelStage       String    @default("")
   /// Set by a person; wins over the detected stage.
-  funnelStageManual String   @default("")
-  updatedAt        DateTime  @updatedAt
+  funnelStageManual String    @default("")
+  updatedAt         DateTime  @updatedAt
 
   ads       Ad[]
   targeting TargetingItem[]
@@ -244,28 +247,28 @@ model AdSet {
 }
 
 model Ad {
-  id          String    @id @default(cuid())
-  accountId   String
-  account     AdAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  campaignId  String
-  campaign    Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  adSetId     String
-  adSet       AdSet     @relation(fields: [adSetId], references: [id], onDelete: Cascade)
-  platform    Platform
-  externalId  String
-  name        String
-  status      String    @default("")
-  format      String    @default("") // image | video | carousel | text | search | responsive …
-  headline    String    @default("")
-  body        String    @default("")
-  cta         String    @default("")
-  thumbUrl    String    @default("")
-  landingUrl  String    @default("")
-  previewUrl  String    @default("")
-  previewHtml String?
+  id                 String    @id @default(cuid())
+  accountId          String
+  account            AdAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  campaignId         String
+  campaign           Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  adSetId            String
+  adSet              AdSet     @relation(fields: [adSetId], references: [id], onDelete: Cascade)
+  platform           Platform
+  externalId         String
+  name               String
+  status             String    @default("")
+  format             String    @default("") // image | video | carousel | text | search | responsive …
+  headline           String    @default("")
+  body               String    @default("")
+  cta                String    @default("")
+  thumbUrl           String    @default("")
+  landingUrl         String    @default("")
+  previewUrl         String    @default("")
+  previewHtml        String?
   /// The platform's creative id: the same creative reused in several ad sets shares it.
-  creativeExternalId String @default("")
-  updatedAt   DateTime  @updatedAt
+  creativeExternalId String    @default("")
+  updatedAt          DateTime  @updatedAt
 
   @@unique([accountId, externalId])
   @@index([adSetId])
@@ -275,12 +278,12 @@ model Ad {
 /// One selected targeting option of an ad set, flattened so it can be grouped
 /// and ranked across ad sets ("which interest brings the cheapest leads").
 model TargetingItem {
-  id         String @id @default(cuid())
+  id         String  @id @default(cuid())
   adSetId    String
-  adSet      AdSet  @relation(fields: [adSetId], references: [id], onDelete: Cascade)
+  adSet      AdSet   @relation(fields: [adSetId], references: [id], onDelete: Cascade)
   type       String // interest | behavior | audience | lookalike | age | gender | geo | placement | keyword | job_title | seniority | industry | company_size | language | device
   value      String
-  externalId String @default("")
+  externalId String  @default("")
   exclude    Boolean @default(false)
 
   @@index([adSetId])
@@ -418,12 +421,15 @@ model Lead {
   formName   String    @default("")
   createdAt  DateTime
   fields     Json
+  /// Set once the lead has been resolved into a customer profile.
+  customerId String?
 
   deliveries LeadDelivery[]
 
   @@unique([accountId, externalId])
   @@index([adSetId])
   @@index([campaignId])
+  @@index([customerId])
 }
 
 model FxRate {
@@ -485,7 +491,7 @@ model ShareLink {
   companyId    String?
   platform     Platform?
   campaignId   String?
-  rangeDays    Int?       // rolling window; null = fixed range below
+  rangeDays    Int? // rolling window; null = fixed range below
   fromDate     DateTime?  @db.Date
   toDate       DateTime?  @db.Date
   passwordHash String?
@@ -498,19 +504,19 @@ model ShareLink {
 // ───────────────────────── Websites ─────────────────────────
 
 model Site {
-  id          String   @id @default(cuid())
-  companyId   String
-  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  name        String
-  domain      String   // host without scheme, e.g. example.com — subdomains are accepted too
-  trackingKey String   @unique
-  replay      Boolean  @default(false) // record sessions for replay
-  replayRate  Int      @default(20)    // percent of sessions recorded
-  isDemo      Boolean  @default(false)
+  id            String   @id @default(cuid())
+  companyId     String
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name          String
+  domain        String // host without scheme, e.g. example.com — subdomains are accepted too
+  trackingKey   String   @unique
+  replay        Boolean  @default(false) // record sessions for replay
+  replayRate    Int      @default(20) // percent of sessions recorded
+  isDemo        Boolean  @default(false)
   // Google Search Console: the property (e.g. "sc-domain:example.com") and an offline refresh token.
   gscProperty   String   @default("")
   gscRefreshEnc String?
-  createdAt   DateTime @default(now())
+  createdAt     DateTime @default(now())
 
   sessions  TrackSession[]
   goals     Goal[]
@@ -562,20 +568,20 @@ model TrackSession {
 }
 
 model TrackPageview {
-  id         String       @id @default(cuid())
-  sessionId  String
-  session    TrackSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  siteId     String
-  path       String
-  title      String       @default("")
-  ts         DateTime
-  activeSec  Int          @default(0)
-  scrollPct  Int          @default(0) // deepest point seen, % of page height
-  viewportW  Int          @default(0)
-  viewportH  Int          @default(0)
-  docH       Int          @default(0)
-  device     String       @default("desktop")
-  pvKey      String       @default("") // client page-view id, so the leave beacon can find it
+  id        String       @id @default(cuid())
+  sessionId String
+  session   TrackSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  siteId    String
+  path      String
+  title     String       @default("")
+  ts        DateTime
+  activeSec Int          @default(0)
+  scrollPct Int          @default(0) // deepest point seen, % of page height
+  viewportW Int          @default(0)
+  viewportH Int          @default(0)
+  docH      Int          @default(0)
+  device    String       @default("desktop")
+  pvKey     String       @default("") // client page-view id, so the leave beacon can find it
 
   @@index([siteId, ts])
   @@index([siteId, path, ts])
@@ -599,6 +605,8 @@ model TrackEvent {
   selector  String       @default("")
   text      String       @default("")
   device    String       @default("desktop")
+  /// Event properties sent with gildana("event", name, {…}), e.g. { project, unit, price }.
+  props     Json?
 
   @@index([siteId, path, type, ts])
   @@index([siteId, type, ts])
@@ -707,15 +715,15 @@ model SeoIssue {
 // ───────────────────────── GEO (AI search) ─────────────────────────
 
 model GeoAudit {
-  id        String   @id @default(cuid())
-  siteId    String
-  site      Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
-  status    String   @default("queued")
-  score     Int?
-  checks    Json?
-  aiReview  String   @default("")
-  error     String   @default("")
-  createdAt DateTime @default(now())
+  id         String    @id @default(cuid())
+  siteId     String
+  site       Site      @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  status     String    @default("queued")
+  score      Int?
+  checks     Json?
+  aiReview   String    @default("")
+  error      String    @default("")
+  createdAt  DateTime  @default(now())
   finishedAt DateTime?
 
   @@index([siteId, createdAt])
@@ -734,16 +742,16 @@ model AiPrompt {
 }
 
 model AiVisibility {
-  id         String   @id @default(cuid())
-  promptId   String
-  prompt     AiPrompt @relation(fields: [promptId], references: [id], onDelete: Cascade)
-  engine     String
-  mentioned  Boolean
-  position   Int?     // 1-based order of the brand among brands named, when listed
-  cited      Boolean  @default(false) // the brand's domain appears as a source
-  competitors String  @default("")
-  answer     String
-  checkedAt  DateTime @default(now())
+  id          String   @id @default(cuid())
+  promptId    String
+  prompt      AiPrompt @relation(fields: [promptId], references: [id], onDelete: Cascade)
+  engine      String
+  mentioned   Boolean
+  position    Int? // 1-based order of the brand among brands named, when listed
+  cited       Boolean  @default(false) // the brand's domain appears as a source
+  competitors String   @default("")
+  answer      String
+  checkedAt   DateTime @default(now())
 
   @@index([promptId, checkedAt])
 }
@@ -751,24 +759,24 @@ model AiVisibility {
 /// A Meta ad set split into one ad set per interest, so each interest's
 /// results are measured directly instead of estimated.
 model InterestTest {
-  id            String   @id @default(cuid())
-  clientId      String
-  accountId     String
-  campaignId    String
-  sourceAdSetId String
+  id                    String    @id @default(cuid())
+  clientId              String
+  accountId             String
+  campaignId            String
+  sourceAdSetId         String
   /// [{ externalId, adSetId?, interest: {type, value, externalId} }]
-  arms          Json
-  dailyBudget   Decimal? @db.Decimal(14, 2)
-  status        String   @default("created") // created | active | ended | failed
-  error         String   @default("")
+  arms                  Json
+  dailyBudget           Decimal?  @db.Decimal(14, 2)
+  status                String    @default("created") // created | active | ended | failed
+  error                 String    @default("")
   /// adset = the source ad set was split in its own campaign; campaign = a new campaign with one ad set per interest
-  kind          String   @default("adset")
+  kind                  String    @default("adset")
   /// Platform id of the campaign created for a kind=campaign test
-  newCampaignExternalId String @default("")
-  name          String   @default("")
-  endsAt        DateTime?
-  createdById   String?
-  createdAt     DateTime @default(now())
+  newCampaignExternalId String    @default("")
+  name                  String    @default("")
+  endsAt                DateTime?
+  createdById           String?
+  createdAt             DateTime  @default(now())
 
   @@index([clientId])
   @@index([campaignId])
@@ -864,21 +872,21 @@ model Action {
 
 /// An automation rule. It never changes an account itself — it adds proposals to the to-do list.
 model Rule {
-  id         String   @id @default(cuid())
-  clientId   String
-  name       String
-  preset     String   @default("") // stop_loss | revive | surf | sunset | ""
-  enabled    Boolean  @default(true)
-  level      String   @default("ADSET") // ADSET | AD
+  id          String    @id @default(cuid())
+  clientId    String
+  name        String
+  preset      String    @default("") // stop_loss | revive | surf | sunset | ""
+  enabled     Boolean   @default(true)
+  level       String    @default("ADSET") // ADSET | AD
   /// { accountIds?, campaignIds?, tagIds?, stages? } — empty = every Meta account of the client
-  scope      Json
+  scope       Json
   /// [{ metric, op, value, valueOf? }] — all must hold
-  conditions Json
-  windowDays Int      @default(7)
+  conditions  Json
+  windowDays  Int       @default(7)
   /// { kind: pause | start | budget, percent?, cap? }
-  action     Json
-  lastRunAt  DateTime?
-  createdAt  DateTime @default(now())
+  action      Json
+  lastRunAt   DateTime?
+  createdAt   DateTime  @default(now())
   createdById String?
 
   @@index([clientId])
@@ -952,17 +960,17 @@ model Approval {
 
 /// Where new leads are sent as they arrive: a webhook (CRM, Zapier, Make, a Google Sheet script).
 model LeadDestination {
-  id         String    @id @default(cuid())
-  clientId   String
+  id          String    @id @default(cuid())
+  clientId    String
   /// Only this company's leads; null = every company of the client.
-  companyId  String?
-  name       String
-  urlEnc     String
-  secretEnc  String
-  enabled    Boolean   @default(true)
-  lastError  String    @default("")
-  lastSentAt DateTime?
-  createdAt  DateTime  @default(now())
+  companyId   String?
+  name        String
+  urlEnc      String
+  secretEnc   String
+  enabled     Boolean   @default(true)
+  lastError   String    @default("")
+  lastSentAt  DateTime?
+  createdAt   DateTime  @default(now())
   createdById String?
 
   deliveries LeadDelivery[]
@@ -984,4 +992,191 @@ model LeadDelivery {
 
   @@unique([leadId, destinationId])
   @@index([destinationId, status])
+}
+
+// ───────────────────────── Customers (CDP + identity graph) ─────────────────────────
+
+/// A real-estate project (or product line) customers can be interested in. Matched from
+/// page paths, event properties, campaign names and CRM fields by its slug and aliases.
+model Project {
+  id        String   @id @default(cuid())
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  companyId String?
+  name      String
+  slug      String
+  /// Other spellings found in URLs, campaign names and CRM data (lower-case).
+  aliases   String[] @default([])
+  priceFrom Float?
+  priceTo   Float?
+  currency  String   @default("EGP")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@unique([clientId, slug])
+}
+
+/// One person, unified across ads, website, CRM and WhatsApp.
+model Customer {
+  id             String   @id @default(cuid())
+  clientId       String
+  /// Identity is resolved inside this scope: the whole workspace for a brand client,
+  /// each company on its own for an agency (different businesses never share profiles).
+  scopeId        String
+  client         Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  companyId      String?
+  name           String   @default("")
+  /// Primary contact details, AES-GCM encrypted; hints are masked for lists.
+  phoneEnc       String?
+  emailEnc       String?
+  phoneHint      String   @default("")
+  emailHint      String   @default("")
+  /// visitor | engaged | lead | qualified | meeting_booked | meeting_attended | reservation | purchase | owner | lost | cold
+  stage          String   @default("visitor")
+  projectIds     String[] @default([])
+  budget         Float?
+  budgetText     String   @default("")
+  budgetCurrency String   @default("")
+  city           String   @default("")
+  preferences    Json     @default("{}")
+  identityScore  Int      @default(0)
+  intentScore    Int      @default(0)
+  valueScore     Int      @default(0)
+  /// Explanation of each score: { intent: [{label, points}], value: [...], identity: [...] }.
+  scoreWhy       Json     @default("{}")
+  firstTouch     Json?
+  lastTouch      Json?
+  firstSeenAt    DateTime @default(now())
+  lastSeenAt     DateTime @default(now())
+  /// Set when this profile was merged into another; it stays so the merge can be undone.
+  mergedIntoId   String?
+  isDemo         Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  identifiers CustomerIdentifier[]
+  events      CustomerEvent[]
+  consents    ConsentRecord[]
+
+  @@index([clientId, mergedIntoId, lastSeenAt])
+  @@index([scopeId])
+  @@index([clientId, stage])
+  @@index([clientId, intentScore])
+}
+
+/// A way to recognise a customer. `hash` is SHA-256 of the normalised value, the same
+/// form ad platforms accept, so lookups and audience uploads never need the plain value.
+model CustomerIdentifier {
+  id          String   @id @default(cuid())
+  clientId    String
+  scopeId     String
+  customerId  String
+  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  /// crm_id | phone | email | account_id | whatsapp_id | anon_id | lead_id
+  type        String
+  hash        String
+  valueEnc    String?
+  display     String   @default("")
+  verified    Boolean  @default(false)
+  source      String   @default("")
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+
+  @@unique([scopeId, type, hash])
+  @@index([customerId])
+}
+
+/// Why two records are one person: each attach and merge, with method, confidence and
+/// evidence. Merges keep what they moved so they can be reversed.
+model IdentityLink {
+  id              String    @id @default(cuid())
+  clientId        String
+  customerId      String
+  otherCustomerId String?
+  identifierId    String?
+  /// attach (identifier added to a customer) | merge (two customers joined)
+  kind            String
+  method          String
+  confidence      Int
+  evidence        Json      @default("{}")
+  source          String    @default("")
+  /// auto | pending | approved | rejected | reversed
+  status          String
+  /// For merges: the identifier and event ids moved, so an unmerge puts them back.
+  moved           Json?
+  createdById     String?
+  reviewedById    String?
+  createdAt       DateTime  @default(now())
+  reviewedAt      DateTime?
+
+  @@index([clientId, status, createdAt])
+  @@index([customerId])
+  @@index([otherCustomerId])
+}
+
+/// The Customer 360 timeline (website sessions are read from the tracker tables instead).
+model CustomerEvent {
+  id         String   @id @default(cuid())
+  clientId   String
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  /// ads | website | crm | whatsapp | manual
+  source     String
+  type       String
+  occurredAt DateTime
+  projectId  String?
+  title      String   @default("")
+  props      Json     @default("{}")
+  /// Same event seen twice (re-sync, retried webhook) is stored once.
+  dedupKey   String
+
+  @@unique([clientId, dedupKey])
+  @@index([customerId, occurredAt])
+  @@index([clientId, type, occurredAt])
+}
+
+model ConsentRecord {
+  id         String   @id @default(cuid())
+  clientId   String
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  /// analytics | ads | marketing | whatsapp
+  purpose    String
+  /// granted | denied
+  status     String
+  source     String   @default("")
+  at         DateTime @default(now())
+
+  @@index([customerId, purpose, at])
+}
+
+/// Workspace API keys for /api/v1. Only a hash is stored.
+model ApiKey {
+  id          String    @id @default(cuid())
+  clientId    String
+  client      Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  name        String
+  prefix      String
+  hash        String    @unique
+  scopes      String[]  @default([])
+  createdById String?
+  lastUsedAt  DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([clientId])
+}
+
+/// Who changed what: every data change made through the customers module and the API.
+model AuditLog {
+  id        String   @id @default(cuid())
+  clientId  String?
+  userId    String?
+  apiKeyId  String?
+  action    String
+  target    String   @default("")
+  detail    Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  @@index([clientId, createdAt])
 }
